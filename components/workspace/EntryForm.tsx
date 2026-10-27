@@ -1,6 +1,7 @@
 "use client";
 
 import { useMutation, useQuery } from "convex/react";
+import { ConvexError } from "convex/values";
 import { useRef, useState, type FormEvent } from "react";
 import { api } from "@/convex/_generated/api";
 
@@ -61,10 +62,14 @@ export function EntryForm({ kind }: { kind: EntryKind }) {
       setOccurredOn(null);
       setFeedback({ message: `${title.replace("Record a ", "")} saved to the cashbook.`, error: false });
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Could not save this entry. Try again.";
-      if (message.startsWith("CONFIRM_DUPLICATE:")) setRuleConfirmation({ kind: "duplicate", message: message.slice("CONFIRM_DUPLICATE:".length) });
-      else if (message.startsWith("CONFIRM_NEGATIVE:")) setRuleConfirmation({ kind: "negative", message: message.slice("CONFIRM_NEGATIVE:".length) });
-      else setFeedback({ message, error: true });
+      if (error instanceof ConvexError) {
+        const warning = error.data as { code?: string; message?: string };
+        if (warning.code === "CONFIRM_DUPLICATE" || warning.code === "CONFIRM_NEGATIVE") {
+          setRuleConfirmation({ kind: warning.code === "CONFIRM_DUPLICATE" ? "duplicate" : "negative", message: warning.message ?? "Review this cashbook warning before continuing." });
+          return;
+        }
+      }
+      setFeedback({ message: error instanceof Error ? error.message : "Could not save this entry. Try again.", error: true });
     } finally { setBusy(false); }
   }
   if (access?.access === "ready" && access.role === "partner") {
