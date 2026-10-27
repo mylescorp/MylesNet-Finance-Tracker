@@ -4,6 +4,7 @@ import { currencies } from "countries-list/currencies";
 import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
+import type { Id } from "./_generated/dataModel";
 
 const role = v.union(v.literal("owner"), v.literal("partner"), v.literal("cashier"));
 function currencyMinorDigits(currency: string) {
@@ -28,6 +29,36 @@ async function activeWorkspace(ctx: QueryCtx | MutationCtx) {
   const membership = active[0];
   const business = await ctx.db.get("businesses", membership.businessId);
   return business ? { userId, membership, business } : null;
+}
+
+async function hasCurrencySensitiveData(ctx: MutationCtx, businessId: Id<"businesses">) {
+  const checks = await Promise.all([
+    ctx.db.query("entries").withIndex("by_business_and_date", q => q.eq("businessId", businessId)).first(),
+    ctx.db.query("operationalRecords").withIndex("by_business_and_kind_and_date", q => q.eq("businessId", businessId)).first(),
+    ctx.db.query("movements").withIndex("by_business_and_date", q => q.eq("businessId", businessId)).first(),
+    ctx.db.query("savingsHoldings").withIndex("by_business_and_active", q => q.eq("businessId", businessId)).first(),
+    ctx.db.query("savingsFlows").withIndex("by_business_and_date", q => q.eq("businessId", businessId)).first(),
+    ctx.db.query("loans").withIndex("by_business_and_status", q => q.eq("businessId", businessId)).first(),
+    ctx.db.query("loanRepayments").withIndex("by_business_and_date", q => q.eq("businessId", businessId)).first(),
+    ctx.db.query("bills").withIndex("by_business_and_active_due", q => q.eq("businessId", businessId)).first(),
+    ctx.db.query("billPayments").withIndex("by_business_and_date", q => q.eq("businessId", businessId)).first(),
+    ctx.db.query("reconciliations").withIndex("by_business_and_date", q => q.eq("businessId", businessId)).first(),
+  ]);
+  return checks.some(Boolean);
+}
+
+async function hasPostedLedgerActivity(ctx: QueryCtx | MutationCtx, businessId: Id<"businesses">) {
+  const checks = await Promise.all([
+    ctx.db.query("entries").withIndex("by_business_and_date", q => q.eq("businessId", businessId)).first(),
+    ctx.db.query("operationalRecords").withIndex("by_business_and_kind_and_date", q => q.eq("businessId", businessId)).first(),
+    ctx.db.query("movements").withIndex("by_business_and_date", q => q.eq("businessId", businessId)).first(),
+    ctx.db.query("savingsFlows").withIndex("by_business_and_date", q => q.eq("businessId", businessId)).first(),
+    ctx.db.query("loans").withIndex("by_business_and_status", q => q.eq("businessId", businessId)).first(),
+    ctx.db.query("loanRepayments").withIndex("by_business_and_date", q => q.eq("businessId", businessId)).first(),
+    ctx.db.query("billPayments").withIndex("by_business_and_date", q => q.eq("businessId", businessId)).first(),
+    ctx.db.query("reconciliations").withIndex("by_business_and_date", q => q.eq("businessId", businessId)).first(),
+  ]);
+  return checks.some(Boolean);
 }
 
 function defaults() {
@@ -56,8 +87,8 @@ export const overview = query({
     const prefs = await ctx.db.query("workspacePreferences").withIndex("by_business", q => q.eq("businessId", current.business._id)).unique();
     const firstEntry = await ctx.db.query("entries").withIndex("by_business_and_date", q => q.eq("businessId", current.business._id)).first();
     const firstOperationalRecord = await ctx.db.query("operationalRecords").withIndex("by_business_and_kind_and_date", q => q.eq("businessId", current.business._id)).first();
-    const firstMovement = await ctx.db.query("operationalRecords").withIndex("by_business_and_kind_and_date", q => q.eq("businessId", current.business._id).eq("kind", "movement")).first();
     const balances = await ctx.db.query("accountBalances").withIndex("by_business_and_account", q => q.eq("businessId", current.business._id)).take(2);
+    const openingBalancesLocked = await hasPostedLedgerActivity(ctx, current.business._id);
     const fallback = defaults();
     const digits = currencyMinorDigits(current.business.currency);
     const scale = 10 ** digits;
@@ -70,7 +101,7 @@ export const overview = query({
       currencyMinorDigits: digits,
       settingsUpdatedAt: prefs?.updatedAt ?? current.business.createdAt,
       currencyLocked: Boolean(firstEntry || firstOperationalRecord || balances.some(b => (b.openingBalanceUgx ?? 0) !== 0)),
-      openingBalancesLocked: Boolean(firstEntry || firstMovement),
+      openingBalancesLocked,
       cashOpeningBalance: (balances.find(b => b.account === "cash")?.openingBalanceUgx ?? 0) / scale,
       mobileOpeningBalance: (balances.find(b => b.account === "mobile_money")?.openingBalanceUgx ?? 0) / scale,
       timezone: current.business.timezone,
@@ -138,26 +169,25 @@ export const update = mutation({
     const weakDaySalesMinor = toMinorUnits(args.weakDaySalesUgx, scale);
     const monthlySalesTargetMinor = toMinorUnits(args.monthlySalesTargetUgx, scale);
     const monthlyExpenseWarningMinor = toMinorUnits(args.monthlyExpenseWarningUgx, scale);
-    const firstOperationalRecord = await ctx.db.query("operationalRecords").withIndex("by_business_and_kind_and_date", q => q.eq("businessId", current.business._id)).first();
-    if (args.currency !== current.business.currency) {
-      const firstEntry = await ctx.db.query("entries").withIndex("by_business_and_date", q => q.eq("businessId", current.business._id)).first();
-      const balances = await ctx.db.query("accountBalances").withIndex("by_business_and_account", q => q.eq("businessId", current.business._id)).take(2);
-      if (firstEntry || firstOperationalRecord || balances.some(b => (b.openingBalanceUgx ?? 0) !== 0)) throw new Error("Currency is locked after a financial record or opening balance so saved amounts are never relabelled. Contact support for a reviewed currency migration.");
+    const currencySensitiveDataExists = await hasCurrencySensitiveData(ctx, current.business._id);
+    const ledgerActivityExists = await hasPostedLedgerActivity(ctx, current.business._id);
+    const balances = await ctx.db.query("accountBalances").withIndex("by_business_and_account", q => q.eq("businessId", current.business._id)).take(2);
+    const hasNonOpeningBalance = balances.some(b => b.balanceUgx !== (b.openingBalanceUgx ?? 0));
+    if (args.currency !== current.business.currency && (currencySensitiveDataExists || hasNonOpeningBalance || balances.some(b => (b.openingBalanceUgx ?? 0) !== 0))) {
+      throw new Error("Currency is locked after any financial record or opening balance so existing amounts are never relabelled. Contact support for a reviewed currency migration.");
     }
     const businessPatch = {
       name: businessName, countryCode: args.countryCode, currency: args.currency,
       timezone: args.timezone, weekStartsOn: args.weekStartsOn,
     };
     await ctx.db.patch("businesses", current.business._id, businessPatch);
-    const firstEntry = await ctx.db.query("entries").withIndex("by_business_and_date", q => q.eq("businessId", current.business._id)).first();
-    const firstMovement = await ctx.db.query("operationalRecords").withIndex("by_business_and_kind_and_date", q => q.eq("businessId", current.business._id).eq("kind", "movement")).first();
     const currentBalances = await ctx.db.query("accountBalances").withIndex("by_business_and_account", q => q.eq("businessId", current.business._id)).take(2);
     const cashDoc = currentBalances.find(b => b.account === "cash");
     const mobileDoc = currentBalances.find(b => b.account === "mobile_money");
-    if ((firstEntry || firstMovement) && (cashOpeningMinor !== (cashDoc?.openingBalanceUgx ?? 0) || mobileOpeningMinor !== (mobileDoc?.openingBalanceUgx ?? 0))) {
-      throw new Error("Opening balances are locked after the first transaction or account movement. Use an auditable adjustment entry instead.");
+    if ((ledgerActivityExists || hasNonOpeningBalance) && (cashOpeningMinor !== (cashDoc?.openingBalanceUgx ?? 0) || mobileOpeningMinor !== (mobileDoc?.openingBalanceUgx ?? 0))) {
+      throw new Error("Opening balances are locked after the first transaction. Use an auditable adjustment entry instead.");
     }
-    if (!firstEntry && !firstMovement) {
+    if (!ledgerActivityExists && !hasNonOpeningBalance) {
       const now = Date.now();
       if (cashDoc) await ctx.db.patch("accountBalances", cashDoc._id, { balanceUgx: cashOpeningMinor, openingBalanceUgx: cashOpeningMinor, updatedAt: now });
       else if (cashOpeningMinor !== 0) await ctx.db.insert("accountBalances", { businessId: current.business._id, account: "cash", balanceUgx: cashOpeningMinor, openingBalanceUgx: cashOpeningMinor, updatedAt: now });
@@ -263,21 +293,23 @@ export const accessOverview = query({
   handler: async (ctx) => {
     const current = await activeWorkspace(ctx);
     if (!current || current.membership.role !== "owner") return { access: "restricted" as const, members: [], invitations: [], audit: [] };
-    const [memberships, invitations, audit] = await Promise.all([
+    const [memberships, invitations, audit, partners] = await Promise.all([
       ctx.db.query("memberships").withIndex("by_business_and_user", q => q.eq("businessId", current.business._id)).take(100),
       ctx.db.query("invitations").withIndex("by_business_and_active", q => q.eq("businessId", current.business._id).eq("active", true)).take(100),
       ctx.db.query("auditEvents").withIndex("by_business_and_time", q => q.eq("businessId", current.business._id)).order("desc").take(20),
+      ctx.db.query("partners").withIndex("by_business_and_active", q => q.eq("businessId", current.business._id).eq("active", true)).take(100),
     ]);
+    const partnerNames = new Map(partners.map(partner => [partner._id, partner.name]));
     const members = await Promise.all(memberships.map(async m => {
       const user = await ctx.db.get("users", m.userId);
-      return { id: m._id, role: m.role, active: m.active, email: user?.email ?? "Signed-in user", createdAt: m.createdAt };
+      return { id: m._id, role: m.role, partnerId: m.partnerId, partnerName: m.partnerId ? partnerNames.get(m.partnerId) : undefined, active: m.active, email: user?.email ?? "Signed-in user", createdAt: m.createdAt };
     }));
-    return { access: "ready" as const, members, invitations: invitations.map(i => ({ id: i._id, email: i.email, role: i.role, expiresAt: i.expiresAt })), audit: audit.map(a => ({ id: a._id, action: a.action, summary: a.summary, occurredAt: a.occurredAt })) };
+    return { access: "ready" as const, members, partners: partners.map(({ _id, name }) => ({ id: _id, name })), invitations: invitations.map(i => ({ id: i._id, email: i.email, role: i.role, partnerName: i.partnerId ? partnerNames.get(i.partnerId) : undefined, expiresAt: i.expiresAt })), audit: audit.map(a => ({ id: a._id, action: a.action, summary: a.summary, occurredAt: a.occurredAt })) };
   },
 });
 
 export const invite = mutation({
-  args: { email: v.string(), role },
+  args: { email: v.string(), role, partnerId: v.optional(v.id("partners")) },
   returns: v.string(),
   handler: async (ctx, args) => {
     const current = await activeWorkspace(ctx);
@@ -285,6 +317,15 @@ export const invite = mutation({
     const email = args.email.trim().toLowerCase();
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error("Enter a valid email address.");
     if (args.role === "owner") throw new Error("Invite a partner or cashier. The owner role is assigned during workspace setup.");
+    if (args.role === "partner") {
+      if (!args.partnerId) throw new Error("Choose the partner account this Google sign-in will represent.");
+      const partner = await ctx.db.get("partners", args.partnerId);
+      if (!partner || partner.businessId !== current.business._id || !partner.active) throw new Error("Choose an active partner from this workspace.");
+      const linkedMember = await ctx.db.query("memberships").withIndex("by_business_and_partner_and_active", q => q.eq("businessId", current.business._id).eq("partnerId", args.partnerId).eq("active", true)).first();
+      if (linkedMember) throw new Error("This partner already has an active login.");
+      const existingInvite = await ctx.db.query("invitations").withIndex("by_business_and_partner_and_active", q => q.eq("businessId", current.business._id).eq("partnerId", args.partnerId).eq("active", true)).first();
+      if (existingInvite) throw new Error("This partner already has a pending invitation.");
+    } else if (args.partnerId) throw new Error("Only partner invitations can be linked to a partner record.");
     const pending = await ctx.db.query("invitations").withIndex("by_business_and_active", q => q.eq("businessId", current.business._id).eq("active", true)).take(100);
     if (pending.some(i => i.email.toLowerCase() === email)) throw new Error("An active invitation already exists for this email.");
     const bytes = new Uint8Array(32); crypto.getRandomValues(bytes);
@@ -292,7 +333,7 @@ export const invite = mutation({
     const hash = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(token));
     const tokenHash = Array.from(new Uint8Array(hash), b => b.toString(16).padStart(2, "0")).join("");
     const now = Date.now();
-    await ctx.db.insert("invitations", { email, role: args.role, businessId: current.business._id, invitedBy: current.userId, expiresAt: now + 7 * 24 * 60 * 60 * 1000, active: true, tokenHash });
+    await ctx.db.insert("invitations", { email, role: args.role, partnerId: args.partnerId, businessId: current.business._id, invitedBy: current.userId, expiresAt: now + 7 * 24 * 60 * 60 * 1000, active: true, tokenHash });
     await ctx.db.insert("auditEvents", { businessId: current.business._id, actorId: current.userId, action: "member.invited", entityType: "invitation", entityId: email, occurredAt: now, summary: `Invited ${email} as ${args.role}.` });
     return token;
   },
@@ -311,15 +352,26 @@ export const revokeInvite = mutation({
 });
 
 export const updateMember = mutation({
-  args: { membershipId: v.id("memberships"), role, active: v.boolean() }, returns: v.null(),
+  args: { membershipId: v.id("memberships"), role, partnerId: v.optional(v.id("partners")), active: v.boolean() }, returns: v.null(),
   handler: async (ctx, args) => {
     const current = await activeWorkspace(ctx);
     const member = await ctx.db.get("memberships", args.membershipId);
     if (!current || current.membership.role !== "owner" || !member || member.businessId !== current.business._id) throw new Error("Member not found or access denied.");
     if (member.role === "owner" || args.role === "owner") throw new Error("Owner access cannot be changed here. Use the verified ownership transfer process.");
     if (member.userId === current.userId && !args.active) throw new Error("You cannot deactivate your own account.");
-    await ctx.db.patch("memberships", args.membershipId, { role: args.role, active: args.active });
-    await ctx.db.insert("auditEvents", { businessId: current.business._id, actorId: current.userId, action: "member.access.updated", entityType: "membership", entityId: args.membershipId, occurredAt: Date.now(), summary: `Changed a member to ${args.role} (${args.active ? "active" : "inactive"}).` });
+    let partnerId: Id<"partners"> | undefined;
+    if (args.role === "partner" && args.active) {
+      if (!args.partnerId) throw new Error("Choose the partner account this member will represent.");
+      const partner = await ctx.db.get("partners", args.partnerId);
+      if (!partner || partner.businessId !== current.business._id || !partner.active) throw new Error("Choose an active partner from this workspace.");
+      const linkedMembers = await ctx.db.query("memberships").withIndex("by_business_and_partner_and_active", q => q.eq("businessId", current.business._id).eq("partnerId", args.partnerId).eq("active", true)).take(2);
+      if (linkedMembers.some(other => other._id !== member._id)) throw new Error("This partner already has an active login.");
+      partnerId = args.partnerId;
+    } else if (args.role === "partner") {
+      partnerId = args.partnerId ?? member.partnerId;
+    } else if (args.partnerId) throw new Error("Only partner accounts can be linked to a partner record.");
+    await ctx.db.patch("memberships", args.membershipId, { role: args.role, partnerId, active: args.active });
+    await ctx.db.insert("auditEvents", { businessId: current.business._id, actorId: current.userId, action: "member.access.updated", entityType: "membership", entityId: args.membershipId, occurredAt: Date.now(), summary: `Changed a member to ${args.role}${partnerId ? ` linked to ${partnerId}` : ""} (${args.active ? "active" : "inactive"}).` });
     return null;
   },
 });
@@ -336,6 +388,11 @@ export const acceptInvite = mutation({
     const invite = await ctx.db.query("invitations").withIndex("by_token_hash", q => q.eq("tokenHash", tokenHash)).unique();
     if (!invite || !invite.active || invite.expiresAt < Date.now()) throw new Error("This invitation has expired or was already used.");
     if (invite.email.toLowerCase() !== user.email.toLowerCase()) throw new Error("Sign in using the invited email address.");
+    if ((invite.role === "partner") !== Boolean(invite.partnerId)) throw new Error("This partner invitation needs to be reviewed by the workspace owner before it can be accepted.");
+    if (invite.partnerId) {
+      const partner = await ctx.db.get("partners", invite.partnerId);
+      if (!partner || partner.businessId !== invite.businessId || !partner.active) throw new Error("This partner account is no longer active. Ask the workspace owner for a new invitation.");
+    }
     const existing = await ctx.db.query("memberships").withIndex("by_business_and_user", q => q.eq("businessId", invite.businessId).eq("userId", userId)).unique();
     if (existing?.active) throw new Error("You already have access to this workspace.");
     const currentMemberships = await ctx.db.query("memberships").withIndex("by_user", q => q.eq("userId", userId)).take(20);
@@ -343,8 +400,12 @@ export const acceptInvite = mutation({
     if (currentMemberships.some(membership => membership.active && membership.businessId !== invite.businessId)) {
       throw new Error("This account already has an active workspace. Sign in with another account or ask the current workspace owner to deactivate your access first.");
     }
-    if (existing) await ctx.db.patch("memberships", existing._id, { active: true, role: invite.role });
-    else await ctx.db.insert("memberships", { businessId: invite.businessId, userId, role: invite.role, active: true, createdAt: Date.now() });
+    if (invite.partnerId) {
+      const linkedMember = await ctx.db.query("memberships").withIndex("by_business_and_partner_and_active", q => q.eq("businessId", invite.businessId).eq("partnerId", invite.partnerId).eq("active", true)).first();
+      if (linkedMember && linkedMember.userId !== userId) throw new Error("This partner account is already linked. Ask the workspace owner to review access.");
+    }
+    if (existing) await ctx.db.patch("memberships", existing._id, { active: true, role: invite.role, partnerId: invite.partnerId });
+    else await ctx.db.insert("memberships", { businessId: invite.businessId, userId, role: invite.role, partnerId: invite.partnerId, active: true, createdAt: Date.now() });
     await ctx.db.patch("invitations", invite._id, { active: false, acceptedAt: Date.now() });
     await ctx.db.insert("auditEvents", { businessId: invite.businessId, actorId: userId, action: "invitation.accepted", entityType: "invitation", entityId: invite._id, occurredAt: Date.now(), summary: `${user.email} accepted a workspace invitation.` });
     return null;

@@ -28,10 +28,12 @@ export default defineSchema({
     createdAt: v.number(),
   })
     .index("by_user", ["userId"])
-    .index("by_business_and_user", ["businessId", "userId"]),
+    .index("by_business_and_user", ["businessId", "userId"])
+    .index("by_business_and_partner_and_active", ["businessId", "partnerId", "active"]),
   invitations: defineTable({
     email: v.string(),
     role,
+    partnerId: v.optional(v.id("partners")),
     businessId: v.id("businesses"),
     invitedBy: v.id("users"),
     expiresAt: v.number(),
@@ -41,6 +43,7 @@ export default defineSchema({
   })
     .index("by_email", ["email"])
     .index("by_business_and_active", ["businessId", "active"])
+    .index("by_business_and_partner_and_active", ["businessId", "partnerId", "active"])
     .index("by_token_hash", ["tokenHash"]),
   workspacePreferences: defineTable({
     businessId: v.id("businesses"),
@@ -63,8 +66,10 @@ export default defineSchema({
     businessId: v.id("businesses"),
     name: v.string(),
     ownershipBps: v.number(),
+    capitalContributedUgx: v.optional(v.number()),
     active: v.boolean(),
-  }).index("by_business_and_active", ["businessId", "active"]),
+    idempotencyKey: v.optional(v.string()),
+  }).index("by_business_and_active", ["businessId", "active"]).index("by_business_and_idempotency", ["businessId", "idempotencyKey"]),
   entries: defineTable({
     businessId: v.id("businesses"),
     kind: v.union(v.literal("sale"), v.literal("expense")),
@@ -76,6 +81,8 @@ export default defineSchema({
     source: v.union(v.literal("manual"), v.literal("import"), v.literal("webhook")),
     idempotencyKey: v.string(),
     state: v.union(v.literal("posted"), v.literal("void")),
+    operationSource: v.optional(v.union(v.literal("movement_fee"), v.literal("loan_interest"), v.literal("bill_payment"))),
+    operationKey: v.optional(v.string()),
     createdBy: v.id("users"),
     createdAt: v.number(),
     voidedAt: v.optional(v.number()),
@@ -119,6 +126,127 @@ export default defineSchema({
     saleCount: v.number(),
     expenseCount: v.number(),
   }).index("by_business_and_day", ["businessId", "day"]),
+  movements: defineTable({
+    businessId: v.id("businesses"),
+    kind: v.union(v.literal("transfer"), v.literal("withdrawal"), v.literal("deposit"), v.literal("capital_contribution")),
+    amountUgx: v.number(),
+    feeUgx: v.optional(v.number()),
+    fromAccount: v.optional(v.union(v.literal("cash"), v.literal("mobile_money"))),
+    toAccount: v.optional(v.union(v.literal("cash"), v.literal("mobile_money"))),
+    partnerId: v.optional(v.id("partners")),
+    occurredOn: v.string(),
+    note: v.string(),
+    idempotencyKey: v.string(),
+    state: v.union(v.literal("posted"), v.literal("void")),
+    createdBy: v.id("users"),
+    createdAt: v.number(),
+  })
+    .index("by_business_and_date", ["businessId", "occurredOn"])
+    .index("by_business_and_partner_and_date", ["businessId", "partnerId", "occurredOn"])
+    .index("by_business_and_idempotency", ["businessId", "idempotencyKey"]),
+  savingsHoldings: defineTable({
+    businessId: v.id("businesses"),
+    name: v.string(),
+    targetUgx: v.optional(v.number()),
+    balanceUgx: v.number(),
+    active: v.boolean(),
+    createdBy: v.id("users"),
+    createdAt: v.number(),
+    idempotencyKey: v.string(),
+  }).index("by_business_and_active", ["businessId", "active"]).index("by_business_and_idempotency", ["businessId", "idempotencyKey"]),
+  savingsFlows: defineTable({
+    businessId: v.id("businesses"),
+    holdingId: v.id("savingsHoldings"),
+    kind: v.union(v.literal("contribution"), v.literal("withdrawal")),
+    amountUgx: v.number(),
+    account: v.union(v.literal("cash"), v.literal("mobile_money")),
+    occurredOn: v.string(),
+    note: v.string(),
+    idempotencyKey: v.string(),
+    createdBy: v.id("users"),
+    createdAt: v.number(),
+  })
+    .index("by_business_and_date", ["businessId", "occurredOn"])
+    .index("by_business_and_idempotency", ["businessId", "idempotencyKey"])
+    .index("by_holding_and_date", ["holdingId", "occurredOn"]),
+  loans: defineTable({
+    businessId: v.id("businesses"),
+    lender: v.string(),
+    principalUgx: v.number(),
+    outstandingPrincipalUgx: v.number(),
+    annualRateBps: v.number(),
+    termMonths: v.number(),
+    startedOn: v.string(),
+    account: v.union(v.literal("cash"), v.literal("mobile_money")),
+    status: v.union(v.literal("active"), v.literal("paid_off")),
+    note: v.string(),
+    idempotencyKey: v.string(),
+    createdBy: v.id("users"),
+    createdAt: v.number(),
+  })
+    .index("by_business_and_status", ["businessId", "status"])
+    .index("by_business_and_idempotency", ["businessId", "idempotencyKey"]),
+  loanRepayments: defineTable({
+    businessId: v.id("businesses"),
+    loanId: v.id("loans"),
+    amountUgx: v.number(),
+    principalUgx: v.number(),
+    interestUgx: v.number(),
+    account: v.union(v.literal("cash"), v.literal("mobile_money")),
+    paidOn: v.string(),
+    idempotencyKey: v.string(),
+    createdBy: v.id("users"),
+    createdAt: v.number(),
+  })
+    .index("by_business_and_date", ["businessId", "paidOn"])
+    .index("by_business_and_idempotency", ["businessId", "idempotencyKey"])
+    .index("by_loan_and_date", ["loanId", "paidOn"]),
+  bills: defineTable({
+    businessId: v.id("businesses"),
+    name: v.string(),
+    category: v.string(),
+    amountUgx: v.number(),
+    account: v.union(v.literal("cash"), v.literal("mobile_money")),
+    recurrence: v.union(v.literal("weekly"), v.literal("monthly"), v.literal("quarterly"), v.literal("yearly")),
+    nextDueOn: v.string(),
+    scheduleStartDueOn: v.optional(v.string()),
+    scheduleAnchorDay: v.optional(v.number()),
+    scheduleEndOfMonth: v.optional(v.boolean()),
+    active: v.boolean(),
+    createdBy: v.id("users"),
+    createdAt: v.number(),
+    idempotencyKey: v.string(),
+  }).index("by_business_and_active_due", ["businessId", "active", "nextDueOn"]).index("by_business_and_idempotency", ["businessId", "idempotencyKey"]),
+  billPayments: defineTable({
+    businessId: v.id("businesses"),
+    billId: v.id("bills"),
+    entryId: v.id("entries"),
+    amountUgx: v.number(),
+    account: v.optional(v.union(v.literal("cash"), v.literal("mobile_money"))),
+    paidOn: v.string(),
+    idempotencyKey: v.string(),
+    createdBy: v.id("users"),
+    createdAt: v.number(),
+  })
+    .index("by_business_and_date", ["businessId", "paidOn"])
+    .index("by_business_and_idempotency", ["businessId", "idempotencyKey"])
+    .index("by_bill_and_date", ["billId", "paidOn"]),
+  reconciliations: defineTable({
+    businessId: v.id("businesses"),
+    account: v.union(v.literal("cash"), v.literal("mobile_money")),
+    asOfDate: v.string(),
+    bookBalanceUgx: v.number(),
+    countedBalanceUgx: v.number(),
+    varianceUgx: v.number(),
+    status: v.union(v.literal("matched"), v.literal("open"), v.literal("explained")),
+    note: v.string(),
+    explanation: v.optional(v.string()),
+    idempotencyKey: v.string(),
+    resolvedBy: v.optional(v.id("users")),
+    resolvedAt: v.optional(v.number()),
+    createdBy: v.id("users"),
+    createdAt: v.number(),
+  }).index("by_business_and_date", ["businessId", "asOfDate"]).index("by_business_and_idempotency", ["businessId", "idempotencyKey"]),
   auditEvents: defineTable({
     businessId: v.id("businesses"),
     actorId: v.id("users"),

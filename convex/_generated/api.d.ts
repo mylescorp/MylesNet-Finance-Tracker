@@ -14,6 +14,7 @@ import type * as centipidHttp from "../centipidHttp.js";
 import type * as centipidUtils from "../centipidUtils.js";
 import type * as http from "../http.js";
 import type * as imports from "../imports.js";
+import type * as operations from "../operations.js";
 import type * as settings from "../settings.js";
 import type * as users from "../users.js";
 import type * as workspace from "../workspace.js";
@@ -31,6 +32,7 @@ declare const fullApi: ApiFromModules<{
   centipidUtils: typeof centipidUtils;
   http: typeof http;
   imports: typeof imports;
+  operations: typeof operations;
   settings: typeof settings;
   users: typeof users;
   workspace: typeof workspace;
