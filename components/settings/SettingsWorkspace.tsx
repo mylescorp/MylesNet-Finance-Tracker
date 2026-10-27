@@ -2,7 +2,7 @@
 
 import { useMutation, useQuery } from "convex/react";
 import { Banknote, CircleAlert, Radio, Smartphone } from "lucide-react";
-import { Children, cloneElement, isValidElement, useId, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { Children, cloneElement, isValidElement, useEffect, useId, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { countries, getEmojiFlag } from "countries-list";
 import { currencies } from "countries-list/currencies";
 import timezoneData from "countries-and-timezones";
@@ -14,6 +14,7 @@ import type { Id } from "@/convex/_generated/dataModel";
 type Tab = "general" | "finance" | "rules" | "data" | "access" | "releases";
 const localeOptions = ["en-UG", "sw-UG", "en-KE", "sw-KE", "en-TZ", "sw-TZ", "en-GB", "en-US", "fr-FR", "ar-SA", "hi-IN", "zh-CN", "pt-BR", "es-ES"];
 const monthNames = Array.from({ length: 12 }, (_, i) => new Intl.DateTimeFormat("en", { month: "long", timeZone: "UTC" }).format(new Date(Date.UTC(2024, i, 1))));
+function businessDayKey(timezone: string) { return new Intl.DateTimeFormat("en-CA", { timeZone: timezone, year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date()); }
 
 export function SettingsWorkspace({ tab }: { tab: Tab }) {
   const overview = useQuery(api.settings.overview, {});
@@ -93,7 +94,19 @@ type AccessOverview = Extract<NonNullable<ReturnType<typeof useQuery<typeof api.
 function Field({ label, children }: { label: string; children: ReactNode }) { const id = useId().replaceAll(":", ""); const childList = Children.toArray(children); const controlIndex = childList.findIndex(child => isValidElement(child) && typeof child.type === "string" && ["input", "select", "textarea"].includes(child.type)); return <div className="field"><label htmlFor={id}>{label}</label>{childList.map((child, index) => index === controlIndex && isValidElement(child) ? cloneElement(child as React.ReactElement<{ id?: string }>, { id }) : child)}</div>; }
 function NumberField({ label, value, currency, scale = 1, disabled, onChange }: { label: string; value: number; currency: string; scale?: number; disabled: boolean; onChange: (value: number) => void }) { return <Field label={`${label} (${currency})`}><input type="number" step={1 / scale} value={value} disabled={disabled} onChange={e => onChange(Number(e.target.value))} /></Field>; }
 function LiveBalancePanel({ settings }: { settings: SettingsOverview }) {
-  const day = new Intl.DateTimeFormat("en-CA", { timeZone: settings.timezone, year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
+  const [day, setDay] = useState(() => businessDayKey(settings.timezone));
+  useEffect(() => {
+    const refreshDay = () => setDay(businessDayKey(settings.timezone));
+    refreshDay();
+    const timer = window.setInterval(refreshDay, 30_000);
+    window.addEventListener("focus", refreshDay);
+    document.addEventListener("visibilitychange", refreshDay);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener("focus", refreshDay);
+      document.removeEventListener("visibilitychange", refreshDay);
+    };
+  }, [settings.timezone]);
   const live = useQuery(api.workspace.balanceOverview, { day });
   const scale = 10 ** (settings.currencyMinorDigits ?? 0);
   const money = (amount: number) => {
@@ -115,7 +128,7 @@ function LiveBalancePanel({ settings }: { settings: SettingsOverview }) {
         <div><span>Centipid vouchers redeemed</span><strong>{money(live.centipidVoucherUgx)}</strong></div>
       </div>
       <p className="muted-note live-balance-note">Cash at hand is the actual ledger balance. Estimated cash sales are a daily reconciliation figure; expenses, opening balances, and transfers affect the actual cash balance separately.</p>
-      {!live.cashEstimateComplete && <p className="live-balance-warning" role="status"><CircleAlert size={16} aria-hidden="true" /> More than 1,000 entries were recorded today, so the mobile sales estimate may be incomplete.</p>}
+      {!live.cashEstimateComplete && <p className="live-balance-warning" role="status"><CircleAlert size={16} aria-hidden="true" /> More than 1,000 entries were recorded today, so the mobile sales and Centipid breakdowns may be incomplete.</p>}
     </>}
   </section>;
 }

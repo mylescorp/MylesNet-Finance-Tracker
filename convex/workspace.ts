@@ -368,8 +368,10 @@ export const balanceOverview = query({
       ctx.db.query("entries").withIndex("by_business_and_date", q => q.eq("businessId", current.business._id).eq("occurredOn", args.day)).take(1001),
     ]);
     const salesUgx = day?.salesUgx ?? 0;
-    const centipidMobileUgx = day?.centipidMobileUgx ?? 0;
-    const mobileSalesUgx = dailyEntries.filter(entry => entry.state === "posted" && entry.kind === "sale" && entry.account === "mobile_money").reduce((total, entry) => addSafeInteger(total, entry.amountUgx, "Daily mobile sales"), 0);
+    const postedSales = dailyEntries.filter(entry => entry.state === "posted" && entry.kind === "sale");
+    const mobileSalesUgx = postedSales.filter(entry => entry.account === "mobile_money").reduce((total, entry) => addSafeInteger(total, entry.amountUgx, "Daily mobile sales"), 0);
+    const centipidMobileUgx = postedSales.filter(entry => entry.source === "webhook" && entry.account === "mobile_money").reduce((total, entry) => addSafeInteger(total, entry.amountUgx, "Centipid mobile total"), 0);
+    const centipidVoucherUgx = postedSales.filter(entry => entry.source === "webhook" && entry.account === "cash").reduce((total, entry) => addSafeInteger(total, entry.amountUgx, "Centipid voucher total"), 0);
     return {
       access: "ready" as const,
       currency: current.business.currency,
@@ -378,7 +380,7 @@ export const balanceOverview = query({
       mobileMoneyBalanceUgx: balances.find(balance => balance.account === "mobile_money")?.balanceUgx ?? 0,
       salesUgx,
       centipidMobileUgx,
-      centipidVoucherUgx: day?.centipidVoucherUgx ?? 0,
+      centipidVoucherUgx,
       mobileSalesUgx,
       cashEstimateComplete: dailyEntries.length <= 1000,
       estimatedCashSalesUgx: salesUgx - mobileSalesUgx,
@@ -715,8 +717,6 @@ export const voidEntry = mutation({
         entry.kind === "expense" ? -1 : 0,
         "Daily expense count",
       ),
-      centipidMobileUgx: Math.max(0, (day.centipidMobileUgx ?? 0) - (entry.source === "webhook" && entry.kind === "sale" && entry.account === "mobile_money" ? entry.amountUgx : 0)),
-      centipidVoucherUgx: Math.max(0, (day.centipidVoucherUgx ?? 0) - (entry.source === "webhook" && entry.kind === "sale" && entry.account === "cash" ? entry.amountUgx : 0)),
     });
     if (entry.account !== "unallocated") await applyAccountEffect(
       ctx,

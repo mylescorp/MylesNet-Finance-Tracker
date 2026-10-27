@@ -140,8 +140,6 @@ export default defineSchema({
     expensesUgx: v.number(),
     saleCount: v.number(),
     expenseCount: v.number(),
-    centipidMobileUgx: v.optional(v.number()),
-    centipidVoucherUgx: v.optional(v.number()),
   }).index("by_business_and_day", ["businessId", "day"]),
   movements: defineTable({
     businessId: v.id("businesses"),
