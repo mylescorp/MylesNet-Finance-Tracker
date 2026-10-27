@@ -1,18 +1,21 @@
 "use client";
 
 import { useMutation, useQuery } from "convex/react";
-import { Children, cloneElement, isValidElement, useId, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { Banknote, CircleAlert, Radio, Smartphone } from "lucide-react";
+import { Children, cloneElement, isValidElement, useEffect, useId, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { countries, getEmojiFlag } from "countries-list";
 import { currencies } from "countries-list/currencies";
 import timezoneData from "countries-and-timezones";
 import { api } from "@/convex/_generated/api";
 import { CsvImportPanel } from "./CsvImportPanel";
 import { CentipidWebhookPanel } from "./CentipidWebhookPanel";
+import { GoogleFormsPanel } from "./GoogleFormsPanel";
 import type { Id } from "@/convex/_generated/dataModel";
 
 type Tab = "general" | "finance" | "rules" | "data" | "access" | "releases";
 const localeOptions = ["en-UG", "sw-UG", "en-KE", "sw-KE", "en-TZ", "sw-TZ", "en-GB", "en-US", "fr-FR", "ar-SA", "hi-IN", "zh-CN", "pt-BR", "es-ES"];
 const monthNames = Array.from({ length: 12 }, (_, i) => new Intl.DateTimeFormat("en", { month: "long", timeZone: "UTC" }).format(new Date(Date.UTC(2024, i, 1))));
+function businessDayKey(timezone: string) { return new Intl.DateTimeFormat("en-CA", { timeZone: timezone, year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date()); }
 
 export function SettingsWorkspace({ tab }: { tab: Tab }) {
   const overview = useQuery(api.settings.overview, {});
@@ -75,6 +78,7 @@ function EditableSettings({ tab, settings }: { tab: "general" | "finance" | "rul
       <section className="card settings-card"><div className="card-heading"><div><h2 className="card-title">Regional preview</h2><p className="card-subtitle">A quick check of the settings that affect saved records.</p></div></div><div className="settings-facts"><div><span>Business date</span><strong>{new Intl.DateTimeFormat(form.locale, { dateStyle: "full", timeZone: form.timezone }).format(new Date())}</strong></div><div><span>Time zone</span><strong>{form.timezone} · {offsetLabel(form.timezone)}</strong></div><div><span>Currency preview</span><strong>{moneyPreview(form.currency, form.locale)}</strong></div><div><span>Financial year</span><strong>{monthNames[form.fiscalYearStartMonth - 1]}–{monthNames[(form.fiscalYearStartMonth + 10) % 12]}</strong></div></div></section>
     </>}
     {tab === "finance" && <>
+      <LiveBalancePanel settings={settings} />
       <section className="card settings-card"><div className="card-heading"><div><h2 className="card-title">Cashbook categories</h2><p className="card-subtitle">One category per line. Categories are available to everyone who can record entries.</p></div></div><div className="form-layout"><Field label="Income categories"><textarea rows={7} value={form.incomeCategories.join("\n")} disabled={!isOwner} onChange={e => update("incomeCategories", e.target.value.split("\n"))} /></Field><Field label="Expense categories"><textarea rows={7} value={form.expenseCategories.join("\n")} disabled={!isOwner} onChange={e => update("expenseCategories", e.target.value.split("\n"))} /></Field></div></section>
       <section className="card settings-card"><div className="card-heading"><div><h2 className="card-title">Accounts and opening balances</h2><p className="card-subtitle">Set the starting cash and mobile money amounts before recording transactions.</p></div></div><div className="form-layout"><NumberField label="Opening cash balance" value={form.cashOpeningBalance} currency={settings.currency} scale={10 ** (settings.currencyMinorDigits ?? 0)} disabled={!isOwner || settings.openingBalancesLocked} onChange={v => update("cashOpeningBalance", v)} /><NumberField label="Opening mobile money balance" value={form.mobileOpeningBalance} currency={settings.currency} scale={10 ** (settings.currencyMinorDigits ?? 0)} disabled={!isOwner || settings.openingBalancesLocked} onChange={v => update("mobileOpeningBalance", v)} /></div>{settings.openingBalancesLocked && <p className="muted-note">Opening balances are locked after the first sale, expense, or account movement. Correct later differences with an auditable adjustment.</p>}</section>
       <section className="card settings-card"><div className="card-heading"><div><h2 className="card-title">Operating targets and cash alerts</h2><p className="card-subtitle">Targets help reports highlight exceptions. They do not create or change ledger entries. Set the cash alert to zero to turn it off.</p></div></div><div className="form-layout"><NumberField label="Monthly sales target" value={form.monthlySalesTargetUgx} currency={settings.currency} scale={10 ** (settings.currencyMinorDigits ?? 0)} disabled={!isOwner} onChange={v => update("monthlySalesTargetUgx", v)} /><NumberField label="Monthly expense warning" value={form.monthlyExpenseWarningUgx} currency={settings.currency} scale={10 ** (settings.currencyMinorDigits ?? 0)} disabled={!isOwner} onChange={v => update("monthlyExpenseWarningUgx", v)} /><NumberField label="Low cash alert threshold" value={form.lowCashAlertUgx} currency={settings.currency} scale={10 ** (settings.currencyMinorDigits ?? 0)} disabled={!isOwner} onChange={v => update("lowCashAlertUgx", v)} /></div></section>
@@ -91,6 +95,45 @@ type SettingsOverview = Extract<NonNullable<ReturnType<typeof useQuery<typeof ap
 type AccessOverview = Extract<NonNullable<ReturnType<typeof useQuery<typeof api.settings.accessOverview>>>, { access: "ready" }>;
 function Field({ label, children }: { label: string; children: ReactNode }) { const id = useId().replaceAll(":", ""); const childList = Children.toArray(children); const controlIndex = childList.findIndex(child => isValidElement(child) && typeof child.type === "string" && ["input", "select", "textarea"].includes(child.type)); return <div className="field"><label htmlFor={id}>{label}</label>{childList.map((child, index) => index === controlIndex && isValidElement(child) ? cloneElement(child as React.ReactElement<{ id?: string }>, { id }) : child)}</div>; }
 function NumberField({ label, value, currency, scale = 1, disabled, onChange }: { label: string; value: number; currency: string; scale?: number; disabled: boolean; onChange: (value: number) => void }) { return <Field label={`${label} (${currency})`}><input type="number" step={1 / scale} value={value} disabled={disabled} onChange={e => onChange(Number(e.target.value))} /></Field>; }
+function LiveBalancePanel({ settings }: { settings: SettingsOverview }) {
+  const [day, setDay] = useState(() => businessDayKey(settings.timezone));
+  useEffect(() => {
+    const refreshDay = () => setDay(businessDayKey(settings.timezone));
+    refreshDay();
+    const timer = window.setInterval(refreshDay, 30_000);
+    window.addEventListener("focus", refreshDay);
+    document.addEventListener("visibilitychange", refreshDay);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener("focus", refreshDay);
+      document.removeEventListener("visibilitychange", refreshDay);
+    };
+  }, [settings.timezone]);
+  const live = useQuery(api.workspace.balanceOverview, { day });
+  const scale = 10 ** (settings.currencyMinorDigits ?? 0);
+  const money = (amount: number) => {
+    try { return new Intl.NumberFormat(settings.locale, { style: "currency", currency: settings.currency }).format(amount / scale); }
+    catch { return `${(amount / scale).toLocaleString(settings.locale)} ${settings.currency}`; }
+  };
+  return <section className="card settings-card live-balance-card" aria-labelledby="live-balances-heading">
+    <div className="card-heading"><div><h2 className="card-title" id="live-balances-heading">Live balances and daily close</h2><p className="card-subtitle">Convex keeps these figures current as cashbook entries and Centipid events arrive.</p></div><span className="live-balance-indicator"><Radio size={14} aria-hidden="true" /> Live</span></div>
+    {live === undefined ? <p className="muted-note" role="status">Loading live balances…</p> : live.access !== "ready" ? <p className="muted-note">{live.access === "restricted" ? "Business balances are not available to partner accounts." : "Workspace access is required to view live balances."}</p> : <>
+      <div className="live-balance-grid">
+        <div className="live-balance-tile"><div><Banknote size={17} aria-hidden="true" /><span>Cash at hand</span></div><strong>{money(live.cashBalanceUgx)}</strong><small>Current cash account balance</small></div>
+        <div className="live-balance-tile"><div><Smartphone size={17} aria-hidden="true" /><span>Mobile collection balance</span></div><strong>{money(live.mobileMoneyBalanceUgx)}</strong><small>Current mobile money account balance</small></div>
+        <div className="live-balance-tile live-balance-estimate"><div><Banknote size={17} aria-hidden="true" /><span>Estimated cash sales today</span></div><strong>{money(live.estimatedCashSalesUgx)}</strong><small>Daily sales minus mobile money sales</small></div>
+      </div>
+      <div className="settings-facts live-balance-facts">
+        <div><span>Total sales · {day}</span><strong>{money(live.salesUgx)}</strong></div>
+        <div><span>Mobile sales · {day}</span><strong>{money(live.mobileSalesUgx)}</strong></div>
+        <div><span>Centipid payments received</span><strong>{money(live.centipidMobileUgx)}</strong></div>
+        <div><span>Centipid vouchers redeemed</span><strong>{money(live.centipidVoucherUgx)}</strong></div>
+      </div>
+      <p className="muted-note live-balance-note">Cash at hand is the actual ledger balance. Estimated cash sales are a daily reconciliation figure; expenses, opening balances, and transfers affect the actual cash balance separately.</p>
+      {!live.cashEstimateComplete && <p className="live-balance-warning" role="status"><CircleAlert size={16} aria-hidden="true" /> More than 1,000 entries were recorded today, so the mobile sales and Centipid breakdowns may be incomplete.</p>}
+    </>}
+  </section>;
+}
 function offsetLabel(zone: string) { try { return new Intl.DateTimeFormat("en", { timeZone: zone, timeZoneName: "shortOffset" }).formatToParts(new Date()).find(p => p.type === "timeZoneName")?.value ?? "UTC"; } catch { return "UTC"; } }
 function currencyName(code: string) { return currencies[code as keyof typeof currencies]?.name ?? code; }
 function moneyPreview(code: string, locale: string) { try { return new Intl.NumberFormat(locale, { style: "currency", currency: code }).format(123456.78); } catch { return `123,456.78 ${code}`; } }
@@ -107,7 +150,7 @@ function DataSettings() {
     const anchor = document.createElement("a"); anchor.href = url; anchor.download = `mylesnet-cashbook-${new Date().toISOString().slice(0, 10)}.csv`; anchor.click(); URL.revokeObjectURL(url);
     setNotice(`Exported ${data.rows.length} entries${data.rows.length === 5000 ? " (maximum export size reached; contact support for a full archive)" : ""}.`);
   }
-  return <div className="settings-stack"><section className="card settings-card"><div className="card-heading"><div><h2 className="card-title">Export cashbook data</h2><p className="card-subtitle">Download up to 5,000 records as UTF-8 CSV for audit, backup, or analysis.</p></div></div><p className="muted-note">Exports include transaction date, category, account, amount, currency, note, source, state, and creation time. Voided records remain included for audit history.</p><div className="form-actions"><button className="button button-accent" type="button" onClick={download} disabled={!data || data.access !== "ready"}>Download CSV</button>{data?.access === "ready" && <span className="muted-note">{data.rows.length} records ready · {data.currency}</span>}{data?.access === "restricted" && <span className="muted-note">Only workspace owners can export cashbook data.</span>}</div>{notice && <p className="form-feedback form-success" role="status">{notice}</p>}</section>{data?.access === "ready" ? <><CsvImportPanel /><CentipidWebhookPanel /></> : <section className="card settings-card"><p className="muted-note">CSV imports and Centipid integration management are available to workspace owners only.</p></section>}<section className="card settings-card"><div className="card-heading"><div><h2 className="card-title">Backups</h2><p className="card-subtitle">Off-platform archives and one-click restore have not been configured.</p></div></div><p className="muted-note">Imports and exports are restricted to workspace owners and recorded in the audit trail.</p></section></div>;
+  return <div className="settings-stack"><section className="card settings-card"><div className="card-heading"><div><h2 className="card-title">Export cashbook data</h2><p className="card-subtitle">Download up to 5,000 records as UTF-8 CSV for audit, backup, or analysis.</p></div></div><p className="muted-note">Exports include transaction date, category, account, amount, currency, note, source, state, and creation time. Voided records remain included for audit history.</p><div className="form-actions"><button className="button button-accent" type="button" onClick={download} disabled={!data || data.access !== "ready"}>Download CSV</button>{data?.access === "ready" && <span className="muted-note">{data.rows.length} records ready · {data.currency}</span>}{data?.access === "restricted" && <span className="muted-note">Only workspace owners can export cashbook data.</span>}</div>{notice && <p className="form-feedback form-success" role="status">{notice}</p>}</section>{data?.access === "ready" ? <><CsvImportPanel /><CentipidWebhookPanel /><GoogleFormsPanel /></> : <section className="card settings-card"><p className="muted-note">CSV imports and integration management are available to workspace owners only.</p></section>}<section className="card settings-card"><div className="card-heading"><div><h2 className="card-title">Backups</h2><p className="card-subtitle">Off-platform archives and one-click restore have not been configured.</p></div></div><p className="muted-note">Imports and exports are restricted to workspace owners and recorded in the audit trail.</p></section></div>;
 }
 
 function RulesReview() {

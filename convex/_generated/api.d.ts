@@ -16,6 +16,7 @@ import type * as centipidUtils from "../centipidUtils.js";
 import type * as distributions from "../distributions.js";
 import type * as http from "../http.js";
 import type * as imports from "../imports.js";
+import type * as googleForms from "../googleForms.js";
 import type * as operations from "../operations.js";
 import type * as settings from "../settings.js";
 import type * as users from "../users.js";
@@ -36,6 +37,7 @@ declare const fullApi: ApiFromModules<{
   distributions: typeof distributions;
   http: typeof http;
   imports: typeof imports;
+  googleForms: typeof googleForms;
   operations: typeof operations;
   settings: typeof settings;
   users: typeof users;

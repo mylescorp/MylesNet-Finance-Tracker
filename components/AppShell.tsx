@@ -60,7 +60,7 @@ export function AppShell({ children }: { children: ReactNode }) {
     general: "General settings", finance: "Finance settings", rules: "Rules",
     data: "Data", access: "Access", releases: "Releases",
   };
-  const routePageLabel = pathname === "/account" ? "Your account" : activePage?.label
+  const routePageLabel = pathname === "/account" ? "Your account" : pathname === "/add-entry" ? "Add an entry" : activePage?.label
     ?? (pathname.startsWith("/settings/") ? settingsPageLabels[pathname.split("/")[2]] ?? "Settings" : undefined)
     ?? (pathname === "/issues" ? "Needs attention" : "Workspace");
   const closeAccount = useCallback(() => {

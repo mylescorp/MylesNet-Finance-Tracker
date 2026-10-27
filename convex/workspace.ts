@@ -335,6 +335,60 @@ export const dashboardSummary = query({
   },
 });
 
+export const balanceOverview = query({
+  args: { day: v.string() },
+  returns: v.union(
+    v.object({ access: v.literal("setup") }),
+    v.object({ access: v.literal("pending") }),
+    v.object({ access: v.literal("restricted") }),
+    v.object({
+      access: v.literal("ready"),
+      currency: v.string(),
+      day: v.string(),
+      cashBalanceUgx: v.number(),
+      mobileMoneyBalanceUgx: v.number(),
+      salesUgx: v.number(),
+      centipidMobileUgx: v.number(),
+      centipidVoucherUgx: v.number(),
+      mobileSalesUgx: v.number(),
+      cashEstimateComplete: v.boolean(),
+      estimatedCashSalesUgx: v.number(),
+    }),
+  ),
+  handler: async (ctx, args) => {
+    if (!isIsoDay(args.day)) throw new Error("Choose a valid business date.");
+    const current = await getMembership(ctx);
+    if (!current) {
+      const businesses = await ctx.db.query("businesses").take(1);
+      return { access: businesses.length === 0 ? "setup" as const : "pending" as const };
+    }
+    if (current.membership.role === "partner") return { access: "restricted" as const };
+    const [day, balances, dailyEntries] = await Promise.all([
+      ctx.db.query("dailyTotals").withIndex("by_business_and_day", q => q.eq("businessId", current.business._id).eq("day", args.day)).unique(),
+      ctx.db.query("accountBalances").withIndex("by_business_and_account", q => q.eq("businessId", current.business._id)).take(2),
+      ctx.db.query("entries").withIndex("by_business_and_date", q => q.eq("businessId", current.business._id).eq("occurredOn", args.day)).take(1001),
+    ]);
+    const salesUgx = day?.salesUgx ?? 0;
+    const postedSales = dailyEntries.filter(entry => entry.state === "posted" && entry.kind === "sale");
+    const mobileSalesUgx = postedSales.filter(entry => entry.account === "mobile_money").reduce((total, entry) => addSafeInteger(total, entry.amountUgx, "Daily mobile sales"), 0);
+    const centipidMobileUgx = postedSales.filter(entry => entry.source === "webhook" && entry.account === "mobile_money").reduce((total, entry) => addSafeInteger(total, entry.amountUgx, "Centipid mobile total"), 0);
+    const centipidVoucherUgx = postedSales.filter(entry => entry.source === "webhook" && entry.account === "cash").reduce((total, entry) => addSafeInteger(total, entry.amountUgx, "Centipid voucher total"), 0);
+    return {
+      access: "ready" as const,
+      currency: current.business.currency,
+      day: args.day,
+      cashBalanceUgx: balances.find(balance => balance.account === "cash")?.balanceUgx ?? 0,
+      mobileMoneyBalanceUgx: balances.find(balance => balance.account === "mobile_money")?.balanceUgx ?? 0,
+      salesUgx,
+      centipidMobileUgx,
+      centipidVoucherUgx,
+      mobileSalesUgx,
+      cashEstimateComplete: dailyEntries.length <= 1000,
+      estimatedCashSalesUgx: salesUgx - mobileSalesUgx,
+    };
+  },
+});
+
 export const recentEntries = query({
   args: { limit: v.optional(v.number()), kind: v.optional(v.union(v.literal("sale"), v.literal("expense"))), from: v.optional(v.string()), toExclusive: v.optional(v.string()) },
   returns: v.array(
