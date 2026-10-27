@@ -6,7 +6,7 @@ import { mutation, query } from "./_generated/server";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import type { Id } from "./_generated/dataModel";
 
-const role = v.union(v.literal("owner"), v.literal("partner"), v.literal("cashier"));
+const role = v.union(v.literal("owner"), v.literal("partner"), v.literal("cashier"), v.literal("finance_approver"));
 function currencyMinorDigits(currency: string) {
   return currencies[currency as keyof typeof currencies]?.decimals ?? 0;
 }
@@ -72,6 +72,7 @@ function defaults() {
     weakDaySalesUgx: 50000,
     monthlySalesTargetUgx: 0,
     monthlyExpenseWarningUgx: 0,
+    lowCashAlertUgx: 100000,
     duplicateWindowDays: 1,
     requireEntryNote: false,
     negativeBalanceWarning: true,
@@ -102,8 +103,8 @@ export const overview = query({
       settingsUpdatedAt: prefs?.updatedAt ?? current.business.createdAt,
       currencyLocked: Boolean(firstEntry || firstOperationalRecord || balances.some(b => (b.openingBalanceUgx ?? 0) !== 0)),
       openingBalancesLocked,
-      cashOpeningBalance: (balances.find(b => b.account === "cash")?.openingBalanceUgx ?? 0) / scale,
-      mobileOpeningBalance: (balances.find(b => b.account === "mobile_money")?.openingBalanceUgx ?? 0) / scale,
+      cashOpeningBalance: current.membership.role === "finance_approver" ? 0 : (balances.find(b => b.account === "cash")?.openingBalanceUgx ?? 0) / scale,
+      mobileOpeningBalance: current.membership.role === "finance_approver" ? 0 : (balances.find(b => b.account === "mobile_money")?.openingBalanceUgx ?? 0) / scale,
       timezone: current.business.timezone,
       weekStartsOn: current.business.weekStartsOn ?? "monday",
       locale: prefs?.locale ?? fallback.locale,
@@ -115,6 +116,7 @@ export const overview = query({
       weakDaySalesUgx: (prefs?.weakDaySalesUgx ?? fallback.weakDaySalesUgx * scale) / scale,
       monthlySalesTargetUgx: (prefs?.monthlySalesTargetUgx ?? fallback.monthlySalesTargetUgx * scale) / scale,
       monthlyExpenseWarningUgx: (prefs?.monthlyExpenseWarningUgx ?? fallback.monthlyExpenseWarningUgx * scale) / scale,
+      lowCashAlertUgx: (prefs?.lowCashAlertUgx ?? fallback.lowCashAlertUgx * scale) / scale,
       duplicateWindowDays: prefs?.duplicateWindowDays ?? fallback.duplicateWindowDays,
       requireEntryNote: prefs?.requireEntryNote ?? fallback.requireEntryNote,
       negativeBalanceWarning: prefs?.negativeBalanceWarning ?? fallback.negativeBalanceWarning,
@@ -130,7 +132,7 @@ export const update = mutation({
     dateFormat: v.union(v.literal("DD/MM/YYYY"), v.literal("MM/DD/YYYY"), v.literal("YYYY-MM-DD")),
     fiscalYearStartMonth: v.number(), incomeCategories: v.array(v.string()), expenseCategories: v.array(v.string()),
     highExpenseReviewUgx: v.number(), weakDaySalesUgx: v.number(), monthlySalesTargetUgx: v.number(),
-    monthlyExpenseWarningUgx: v.number(), duplicateWindowDays: v.number(), requireEntryNote: v.boolean(),
+    monthlyExpenseWarningUgx: v.number(), lowCashAlertUgx: v.number(), duplicateWindowDays: v.number(), requireEntryNote: v.boolean(),
     negativeBalanceWarning: v.boolean(), cashOpeningBalance: v.number(), mobileOpeningBalance: v.number(),
   },
   returns: v.number(),
@@ -150,7 +152,7 @@ export const update = mutation({
     try { new Intl.DateTimeFormat(args.locale); new Intl.DateTimeFormat("en", { timeZone: args.timezone }); scale = 10 ** (currencyMinorDigits(args.currency) ?? 0); new Intl.NumberFormat("en", { style: "currency", currency: args.currency }); }
     catch { throw new Error("Choose a valid locale and IANA timezone."); }
     if (!Number.isInteger(args.fiscalYearStartMonth) || args.fiscalYearStartMonth < 1 || args.fiscalYearStartMonth > 12) throw new Error("Fiscal year start must be a month from 1 to 12.");
-    for (const [label, amount] of [["High expense review", args.highExpenseReviewUgx], ["Weak day sales", args.weakDaySalesUgx], ["Monthly sales target", args.monthlySalesTargetUgx], ["Monthly expense warning", args.monthlyExpenseWarningUgx]] as const) {
+    for (const [label, amount] of [["High expense review", args.highExpenseReviewUgx], ["Weak day sales", args.weakDaySalesUgx], ["Monthly sales target", args.monthlySalesTargetUgx], ["Monthly expense warning", args.monthlyExpenseWarningUgx], ["Low cash alert", args.lowCashAlertUgx]] as const) {
       if (amount < 0 || !isValidCurrencyAmount(amount, scale)) throw new Error(`${label} must be a non-negative amount using the selected currency's decimal places.`);
     }
     if (!Number.isInteger(args.duplicateWindowDays) || args.duplicateWindowDays < 0 || args.duplicateWindowDays > 30) throw new Error("Duplicate review window must be between 0 and 30 days.");
@@ -204,6 +206,7 @@ export const update = mutation({
       weakDaySalesUgx: weakDaySalesMinor,
       monthlySalesTargetUgx: monthlySalesTargetMinor,
       monthlyExpenseWarningUgx: monthlyExpenseWarningMinor,
+      lowCashAlertUgx: toMinorUnits(args.lowCashAlertUgx, scale),
       duplicateWindowDays: args.duplicateWindowDays,
       requireEntryNote: args.requireEntryNote,
       negativeBalanceWarning: args.negativeBalanceWarning,
@@ -225,6 +228,7 @@ export const update = mutation({
           expenseCategories: existing?.expenseCategories ?? ["Transport", "Supplies", "Utilities", "Rent", "Equipment", "Other expense"],
           highExpenseReview: existing?.highExpenseReviewUgx ?? 500000, weakDaySales: existing?.weakDaySalesUgx ?? 50000,
           monthlySalesTarget: existing?.monthlySalesTargetUgx ?? 0, monthlyExpenseWarning: existing?.monthlyExpenseWarningUgx ?? 0,
+          lowCashAlert: existing?.lowCashAlertUgx ?? 100000,
           duplicateWindowDays: existing?.duplicateWindowDays ?? 1, requireEntryNote: existing?.requireEntryNote ?? false,
           negativeBalanceWarning: existing?.negativeBalanceWarning ?? true,
           cashOpeningBalanceMinor: cashDoc?.openingBalanceUgx ?? 0,
@@ -252,7 +256,7 @@ export const ruleReview = query({
   args: {},
   handler: async (ctx) => {
     const current = await activeWorkspace(ctx);
-    if (!current || current.membership.role === "partner") return { access: "restricted" as const, currency: "UGX", highExpenses: [], weakDays: [] };
+    if (!current || current.membership.role === "partner" || current.membership.role === "finance_approver") return { access: "restricted" as const, currency: "UGX", highExpenses: [], weakDays: [] };
     const prefs = await ctx.db.query("workspacePreferences").withIndex("by_business", q => q.eq("businessId", current.business._id)).unique();
     const scale = 10 ** (currencyMinorDigits(current.business.currency) ?? 0);
     const threshold = prefs?.highExpenseReviewUgx ?? 500000 * scale;
@@ -274,7 +278,7 @@ export const monthlyTargets = query({
   args: { from: v.string(), toExclusive: v.string() },
   handler: async (ctx, args) => {
     const current = await activeWorkspace(ctx);
-    if (!current || current.membership.role === "partner") return { access: "restricted" as const };
+    if (!current || current.membership.role === "partner" || current.membership.role === "finance_approver") return { access: "restricted" as const };
     const prefs = await ctx.db.query("workspacePreferences").withIndex("by_business", q => q.eq("businessId", current.business._id)).unique();
     const days = await ctx.db.query("dailyTotals").withIndex("by_business_and_day", q => q.eq("businessId", current.business._id).gte("day", args.from).lt("day", args.toExclusive)).take(40);
     return {
@@ -316,7 +320,7 @@ export const invite = mutation({
     if (!current || current.membership.role !== "owner") throw new Error("Only the workspace owner can invite people.");
     const email = args.email.trim().toLowerCase();
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error("Enter a valid email address.");
-    if (args.role === "owner") throw new Error("Invite a partner or cashier. The owner role is assigned during workspace setup.");
+    if (args.role === "owner") throw new Error("Invite a partner, cashier, or finance approver. The owner role is assigned during workspace setup.");
     if (args.role === "partner") {
       if (!args.partnerId) throw new Error("Choose the partner account this Google sign-in will represent.");
       const partner = await ctx.db.get("partners", args.partnerId);

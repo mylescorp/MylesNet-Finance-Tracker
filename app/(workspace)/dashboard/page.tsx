@@ -11,6 +11,7 @@ import { Card, WorkspaceTitle } from "@/components/AppShell";
 import { OwnerSetup } from "@/components/workspace/OwnerSetup";
 import { ConvexLiveStatus } from "@/components/workspace/ConvexLiveStatus";
 import { formatBusinessDay } from "@/lib/format";
+import { AnalyticsInsights } from "@/components/workspace/AnalyticsInsights";
 
 function todayKey(timezone: string) {
   return new Intl.DateTimeFormat("en-CA", { timeZone: timezone, year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
@@ -73,9 +74,10 @@ export default function DashboardPage() {
     };
     if (!isIsoDay(customFrom) || !isIsoDay(customTo)) return "Choose both valid dates.";
     if (customFrom > customTo) return "The end date must be on or after the start date.";
+    if (customTo > businessDay) return "The end date cannot be in the future.";
     if ((Date.parse(`${customTo}T00:00:00.000Z`) - Date.parse(`${customFrom}T00:00:00.000Z`)) / 86400000 + 1 > 370) return "Choose a period of 370 days or less.";
     return "";
-  }, [period, customFrom, customTo]);
+  }, [period, customFrom, customTo, businessDay]);
   const customDatesValid = !customRangeError;
   const customRangeInvalid = period === "custom" && !customDatesValid;
   const range = useMemo(() => {
@@ -127,7 +129,7 @@ export default function DashboardPage() {
       <button className="button button-dark" type="button" onClick={() => void shareDashboard()}><Share2 size={14} />Share report</button>
       {shareFeedback && <span className="form-feedback" role="status">{shareFeedback}</span>}
     </div>
-    <Card className="quick-add-strip no-print"><span className="eyebrow">Quick add</span><Link className="button button-accent" href="/add-entry">+ Add entry</Link><Link className="button" href="/sales">+ Add sale</Link><Link className="button" href="/expenses">+ Add expense</Link><Link className="button" href="/movements">Record movement</Link><span className="quick-add-note">Saved entries update cashbook totals and account balances.</span></Card>
+    {settings?.role !== "finance_approver" && <Card className="quick-add-strip no-print"><span className="eyebrow">Quick add</span><Link className="button" href="/sales">+ Add sale</Link><Link className="button" href="/expenses">+ Add expense</Link><Link className="button" href="/movements">Record withdrawal</Link><Link className="button" href="/partners">Record payout</Link><span className="quick-add-note">Saved entries update cashbook totals and account balances.</span></Card>}
     <Card className="dashboard-sales-hero">
       <div className="hero-sales-number"><span className="eyebrow">Today’s sales · {fmtDate(today)}</span><strong>{isReady ? formatMoney(todaySales) : "—"}<small>{currency}</small></strong><span className="muted-note">Recorded sales only</span></div>
       <div className="hero-sales-trend"><div className="card-heading"><div><h2 className="card-title">Sales activity</h2><p className="card-subtitle">Daily totals for the selected period</p></div></div>{customRangeInvalid ? <Empty message={customRangeError} /> : !isReady ? <Empty message="Loading workspace data…" /> : dayBars.length === 0 ? <Empty message="No sales have been recorded in this period." /> : <><div className="chart-bars" role="img" aria-label={`Sales over ${dayBars.length} days. Total ${formatMoney(readySummary?.salesUgx ?? 0)} ${currency}.`}>{dayBars.map((day) => <div className="chart-day" key={day.day} title={`${fmtDate(day.day)}: ${formatMoney(day.salesUgx)} ${currency}`}><div className="chart-bar" style={{ height: `${Math.max(2, day.salesUgx / peak * 100)}%`, opacity: day.day === today ? 1 : 0.45 }} /></div>)}</div><div className="chart-labels"><span>{dayBars[0] ? fmtDate(dayBars[0].day) : ""}</span><span>{dayBars.at(-1) ? fmtDate(dayBars.at(-1)!.day) : ""}</span></div></>}</div>
@@ -163,6 +165,7 @@ export default function DashboardPage() {
       <Card><div className="card-heading"><div><h2 className="card-title">Account balances</h2><p className="card-subtitle">Balances reflect entries recorded in this workspace.</p></div></div><div className="balance-detail"><span>Cash on hand</span><strong>{isReady ? `${formatMoney(readySummary?.cashBalanceUgx ?? 0)} ${currency}` : "—"}</strong></div><div className="balance-detail"><span>Mobile money</span><strong>{isReady ? `${formatMoney(readySummary?.mobileMoneyBalanceUgx ?? 0)} ${currency}` : "—"}</strong></div><p className="muted-note">Add opening balances in Finance settings before using these as a full business position.</p></Card>
       <Card><div className="card-heading"><div><h2 className="card-title">Data health</h2><p className="card-subtitle">Coverage follows configured finance workflows.</p></div></div><div className="health-row"><span>Sales and expenses</span><span className="status-chip status-ok">Live</span></div><div className="health-row"><span>Recurring bills</span><span className="status-chip status-warning">Setup needed</span></div><div className="health-row"><span>Opening balance</span><span className="status-chip status-warning">Review</span></div><Link className="text-link" href="/reconcile">Review reconciliation →</Link></Card>
     </div>
+    {!customRangeInvalid && <AnalyticsInsights range={range} today={today} currency={currency} scale={currencyScale} locale={locale} compact />}
   </>;
 }
 

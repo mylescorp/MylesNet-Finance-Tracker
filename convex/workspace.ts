@@ -29,6 +29,7 @@ const accessResult = v.union(
       v.literal("owner"),
       v.literal("partner"),
       v.literal("cashier"),
+      v.literal("finance_approver"),
     ),
   }),
 );
@@ -162,7 +163,7 @@ export const businessSettings = query({
       currency: v.string(),
       timezone: v.string(),
       weekStartsOn: v.union(v.literal("monday"), v.literal("sunday")),
-      role: v.union(v.literal("owner"), v.literal("partner"), v.literal("cashier")),
+      role: v.union(v.literal("owner"), v.literal("partner"), v.literal("cashier"), v.literal("finance_approver")),
     }),
   ),
   handler: async (ctx) => {
@@ -290,7 +291,7 @@ export const dashboardSummary = query({
     }
     // Partner statement data is not yet linked to partner-specific ledger rows.
     // Hide business-wide finance totals until that scope is implemented.
-    if (current.membership.role === "partner") return { access: "restricted" as const };
+    if (current.membership.role === "partner" || current.membership.role === "finance_approver") return { access: "restricted" as const };
     const days = await ctx.db
       .query("dailyTotals")
       .withIndex("by_business_and_day", (q) =>
@@ -405,7 +406,7 @@ export const recentEntries = query({
   handler: async (ctx, args) => {
     const current = await getMembership(ctx);
     if (!current) return [];
-    if (current.membership.role === "partner") return [];
+    if (current.membership.role === "partner" || current.membership.role === "finance_approver") return [];
     const limit = Math.max(1, Math.min(Math.floor(args.limit ?? 10), 500));
     if ((args.from && !isIsoDay(args.from)) || (args.toExclusive && !isIsoDay(args.toExclusive)) || (args.from && args.toExclusive && args.from >= args.toExclusive)) throw new Error("Choose a valid entry date range.");
     const rows = args.kind
@@ -445,7 +446,7 @@ export const searchEntries = query({
   handler: async (ctx, args) => {
     const current = await getMembership(ctx);
     const term = args.term.trim();
-    if (!current || current.membership.role === "partner" || term.length < 2 || term.length > 80) return [];
+    if (!current || current.membership.role === "partner" || current.membership.role === "finance_approver" || term.length < 2 || term.length > 80) return [];
     const limit = Math.max(1, Math.min(Math.floor(args.limit ?? 8), 12));
     const [notes, categories] = await Promise.all([
       ctx.db.query("entries").withSearchIndex("search_note", (q) => q.search("note", term).eq("businessId", current.business._id)).take(limit),
@@ -473,7 +474,7 @@ export const operationalRecords = query({
   })),
   handler: async (ctx, args) => {
     const current = await getMembership(ctx);
-    if (!current || current.membership.role === "partner") return [];
+    if (!current || current.membership.role === "partner" || current.membership.role === "finance_approver") return [];
     return (await ctx.db.query("operationalRecords").withIndex("by_business_and_kind_and_date", q => q.eq("businessId", current.business._id).eq("kind", args.kind)).order("desc").take(200))
       .map(({ _id, kind, title, amountUgx, occurredOn, account, destinationAccount, movementType, cadence, note }) => ({ _id, kind, title, amountUgx, occurredOn, account, destinationAccount, movementType, cadence, note }));
   },
@@ -491,7 +492,7 @@ export const createOperationalRecord = mutation({
   returns: v.id("operationalRecords"),
   handler: async (ctx, args) => {
     const current = await getMembership(ctx);
-    if (!current || current.membership.role === "partner") throw new Error("Workspace access is required to save this record.");
+    if (!current || (current.membership.role !== "owner" && current.membership.role !== "cashier")) throw new Error("Only an owner or cashier can save this record.");
     if (!isIsoDay(args.occurredOn)) throw new Error("Choose a valid business date.");
     if (!Number.isSafeInteger(args.amountUgx) || args.amountUgx <= 0) throw new Error(`Amount must be a positive whole minor-unit amount in ${current.business.currency}.`);
     const title = args.title.trim();
@@ -541,9 +542,7 @@ export const createEntry = mutation({
   handler: async (ctx, args) => {
     const current = await getMembership(ctx);
     if (!current) throw new Error("Access is pending. Ask an owner for an invitation.");
-    if (current.membership.role === "partner") {
-      throw new Error("Partner accounts cannot add ledger entries.");
-    }
+    if (current.membership.role !== "owner" && current.membership.role !== "cashier") throw new Error("This account cannot add ledger entries.");
     if (!Number.isSafeInteger(args.amountUgx) || args.amountUgx <= 0) {
       throw new Error(`Amount must be a positive valid amount in ${current.business.currency}.`);
     }

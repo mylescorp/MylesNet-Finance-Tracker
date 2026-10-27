@@ -336,6 +336,13 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .flow-label { display:flex; justify-content:space-between; gap:10px; margin-bottom:6px; font-size:12px; }
 .flow-label span { color:var(--mn-muted); }
 .flow-track { height:8px; background:var(--mn-inset); border-radius:999px; overflow:hidden; }
+.distribution-history { padding:16px 0; border-top:1px solid var(--mn-border); }
+.distribution-history:first-of-type { border-top:0; }
+.inline-payout { display:grid; grid-template-columns:100px minmax(95px,auto) minmax(130px,auto) auto; gap:6px; align-items:center; }
+.inline-payout input,.inline-payout select { min-width:0; width:100%; }
+.status-neutral { color:var(--mn-muted); background:var(--mn-inset); }
+.analytics-insight-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:14px; }
+@media (max-width:760px) { .inline-payout { grid-template-columns:1fr 1fr; } .analytics-insight-grid { grid-template-columns:1fr; } }
 .flow-fill { display:block; height:100%; border-radius:inherit; }
 .flow-sales { background:var(--mn-chart-3); }
 .flow-expenses { background:var(--mn-chart-1); }
