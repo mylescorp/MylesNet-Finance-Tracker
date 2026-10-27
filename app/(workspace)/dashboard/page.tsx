@@ -75,6 +75,7 @@ export default function DashboardPage() {
     return "";
   }, [period, customFrom, customTo]);
   const customDatesValid = !customRangeError;
+  const customRangeInvalid = period === "custom" && !customDatesValid;
   const range = useMemo(() => {
     if (period === "custom") {
       if (!customDatesValid) return periodRange("today", businessDay, weekStartsOn, fiscalStartMonth);
@@ -118,7 +119,7 @@ export default function DashboardPage() {
     <div className="dashboard-banner"><Image src="/brand/banner.png" alt="MylesNet Finance Tracker" fill priority sizes="(max-width: 760px) 100vw, 1100px" /><div className="banner-caption">Your business, clearly in view.</div></div>
     <div className="board-toolbar no-print">
       <span className="status-chip status-live">Live · Convex data</span>
-      <span className="toolbar-range">{fmtDate(range.from)} — {fmtDate(rangeLastDay.toISOString().slice(0, 10))}</span>
+      {customRangeInvalid ? <span className="toolbar-range">Complete the custom date range</span> : <span className="toolbar-range">{fmtDate(range.from)} — {fmtDate(rangeLastDay.toISOString().slice(0, 10))}</span>}
       <button className="button" type="button" onClick={() => window.print()}><Printer size={14} />Print</button>
       <button className="button" type="button" onClick={() => window.print()}><Download size={14} />Export PDF</button>
       <button className="button button-dark" type="button" onClick={() => void shareDashboard()}><Share2 size={14} />Share report</button>
@@ -127,7 +128,7 @@ export default function DashboardPage() {
     <Card className="quick-add-strip no-print"><span className="eyebrow">Quick add</span><Link className="button" href="/sales">+ Add sale</Link><Link className="button" href="/expenses">+ Add expense</Link><Link className="button" href="/movements">Record withdrawal</Link><Link className="button" href="/partners">Record payout</Link><span className="quick-add-note">Saved entries update cashbook totals and account balances.</span></Card>
     <Card className="dashboard-sales-hero">
       <div className="hero-sales-number"><span className="eyebrow">Today’s sales · {fmtDate(today)}</span><strong>{isReady ? formatMoney(todaySales) : "—"}<small>{currency}</small></strong><span className="muted-note">Recorded sales only</span></div>
-      <div className="hero-sales-trend"><div className="card-heading"><div><h2 className="card-title">Sales activity</h2><p className="card-subtitle">Daily totals for the selected period</p></div></div>{!isReady ? <Empty message="Loading workspace data…" /> : dayBars.length === 0 ? <Empty message="No sales have been recorded in this period." /> : <><div className="chart-bars" role="img" aria-label={`Sales over ${dayBars.length} days. Total ${formatMoney(readySummary?.salesUgx ?? 0)} ${currency}.`}>{dayBars.map((day) => <div className="chart-day" key={day.day} title={`${fmtDate(day.day)}: ${formatMoney(day.salesUgx)} ${currency}`}><div className="chart-bar" style={{ height: `${Math.max(2, day.salesUgx / peak * 100)}%`, opacity: day.day === today ? 1 : 0.45 }} /></div>)}</div><div className="chart-labels"><span>{dayBars[0] ? fmtDate(dayBars[0].day) : ""}</span><span>{dayBars.at(-1) ? fmtDate(dayBars.at(-1)!.day) : ""}</span></div></>}</div>
+      <div className="hero-sales-trend"><div className="card-heading"><div><h2 className="card-title">Sales activity</h2><p className="card-subtitle">Daily totals for the selected period</p></div></div>{customRangeInvalid ? <Empty message={customRangeError} /> : !isReady ? <Empty message="Loading workspace data…" /> : dayBars.length === 0 ? <Empty message="No sales have been recorded in this period." /> : <><div className="chart-bars" role="img" aria-label={`Sales over ${dayBars.length} days. Total ${formatMoney(readySummary?.salesUgx ?? 0)} ${currency}.`}>{dayBars.map((day) => <div className="chart-day" key={day.day} title={`${fmtDate(day.day)}: ${formatMoney(day.salesUgx)} ${currency}`}><div className="chart-bar" style={{ height: `${Math.max(2, day.salesUgx / peak * 100)}%`, opacity: day.day === today ? 1 : 0.45 }} /></div>)}</div><div className="chart-labels"><span>{dayBars[0] ? fmtDate(dayBars[0].day) : ""}</span><span>{dayBars.at(-1) ? fmtDate(dayBars.at(-1)!.day) : ""}</span></div></>}</div>
       <div className="hero-sales-context"><div><span className="eyebrow">This week</span><strong>{formatMoney(weekSales)} {currency}</strong><span className="muted-note">Actual recorded sales</span></div><div><span className="eyebrow">Period average</span><strong>{formatMoney(averageDay)} {currency}</strong><span className="muted-note">Per recorded sales day</span></div></div>
     </Card>
     <div className="metric-grid">
@@ -145,7 +146,7 @@ export default function DashboardPage() {
     <div className="dashboard-grid">
       <Card>
         <div className="card-heading"><div><h2 className="card-title">Sales activity</h2><p className="card-subtitle">Daily recorded sales in the selected period</p></div></div>
-        {!isReady ? <Empty message={summary === undefined ? "Loading your workspace…" : summary.access === "pending" ? "Your workspace is waiting for an owner invitation." : "Partner-specific reports are not ready yet. Finance totals are hidden until statement access is scoped."} /> : dayBars.length === 0 ? <Empty message="No sales have been recorded in this period." /> : <>
+        {customRangeInvalid ? <Empty message={customRangeError} /> : !isReady ? <Empty message={summary === undefined ? "Loading your workspace…" : summary.access === "pending" ? "Your workspace is waiting for an owner invitation." : "Partner-specific reports are not ready yet. Finance totals are hidden until statement access is scoped."} /> : dayBars.length === 0 ? <Empty message="No sales have been recorded in this period." /> : <>
           <div className="chart-bars" role="img" aria-label={`Sales over ${dayBars.length} days. Total ${formatMoney(readySummary?.salesUgx ?? 0)} ${currency}.`}>{dayBars.map((day) => <div className="chart-day" key={day.day} title={`${fmtDate(day.day)}: ${formatMoney(day.salesUgx)} ${currency}`}><div className="chart-bar" style={{ height: `${Math.max(2, day.salesUgx / peak * 100)}%` }} /></div>)}</div>
           <div className="chart-labels"><span>{dayBars[0] ? fmtDate(dayBars[0].day) : ""}</span><span>{dayBars.at(-1) ? fmtDate(dayBars.at(-1)!.day) : ""}</span></div>
         </>}

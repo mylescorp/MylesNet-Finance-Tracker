@@ -35,7 +35,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const { signOut } = useAuthActions();
   const access = useQuery(api.workspace.currentAccess, {});
-  const preferences = useQuery(api.settings.overview, {});
+  const businessSettings = useQuery(api.workspace.businessSettings, {});
   const [mobileOpen, setMobileOpen] = useState(false);
   const accountLabel = access?.access === "ready" ? access.businessName : "My account";
 
@@ -74,7 +74,7 @@ export function AppShell({ children }: { children: ReactNode }) {
       </nav>
       {access?.access === "pending" && <div className="access-pending" role="status"><strong>Access awaiting invitation</strong><span>This Google account is signed in but is not yet linked to a MylesNet workspace.</span></div>}
       <main className="page-content">{children}</main>
-      <footer className="app-footer"><span>MylesNet Finance Tracker · {preferences?.access === "ready" ? preferences.currency : "UGX"}</span><span>Workspace data is protected by your assigned role.</span></footer>
+      <footer className="app-footer"><span>MylesNet Finance Tracker · {businessSettings?.access === "ready" ? businessSettings.currency : "UGX"}</span><span>Workspace data is protected by your assigned role.</span></footer>
     </div>
   );
 }

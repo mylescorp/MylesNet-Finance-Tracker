@@ -96,7 +96,7 @@ function DataSettings() {
   function download() {
     if (!data || data.access !== "ready") return;
     const columns = ["date", "kind", "category", "account", "amount", "currency", "note", "source", "status", "created_at"] as const;
-    const quote = (value: string | number) => { const text = String(value); const safe = "=+-@".includes(text.trimStart()[0] ?? "") ? "'" + text : text; return '"' + safe.replaceAll('"', '""') + '"'; };
+    const quote = (value: string | number) => { const text = String(value); const first = text.trimStart()[0]; const safe = first && "=+-@".includes(first) ? "'" + text : text; return '"' + safe.replaceAll('"', '""') + '"'; };
     const csv = [columns.join(","), ...data.rows.map(r => [r.occurredOn, r.kind, r.category, r.account, r.amount.toFixed(data.currencyMinorDigits), r.currency, r.note, r.source, r.state, new Date(r.createdAt).toISOString()].map(quote).join(","))].join("\r\n");
     const url = URL.createObjectURL(new Blob(["\uFEFF", csv], { type: "text/csv;charset=utf-8" }));
     const anchor = document.createElement("a"); anchor.href = url; anchor.download = `mylesnet-cashbook-${new Date().toISOString().slice(0, 10)}.csv`; anchor.click(); URL.revokeObjectURL(url);
