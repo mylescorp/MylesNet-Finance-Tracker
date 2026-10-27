@@ -2,7 +2,7 @@
 
 import { useQuery } from "convex/react";
 import {
-  Activity, ArrowDownUp, BarChart3, Bell, CalendarDays, ChevronDown,
+  Activity, ArrowDownUp, BarChart3, Bell, CalendarDays, ChevronDown, Plus,
   ChevronsLeft, ChevronsRight, FileBarChart, HandCoins, LayoutDashboard,
   Menu, PiggyBank, Receipt, Settings2, UsersRound, Wallet, X,
 } from "lucide-react";
@@ -56,7 +56,7 @@ export function AppShell({ children }: { children: ReactNode }) {
     general: "General settings", finance: "Finance settings", rules: "Rules",
     data: "Data", access: "Access", releases: "Releases",
   };
-  const routePageLabel = pathname === "/account" ? "Your account" : activePage?.label
+  const routePageLabel = pathname === "/account" ? "Your account" : pathname === "/add-entry" ? "Add an entry" : activePage?.label
     ?? (pathname.startsWith("/settings/") ? settingsPageLabels[pathname.split("/")[2]] ?? "Settings" : undefined)
     ?? (pathname === "/issues" ? "Needs attention" : "Workspace");
   const closeAccount = useCallback(() => {
@@ -136,6 +136,7 @@ export function AppShell({ children }: { children: ReactNode }) {
         </button>
         <div className="topbar-page-context"><span>MYLESNET</span><strong>{routePageLabel}</strong></div>
         <div className="header-actions">
+          <Link className="button button-accent header-add-entry" href="/add-entry" aria-label="Add an entry"><Plus size={16} aria-hidden="true" /><span>Add entry</span></Link>
           <GlobalSearch />
           <ThemeControl />
           <Link className="utility-link" href="/issues" aria-label="Needs attention"><Bell size={17} /><span>Needs attention</span></Link>

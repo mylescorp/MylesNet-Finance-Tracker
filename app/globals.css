@@ -58,6 +58,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .topbar-page-context span { color:var(--mn-subtle); font-size:9px; font-weight:600; letter-spacing:.12em; }
 .topbar-page-context strong { font-size:13px; font-weight:600; }
 .header-actions { margin-left:auto; display:flex; align-items:center; gap:20px; }
+.header-add-entry { display:inline-flex; align-items:center; gap:6px; white-space:nowrap; }
 .search-box { height:36px; width:min(340px, 28vw); display:flex; align-items:center; gap:9px; border:1px solid var(--mn-line-strong); border-radius:var(--mn-radius-sm); background:var(--mn-card); color:var(--mn-muted); padding:0 10px; }
 .search-box input { border:0; outline:0; min-width:0; width:100%; background:transparent; color:var(--mn-ink); }
 .search-box input:focus-visible { outline:0; }
@@ -376,6 +377,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .mobile-menu-button { display:grid; place-items:center; width:38px; height:38px; padding:0; margin-left:auto; }
   .header-actions { margin-left:auto; gap:10px; }
   .search-box,.utility-link span,.user-menu-label,.user-menu>svg { display:none; }
+  .header-add-entry span { display:none; }
   .account-drawer { width:100%; gap:14px; padding:16px 16px 14px; }
   .account-overlay { align-items:stretch; }
   .page-content { padding:22px 16px 38px; }

@@ -22,3 +22,9 @@ Accepted payment and voucher events update the corresponding account balance and
 The new endpoint is a **parallel adapter**, not a cutover: it does not change the Apps Script deployment or URL. Generate a token in app Settings → Data, test the same representative payment, voucher, expense, ignored, unauthorized, and duplicate deliveries against a staging deployment, compare response bodies and ledger results, then update Centipid to the new endpoint. Retain the old URL during a rollback window. Production cutover is not complete until that parity run and caller URL update have been performed.
 
 The actual deployed URL, current Apps Script token, caller list, retry timings, and production test events are not available in this checkout. Never print the existing token. The Apps Script token is independent from the app-generated token.
+
+## Google Form accountant submissions
+
+The workbook's linked `MylesNet Entry Form` has an installed spreadsheet `on form submit` trigger named `onEntrySubmit`. Its current handler writes to the legacy Sheet tabs. This implementation adds a separate `POST /google-form?token=...` Convex route and a companion queued Apps Script source under `integrations/google-form/`; it does not replace or redirect `doPost`, `onEntrySubmit`, or the `/centipid` route.
+
+The Google Form connection has a separate owner-generated token. The adapter identifies a submission using its response-sheet/sheet/row key, checks the collected respondent email against an active owner or cashier workspace membership without persisting that email, and makes delivery idempotent. Valid mapped Sales and Expense submissions post to the cashbook; other or incomplete sections receive a `needs_review` receipt and do not change balances. The companion Apps Script source is not installed or deployed to the live project. Follow `integrations/google-form/README.md` in a staging copy before any production activation.
