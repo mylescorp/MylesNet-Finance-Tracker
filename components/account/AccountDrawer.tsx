@@ -89,17 +89,24 @@ export function AccountDrawer({ onClose }: Props) {
 
   async function handleRemovePhoto() {
     const pendingPhotoId = pendingPhotoIdRef.current;
-    if (pendingPhotoId) {
-      try { await discardUpload({ storageId: pendingPhotoId }); }
-      catch (cause) { setError(cause instanceof Error ? cause.message : "The pending photo could not be removed."); return; }
-      pendingPhotoIdRef.current = undefined;
-    }
+    setBusyState(true);
+    setError("");
+    setPhotoId(undefined);
+    setRemovePhoto(true);
     if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current);
     previewUrlRef.current = undefined;
     setPhotoUrlDraft(null);
-    setRemovePhoto(true);
-    setPhotoId(undefined);
-    setNotice("Photo will be removed when you save.");
+    try {
+      if (pendingPhotoId) {
+        await discardUpload({ storageId: pendingPhotoId });
+        pendingPhotoIdRef.current = undefined;
+      }
+      setNotice("Photo will be removed when you save.");
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "The pending photo could not be removed.");
+    } finally {
+      setBusyState(false);
+    }
   }
 
   async function handlePhotoChange(event: ChangeEvent<HTMLInputElement>) {
