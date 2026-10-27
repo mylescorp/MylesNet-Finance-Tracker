@@ -118,7 +118,6 @@ export function AppShell({ children }: { children: ReactNode }) {
         </nav>
         <div className="sidebar-bottom">
           <div className="sidebar-support"><span className="sidebar-support-dot" /><span><strong>Workspace protected</strong><small>Secure finance access</small></span></div>
-          <Link className="sidebar-quick-add" href="/sales" aria-label="Add an entry" title={collapsed ? "Add an entry" : undefined} onClick={() => setMobileOpen(false)}><span className="sidebar-quick-add-plus" aria-hidden="true">+</span><span className="sidebar-link-label">Add an entry</span></Link>
         </div>
       </aside>
       {mobileOpen && <button className="sidebar-backdrop" type="button" aria-label="Close navigation" onClick={() => setMobileOpen(false)} />}

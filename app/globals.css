@@ -41,9 +41,6 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .sidebar-support span:last-child { display:flex; flex-direction:column; gap:3px; }
 .sidebar-support strong { font-size:11px; font-weight:600; }
 .sidebar-support small { color:var(--mn-muted); font-size:10px; }
-.sidebar-quick-add { display:flex; align-items:center; justify-content:center; gap:9px; min-height:42px; padding:0 12px; border:1px solid var(--mn-accent); border-radius:9px; color:var(--mn-on-accent); background:var(--mn-accent); font-size:12px; font-weight:600; transition:background var(--mn-dur-fast), box-shadow var(--mn-dur-fast), transform var(--mn-dur-fast); }
-.sidebar-quick-add:hover { transform:translateY(-1px); background:var(--mn-accent-hover); box-shadow:0 5px 12px color-mix(in srgb,var(--mn-accent) 23%,transparent); }
-.sidebar-quick-add-plus { font-size:20px; line-height:1; font-weight:400; }
 .app-frame-collapsed .app-sidebar { padding-right:9px; padding-left:9px; }
 .app-frame-collapsed .sidebar-brand-row { justify-content:center; }
 .app-frame-collapsed .sidebar-brand { display:none; }
@@ -54,9 +51,6 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .app-frame-collapsed .sidebar-link:hover { transform:translateY(-1px); }
 .app-frame-collapsed .sidebar-link-icon { width:26px; }
 .app-frame-collapsed .sidebar-support { justify-content:center; padding:5px; }
-.app-frame-collapsed .sidebar-quick-add { min-height:40px; padding:0; }
-.app-frame-collapsed .sidebar-quick-add .sidebar-link-label { display:none; }
-.app-frame-collapsed .sidebar-quick-add-plus { font-size:23px; }
 .sidebar-backdrop { display:none; }
 .app-main-column { display:flex; min-width:0; min-height:100vh; flex-direction:column; }
 .app-header { position:sticky; top:0; z-index:var(--mn-z-topbar); height:64px; flex:none; display:flex; align-items:center; gap:20px; padding:0 28px; background:var(--mn-card); border-bottom:1px solid var(--mn-line); }
@@ -162,8 +156,6 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .app-frame-collapsed .sidebar-link { justify-content:flex-start; padding:0 10px; }
   .app-frame-collapsed .sidebar-link-label { display:block; }
   .app-frame-collapsed .sidebar-support { justify-content:flex-start; padding:4px 8px; }
-  .app-frame-collapsed .sidebar-quick-add { min-height:42px; padding:0 12px; }
-  .app-frame-collapsed .sidebar-quick-add .sidebar-link-label { display:block; }
   .sidebar-backdrop { position:fixed; inset:0; z-index:39; display:block; border:0; background:rgba(12,15,20,.44); backdrop-filter:blur(2px); animation:sidebar-backdrop-in var(--mn-dur-base) ease-out; }
   .app-header { height:60px; padding:0 14px; gap:10px; }
   .mobile-menu-button { display:grid; place-items:center; width:38px; height:38px; padding:0; }
@@ -184,6 +176,6 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 }
 @keyframes sidebar-backdrop-in { from { opacity:0; } to { opacity:1; } }
 @media(prefers-reduced-motion:reduce) {
-  .app-frame,.app-sidebar,.sidebar-link,.sidebar-collapse-button,.sidebar-quick-add { transition:none; }
+  .app-frame,.app-sidebar,.sidebar-link,.sidebar-collapse-button { transition:none; }
   .sidebar-backdrop { animation:none; }
 }
