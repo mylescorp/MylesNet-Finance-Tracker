@@ -1,12 +1,22 @@
 import { getAuthUserId } from "@convex-dev/auth/server";
+import { countries } from "countries-list";
+import { currencies } from "countries-list/currencies";
 import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 
 const role = v.union(v.literal("owner"), v.literal("partner"), v.literal("cashier"));
 function currencyMinorDigits(currency: string) {
-  try { return new Intl.NumberFormat("en", { style: "currency", currency }).resolvedOptions().maximumFractionDigits ?? 0; }
-  catch { return 0; }
+  return currencies[currency as keyof typeof currencies]?.decimals ?? 0;
+}
+
+function toMinorUnits(amount: number, scale: number) {
+  return Math.round(amount * scale);
+}
+
+function isValidCurrencyAmount(amount: number, scale: number) {
+  const scaled = amount * scale;
+  return Number.isFinite(amount) && Number.isSafeInteger(Math.round(scaled)) && Math.abs(scaled - Math.round(scaled)) < 1e-7;
 }
 
 async function activeWorkspace(ctx: QueryCtx | MutationCtx) {
@@ -20,9 +30,8 @@ async function activeWorkspace(ctx: QueryCtx | MutationCtx) {
   return business ? { userId, membership, business } : null;
 }
 
-function defaults(businessId: string, userId: string, now: number) {
+function defaults() {
   return {
-    businessId: businessId as never,
     locale: "en-UG",
     dateFormat: "DD/MM/YYYY" as const,
     fiscalYearStartMonth: 1,
@@ -35,8 +44,6 @@ function defaults(businessId: string, userId: string, now: number) {
     duplicateWindowDays: 1,
     requireEntryNote: false,
     negativeBalanceWarning: true,
-    updatedAt: now,
-    updatedBy: userId as never,
   };
 }
 
@@ -48,7 +55,7 @@ export const overview = query({
     const prefs = await ctx.db.query("workspacePreferences").withIndex("by_business", q => q.eq("businessId", current.business._id)).unique();
     const firstEntry = await ctx.db.query("entries").withIndex("by_business_and_date", q => q.eq("businessId", current.business._id)).first();
     const balances = await ctx.db.query("accountBalances").withIndex("by_business_and_account", q => q.eq("businessId", current.business._id)).take(2);
-    const fallback = defaults(current.business._id, current.userId, current.business.createdAt);
+    const fallback = defaults();
     const digits = currencyMinorDigits(current.business.currency);
     const scale = 10 ** digits;
     return {
@@ -95,23 +102,25 @@ export const update = mutation({
     if (!current || current.membership.role !== "owner") throw new Error("Only the workspace owner can change settings.");
     const businessName = args.businessName.trim();
     if (businessName.length < 2 || businessName.length > 100) throw new Error("Workspace name must be 2 to 100 characters.");
-    if (!/^[A-Z]{2}$/.test(args.countryCode)) throw new Error("Choose a valid country.");
-    if (!/^[A-Z]{3}$/.test(args.currency)) throw new Error("Choose a valid currency.");
+    if (!/^[A-Z]{2}$/.test(args.countryCode) || !countries[args.countryCode as keyof typeof countries]) throw new Error("Choose a valid country.");
+    if (!/^[A-Z]{3}$/.test(args.currency) || !currencies[args.currency as keyof typeof currencies] || currencies[args.currency as keyof typeof currencies].withdrawn) throw new Error("Choose an active ISO currency.");
     if (!/^[a-z]{2,3}(?:-[A-Z]{2})?$/.test(args.locale)) throw new Error("Choose a valid locale, such as en-UG.");
     let scale: number;
     try { new Intl.DateTimeFormat(args.locale); new Intl.DateTimeFormat("en", { timeZone: args.timezone }); scale = 10 ** (currencyMinorDigits(args.currency) ?? 0); new Intl.NumberFormat("en", { style: "currency", currency: args.currency }); }
     catch { throw new Error("Choose a valid locale and IANA timezone."); }
     if (!Number.isInteger(args.fiscalYearStartMonth) || args.fiscalYearStartMonth < 1 || args.fiscalYearStartMonth > 12) throw new Error("Fiscal year start must be a month from 1 to 12.");
     for (const [label, amount] of [["High expense review", args.highExpenseReviewUgx], ["Weak day sales", args.weakDaySalesUgx], ["Monthly sales target", args.monthlySalesTargetUgx], ["Monthly expense warning", args.monthlyExpenseWarningUgx]] as const) {
-      if (!Number.isFinite(amount) || amount < 0 || !Number.isSafeInteger(Math.round(amount * scale))) throw new Error(`${label} must be a non-negative amount using the selected currency's decimal places.`);
+      if (amount < 0 || !isValidCurrencyAmount(amount, scale)) throw new Error(`${label} must be a non-negative amount using the selected currency's decimal places.`);
     }
     if (!Number.isInteger(args.duplicateWindowDays) || args.duplicateWindowDays < 0 || args.duplicateWindowDays > 30) throw new Error("Duplicate review window must be between 0 and 30 days.");
-    const categories = [...args.incomeCategories, ...args.expenseCategories];
-    if (args.incomeCategories.length < 1 || args.expenseCategories.length < 1 || categories.length > 80 || categories.some(c => !c.trim() || c.trim().length > 60) || new Set(categories.map(c => c.trim().toLowerCase())).size !== categories.length) {
+    const incomeCategories = args.incomeCategories.map(c => c.trim());
+    const expenseCategories = args.expenseCategories.map(c => c.trim());
+    const categories = [...incomeCategories, ...expenseCategories];
+    if (args.incomeCategories.length < 1 || args.incomeCategories.length > 40 || args.expenseCategories.length < 1 || args.expenseCategories.length > 40 || categories.length > 80 || categories.some(c => !c.trim() || c.trim().length > 60) || new Set(categories.map(c => c.trim().toLowerCase())).size !== categories.length) {
       throw new Error("Use 1–40 unique income and expense categories, each up to 60 characters.");
     }
     for (const [label, amount] of [["Cash opening balance", args.cashOpeningBalance], ["Mobile money opening balance", args.mobileOpeningBalance]] as const) {
-      if (!Number.isFinite(amount) || !Number.isSafeInteger(Math.round(amount * scale))) throw new Error(`${label} must use the selected currency's supported decimal places.`);
+      if (!isValidCurrencyAmount(amount, scale)) throw new Error(`${label} must use the selected currency's supported decimal places.`);
     }
     if (args.currency !== current.business.currency) {
       const firstEntry = await ctx.db.query("entries").withIndex("by_business_and_date", q => q.eq("businessId", current.business._id)).first();
@@ -127,12 +136,12 @@ export const update = mutation({
     const currentBalances = await ctx.db.query("accountBalances").withIndex("by_business_and_account", q => q.eq("businessId", current.business._id)).take(2);
     const cashDoc = currentBalances.find(b => b.account === "cash");
     const mobileDoc = currentBalances.find(b => b.account === "mobile_money");
-    if (firstEntry && ((args.cashOpeningBalance * scale) !== (cashDoc?.openingBalanceUgx ?? 0) || (args.mobileOpeningBalance * scale) !== (mobileDoc?.openingBalanceUgx ?? 0))) {
+    if (firstEntry && (toMinorUnits(args.cashOpeningBalance, scale) !== (cashDoc?.openingBalanceUgx ?? 0) || toMinorUnits(args.mobileOpeningBalance, scale) !== (mobileDoc?.openingBalanceUgx ?? 0))) {
       throw new Error("Opening balances are locked after the first transaction. Use an auditable adjustment entry instead.");
     }
     if (!firstEntry) {
-      const cashOpening = args.cashOpeningBalance * scale;
-      const mobileOpening = args.mobileOpeningBalance * scale;
+      const cashOpening = toMinorUnits(args.cashOpeningBalance, scale);
+      const mobileOpening = toMinorUnits(args.mobileOpeningBalance, scale);
       const now = Date.now();
       if (cashDoc) await ctx.db.patch("accountBalances", cashDoc._id, { balanceUgx: cashOpening, openingBalanceUgx: cashOpening, updatedAt: now });
       else if (cashOpening !== 0) await ctx.db.insert("accountBalances", { businessId: current.business._id, account: "cash", balanceUgx: cashOpening, openingBalanceUgx: cashOpening, updatedAt: now });
@@ -143,12 +152,12 @@ export const update = mutation({
       locale: args.locale,
       dateFormat: args.dateFormat,
       fiscalYearStartMonth: args.fiscalYearStartMonth,
-      incomeCategories: args.incomeCategories,
-      expenseCategories: args.expenseCategories,
-      highExpenseReviewUgx: args.highExpenseReviewUgx * scale,
-      weakDaySalesUgx: args.weakDaySalesUgx * scale,
-      monthlySalesTargetUgx: args.monthlySalesTargetUgx * scale,
-      monthlyExpenseWarningUgx: args.monthlyExpenseWarningUgx * scale,
+      incomeCategories,
+      expenseCategories,
+      highExpenseReviewUgx: toMinorUnits(args.highExpenseReviewUgx, scale),
+      weakDaySalesUgx: toMinorUnits(args.weakDaySalesUgx, scale),
+      monthlySalesTargetUgx: toMinorUnits(args.monthlySalesTargetUgx, scale),
+      monthlyExpenseWarningUgx: toMinorUnits(args.monthlyExpenseWarningUgx, scale),
       duplicateWindowDays: args.duplicateWindowDays,
       requireEntryNote: args.requireEntryNote,
       negativeBalanceWarning: args.negativeBalanceWarning,
@@ -161,7 +170,23 @@ export const update = mutation({
       businessId: current.business._id, actorId: current.userId, action: "workspace.settings.updated",
       entityType: "business", entityId: current.business._id, occurredAt: now,
       summary: "Updated workspace profile and operating settings.",
-      details: JSON.stringify({ countryCode: args.countryCode, currency: args.currency, timezone: args.timezone, weekStartsOn: args.weekStartsOn }),
+      details: JSON.stringify({
+        before: {
+          businessName: current.business.name, countryCode: current.business.countryCode ?? "UG",
+          currency: current.business.currency, timezone: current.business.timezone,
+          weekStartsOn: current.business.weekStartsOn ?? "monday", locale: existing?.locale ?? "en-UG",
+          dateFormat: existing?.dateFormat ?? "DD/MM/YYYY", fiscalYearStartMonth: existing?.fiscalYearStartMonth ?? 1,
+          incomeCategories: existing?.incomeCategories ?? ["Product sales", "Service income", "Other income"],
+          expenseCategories: existing?.expenseCategories ?? ["Transport", "Supplies", "Utilities", "Rent", "Equipment", "Other expense"],
+          highExpenseReview: existing?.highExpenseReviewUgx ?? 500000, weakDaySales: existing?.weakDaySalesUgx ?? 50000,
+          monthlySalesTarget: existing?.monthlySalesTargetUgx ?? 0, monthlyExpenseWarning: existing?.monthlyExpenseWarningUgx ?? 0,
+          duplicateWindowDays: existing?.duplicateWindowDays ?? 1, requireEntryNote: existing?.requireEntryNote ?? false,
+          negativeBalanceWarning: existing?.negativeBalanceWarning ?? true,
+          cashOpeningBalanceMinor: cashDoc?.openingBalanceUgx ?? 0,
+          mobileOpeningBalanceMinor: mobileDoc?.openingBalanceUgx ?? 0,
+        },
+        after: { ...args, incomeCategories, expenseCategories, cashOpeningBalanceMinor: toMinorUnits(args.cashOpeningBalance, scale), mobileOpeningBalanceMinor: toMinorUnits(args.mobileOpeningBalance, scale) },
+      }),
     });
     return null;
   },
@@ -196,6 +221,24 @@ export const ruleReview = query({
       currency: current.business.currency,
       highExpenses: entries.filter(e => e.state === "posted" && e.kind === "expense" && e.amountUgx >= threshold).slice(0, 20).map(e => ({ id: e._id, date: e.occurredOn, amount: e.amountUgx / scale, category: e.category, note: e.note })),
       weakDays: days.filter(d => d.salesUgx > 0 && d.salesUgx < weakThreshold).slice(0, 14).map(d => ({ day: d.day, sales: d.salesUgx / scale })),
+    };
+  },
+});
+
+export const monthlyTargets = query({
+  args: { from: v.string(), toExclusive: v.string() },
+  handler: async (ctx, args) => {
+    const current = await activeWorkspace(ctx);
+    if (!current || current.membership.role === "partner") return { access: "restricted" as const };
+    const prefs = await ctx.db.query("workspacePreferences").withIndex("by_business", q => q.eq("businessId", current.business._id)).unique();
+    const days = await ctx.db.query("dailyTotals").withIndex("by_business_and_day", q => q.eq("businessId", current.business._id).gte("day", args.from).lt("day", args.toExclusive)).take(40);
+    return {
+      access: "ready" as const,
+      currency: current.business.currency,
+      sales: days.reduce((total, day) => total + day.salesUgx, 0),
+      expenses: days.reduce((total, day) => total + day.expensesUgx, 0),
+      salesTarget: prefs?.monthlySalesTargetUgx ?? 0,
+      expenseWarning: prefs?.monthlyExpenseWarningUgx ?? 0,
     };
   },
 });

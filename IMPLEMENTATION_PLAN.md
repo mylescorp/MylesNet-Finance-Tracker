@@ -23,6 +23,18 @@ This plan implements the approved design package in `design-reference/`. The boa
 - No provider integration is reported as operational until configured and exercised with an approved test destination.
 - Existing typecheck, lint, and build checks pass; the PR has a current Greptile 5/5 review with no new findings before merge.
 
+## Settings product scope
+
+The Settings screen is the workspace control center. See [`SETTINGS_PRODUCT_PLAN.md`](SETTINGS_PRODUCT_PLAN.md) for the detailed behavior and safe-release boundaries. The feature branch implements country and timezone selection, currency-precision-aware entries, date/locale and fiscal preferences, categories, pre-ledger opening balances, targets, human review rules, owner-only CSV exports, expiring email-bound invites, role management, access audit history, and read-only release information.
+
+The initial accounting model remains the approved auditable cashbook. Currency changes are allowed only before an opening balance or transaction exists. Currency conversion of a populated ledger, spreadsheet migration, off-platform backups and restore, automated email delivery, and deployment rollback remain separate integrations that need source contracts and staging validation.
+
+## Current branch status
+
+- Settings screens are being connected to tenant-scoped Convex data and owner-checked mutations.
+- The existing webhook contract and supplied reference images remain unchanged.
+- Before merging, finish the validation and review gate above: inspect the diff, run the project checks, open the PR, resolve Greptile comments, and obtain a current 5/5 review.
+
 ## External facts still required for full integrations
 
 The repository does not include the original workbook export, webhook endpoint/call samples, messaging/calendar provider contracts, or backup/archive credentials. Preserve compatibility and make the corresponding views explain their not-configured state until those inputs are supplied. Do not invent sample figures as production data or change the webhook as a substitute for discovery.

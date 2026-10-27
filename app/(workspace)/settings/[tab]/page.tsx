@@ -13,7 +13,7 @@ const pages = {
 
 export default async function SettingsPage({ params }: { params: Promise<{ tab: string }> }) {
   const { tab } = await params;
-  if (!(tab in pages)) notFound();
+  if (!Object.hasOwn(pages, tab)) notFound();
   const page = pages[tab as keyof typeof pages];
   return <><WorkspaceTitle eyebrow="Settings" title={page.title} description={page.description} /><SettingsNav current={`/settings/${tab}`} /><SettingsWorkspace tab={tab as keyof typeof pages} /></>;
 }
