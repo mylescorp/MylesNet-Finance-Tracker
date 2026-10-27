@@ -267,7 +267,7 @@ export default defineSchema({
     importedCount: v.number(),
     skippedCount: v.number(),
     progressRows: v.number(),
-    status: v.union(v.literal("in_progress"), v.literal("completed")),
+    status: v.union(v.literal("in_progress"), v.literal("completed"), v.literal("cancelled")),
     createdBy: v.id("users"),
     createdAt: v.number(),
   }).index("by_business_and_created", ["businessId", "createdAt"]).index("by_business_and_source", ["businessId", "sourceHash"]).index("by_business_and_status", ["businessId", "status"]),

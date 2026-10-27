@@ -106,6 +106,11 @@ export const beginBatch = mutation({
     const duplicate = await ctx.db.query("importBatches").withIndex("by_business_and_source", q => q.eq("businessId", business._id).eq("sourceHash", args.sourceHash)).unique();
     if (duplicate) {
       if (duplicate.importType !== args.importType || duplicate.totalRows !== args.totalRows || duplicate.currency !== args.currency) throw new ConvexError("This file hash is already associated with a different import shape.");
+      if (duplicate.status === "cancelled") {
+        await ctx.db.patch("importBatches", duplicate._id, { status: "in_progress" });
+        await ctx.db.insert("auditEvents", { businessId: business._id, actorId: userId, action: "import.resumed", entityType: "import", entityId: duplicate._id, occurredAt: Date.now(), summary: `Resumed import ${duplicate.fileName} from row ${duplicate.progressRows + 1}.` });
+        return { batchId: duplicate._id, status: "in_progress" as const, progressRows: duplicate.progressRows, importedCount: duplicate.importedCount, skippedCount: duplicate.skippedCount };
+      }
       return { batchId: duplicate._id, status: duplicate.status, progressRows: duplicate.progressRows, importedCount: duplicate.importedCount, skippedCount: duplicate.skippedCount };
     }
     const { reportSummary, ...batchArgs } = args;
@@ -131,9 +136,22 @@ export const completeBatch = mutation({
   },
 });
 
+export const cancelBatch = mutation({
+  args: { batchId: v.id("importBatches") }, returns: v.null(),
+  handler: async (ctx, args) => {
+    const { userId, business } = await ownerContext(ctx);
+    const batch = await ctx.db.get("importBatches", args.batchId);
+    if (!batch || batch.businessId !== business._id) throw new ConvexError("Import batch not found.");
+    if (batch.status !== "in_progress") return null;
+    await ctx.db.patch("importBatches", batch._id, { status: "cancelled" });
+    await ctx.db.insert("auditEvents", { businessId: business._id, actorId: userId, action: "import.cancelled", entityType: "import", entityId: batch._id, occurredAt: Date.now(), summary: `Cancelled import ${batch.fileName} after ${batch.progressRows} of ${batch.totalRows} rows; previously imported rows remain in the ledger.` });
+    return null;
+  },
+});
+
 export const history = query({
   args: {},
-  returns: v.array(v.object({ _id: v.id("importBatches"), fileName: v.string(), importType, totalRows: v.number(), importedCount: v.number(), skippedCount: v.number(), progressRows: v.number(), status: v.union(v.literal("in_progress"), v.literal("completed")), createdAt: v.number() })),
+  returns: v.array(v.object({ _id: v.id("importBatches"), fileName: v.string(), importType, totalRows: v.number(), importedCount: v.number(), skippedCount: v.number(), progressRows: v.number(), status: v.union(v.literal("in_progress"), v.literal("completed"), v.literal("cancelled")), createdAt: v.number() })),
   handler: async (ctx) => {
     const { business } = await ownerContext(ctx);
     return (await ctx.db.query("importBatches").withIndex("by_business_and_created", q => q.eq("businessId", business._id)).order("desc").take(20)).map(({ _id, fileName, importType, totalRows, importedCount, skippedCount, progressRows, status, createdAt }) => ({ _id, fileName, importType, totalRows, importedCount, skippedCount, progressRows, status, createdAt }));

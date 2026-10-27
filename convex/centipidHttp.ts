@@ -78,7 +78,7 @@ export const webhook = httpAction(async (ctx, request) => {
   const transactionIdRaw = asText(pick(body, payload, ["transaction_id", "transaction", "reference", "ref", "receipt", "receipt_number", "payment_id", "id"])).slice(0, 120);
   const transactionId = maskPII(transactionIdRaw);
   const rawHash = await hash(raw || JSON.stringify(payload));
-  const eventGroup = kind === "ignored" || amount <= 0 ? `ignored:${event}` : kind === "expense" ? "expense" : "sale";
+  const eventGroup = kind === "ignored" || amount <= 0 ? `ignored:${event}:${rawHash}` : kind === "expense" ? "expense" : "sale";
   const eventKey = await hash(transactionIdRaw ? `${eventGroup}:${transactionIdRaw}` : rawHash);
   const paymentMethod = maskPII(asText(pick(body, payload, ["gateway", "payment_method", "method", "provider"]) || (kind === "voucher" ? "Voucher Redemption" : "Centipid System")).slice(0, 120));
   let description = maskPII(asText(pick(body, payload, ["description", "note"])).slice(0, 240));

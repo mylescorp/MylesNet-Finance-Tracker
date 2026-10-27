@@ -15,6 +15,7 @@ export function CsvImportPanel() {
   const importRows = useMutation(api.imports.importRows);
   const beginBatch = useMutation(api.imports.beginBatch);
   const completeBatch = useMutation(api.imports.completeBatch);
+  const cancelBatch = useMutation(api.imports.cancelBatch);
   const [fileName, setFileName] = useState("");
   const [fileText, setFileText] = useState("");
   const [csvRows, setCsvRows] = useState<CsvRow[]>([]);
@@ -86,10 +87,9 @@ export function CsvImportPanel() {
         reportSummary = JSON.stringify({ summary: parsedReport.summary, paymentMethods: parsedReport.paymentMethods, dailyRevenue: parsedReport.dailyRevenue, dailyUsage: parsedReport.dailyUsage, routers: parsedReport.routers });
         if (reportSummary.length > 60_000) throw new Error("Centipid report metadata is too large to archive; no rows were imported.");
       }
-      const importIdentity: Record<string, unknown> = isReport ? { type: "centipid_analytics" } : { type: "cashbook", mapping, currency: settings?.access === "ready" ? settings.currency : "" };
-      if (!isReport && mapping.kind < 0) importIdentity.kind = kind;
-      const hasBlankMappedAccount = mapping.account < 0 || csvRows.slice(1).filter(row => row.some(cell => cell.trim())).some(row => !(row[mapping.account]?.trim()));
-      if (!isReport && hasBlankMappedAccount) importIdentity.defaultAccount = defaultAccount;
+      const importIdentity: Record<string, unknown> = isReport
+        ? { type: "centipid_analytics", fileText }
+        : { type: "cashbook", currency: settings.currency, entries };
       const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`${fileText}\0${JSON.stringify(importIdentity)}`));
       const sourceHash = [...new Uint8Array(digest)].map(x => x.toString(16).padStart(2, "0")).join("");
       const batch = await beginBatch({ sourceHash, fileName, importType: isReport ? "centipid_analytics" : "cashbook", currency: settings.currency, totalRows: entries.length, ...(reportSummary ? { reportSummary } : {}) });
@@ -132,7 +132,7 @@ export function CsvImportPanel() {
     {error && <p className="form-feedback form-error" role="alert">{error}</p>}{message && <p className="form-feedback form-success" role="status">{message}</p>}
     <div className="form-actions"><button type="button" className="button button-accent" disabled={busy || !fileName || !settings || settings.access !== "ready" || (looksCentipid && !report)} onClick={() => void runImport()}>{busy ? "Importing…" : "Import rows"}</button>{settings?.access === "ready" && <span className="muted-note">All amounts are stored as safe integers in {settings.currency}.</span>}</div>
     <div className="card-heading" style={{ marginTop: 18 }}><div><h3 className="card-title">Recent imports</h3><p className="card-subtitle">Up to 20 owner-visible import batches.</p></div></div>
-    {!history?.length ? <p className="muted-note">No imports yet.</p> : <div className="table-scroll"><table className="data-table"><thead><tr><th>File</th><th>Type</th><th>Progress</th><th>Imported</th><th>Skipped</th><th>When</th><th>Report data</th></tr></thead><tbody>{history.map(item => <tr key={item._id}><td>{item.fileName}</td><td>{item.importType === "centipid_analytics" ? "Centipid analytics" : "Cashbook"}</td><td>{item.status === "completed" ? "Completed" : `${item.progressRows} / ${item.totalRows}`}</td><td>{item.importedCount}</td><td>{item.skippedCount}</td><td>{new Date(item.createdAt).toLocaleString()}</td><td>{item.importType === "centipid_analytics" ? <button type="button" className="button" onClick={() => setReportBatchId(current => current === item._id ? null : item._id)}>{reportBatchId === item._id ? "Hide report" : "View report"}</button> : "—"}</td></tr>)}</tbody></table></div>}
+    {!history?.length ? <p className="muted-note">No imports yet.</p> : <div className="table-scroll"><table className="data-table"><thead><tr><th>File</th><th>Type</th><th>Progress</th><th>Imported</th><th>Skipped</th><th>When</th><th>Report data</th><th>Action</th></tr></thead><tbody>{history.map(item => <tr key={item._id}><td>{item.fileName}</td><td>{item.importType === "centipid_analytics" ? "Centipid analytics" : "Cashbook"}</td><td>{item.status === "completed" ? "Completed" : item.status === "cancelled" ? "Cancelled" : `${item.progressRows} / ${item.totalRows}`}</td><td>{item.importedCount}</td><td>{item.skippedCount}</td><td>{new Date(item.createdAt).toLocaleString()}</td><td>{item.importType === "centipid_analytics" ? <button type="button" className="button" onClick={() => setReportBatchId(current => current === item._id ? null : item._id)}>{reportBatchId === item._id ? "Hide report" : "View report"}</button> : "—"}</td><td>{item.status === "in_progress" ? <button type="button" className="button" onClick={() => { if (window.confirm("Cancel this import? Rows already imported remain saved.")) void cancelBatch({ batchId: item._id }); }}>Cancel import</button> : "—"}</td></tr>)}</tbody></table></div>}
     {reportBatchId && <div className="notice-banner notice-info"><strong>Retained Centipid report</strong>{reportDetails === undefined ? <p>Loading report data…</p> : reportDetails ? <pre style={{ maxHeight: 360, overflow: "auto", whiteSpace: "pre-wrap" }}>{JSON.stringify(JSON.parse(reportDetails), null, 2)}</pre> : <p>Report details are not available.</p>}</div>}
   </section>;
 }
