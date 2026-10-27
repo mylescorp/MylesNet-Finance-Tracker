@@ -10,22 +10,41 @@ export function GeneralSettingsForm() {
   const [businessName, setBusinessName] = useState("");
   const [timezone, setTimezone] = useState("Africa/Kampala");
   const [weekStartsOn, setWeekStartsOn] = useState<"monday" | "sunday">("monday");
+  const [initialized, setInitialized] = useState(false);
+  const [dirty, setDirty] = useState(false);
+  const [pendingSync, setPendingSync] = useState(false);
   const [busy, setBusy] = useState(false);
   const [feedback, setFeedback] = useState<{ message: string; error: boolean } | null>(null);
 
   useEffect(() => {
     if (settings?.access !== "ready") return;
+    if (pendingSync) {
+      const synced = settings.businessName === businessName &&
+        settings.timezone === timezone &&
+        settings.weekStartsOn === weekStartsOn;
+      if (synced) {
+        setPendingSync(false);
+        setDirty(false);
+      }
+      return;
+    }
+    if (initialized && dirty) return;
     setBusinessName(settings.businessName);
     setTimezone(settings.timezone);
     setWeekStartsOn(settings.weekStartsOn);
-  }, [settings]);
+    setInitialized(true);
+  }, [settings, initialized, dirty, pendingSync, businessName, timezone, weekStartsOn]);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setBusy(true);
     setFeedback(null);
     try {
-      await updateSettings({ businessName, timezone, weekStartsOn });
+      const nextSettings = { businessName: businessName.trim(), timezone: timezone.trim(), weekStartsOn };
+      await updateSettings(nextSettings);
+      setBusinessName(nextSettings.businessName);
+      setTimezone(nextSettings.timezone);
+      setPendingSync(true);
       setFeedback({ message: "General settings saved.", error: false });
     } catch (error) {
       setFeedback({
@@ -57,7 +76,7 @@ export function GeneralSettingsForm() {
             <input
               id="settings-business-name"
               value={businessName}
-              onChange={(event) => setBusinessName(event.target.value)}
+              onChange={(event) => { setBusinessName(event.target.value); setDirty(true); setFeedback(null); }}
               minLength={2}
               maxLength={100}
               disabled={!isOwner || busy}
@@ -69,7 +88,7 @@ export function GeneralSettingsForm() {
             <input
               id="settings-timezone"
               value={timezone}
-              onChange={(event) => setTimezone(event.target.value)}
+              onChange={(event) => { setTimezone(event.target.value); setDirty(true); setFeedback(null); }}
               placeholder="Africa/Kampala"
               maxLength={100}
               disabled={!isOwner || busy}
@@ -82,7 +101,7 @@ export function GeneralSettingsForm() {
             <select
               id="settings-week-start"
               value={weekStartsOn}
-              onChange={(event) => setWeekStartsOn(event.target.value as "monday" | "sunday")}
+              onChange={(event) => { setWeekStartsOn(event.target.value as "monday" | "sunday"); setDirty(true); setFeedback(null); }}
               disabled={!isOwner || busy}
             >
               <option value="monday">Monday</option>
