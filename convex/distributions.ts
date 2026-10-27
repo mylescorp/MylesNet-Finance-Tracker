@@ -107,10 +107,14 @@ export const setOwnership = mutation({
     for (const partner of partners) {
       const history = await ctx.db.query("partnerOwnershipHistory").withIndex("by_business_and_partner_and_effectiveOn", q => q.eq("businessId", current.business._id).eq("partnerId", partner._id)).first();
       if (!history) {
-        // Existing partner rows predate ownership history. Anchor their current
-        // legacy share to workspace creation so snapshots before the first
-        // explicit ownership change keep seeing the partner and their share.
-        const legacyStart = dayAt(current.business.createdAt, current.business.timezone);
+        // Existing partner rows predate ownership history. Use their earliest
+        // recorded movement as evidence they existed; if none exists, retain
+        // the legacy share from workspace creation so historical snapshots do
+        // not make an established partner disappear before this first edit.
+        const firstRecordedMovement = await ctx.db.query("movements")
+          .withIndex("by_business_and_partner_and_date", q => q.eq("businessId", current.business._id).eq("partnerId", partner._id))
+          .order("asc").first();
+        const legacyStart = firstRecordedMovement?.occurredOn ?? dayAt(current.business.createdAt, current.business.timezone);
         await ctx.db.insert("partnerOwnershipHistory", { businessId: current.business._id, partnerId: partner._id, ownershipBps: partner.ownershipBps, effectiveOn: legacyStart, createdBy: current.userId, createdAt: now, idempotencyKey: `${args.idempotencyKey}:baseline:${partner._id}` });
       }
       const ownershipBps = byId.get(partner._id)!;
