@@ -1,6 +1,7 @@
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { env } from "./_generated/server";
 import { ConvexError, v } from "convex/values";
+import { paginationOptsValidator, paginationResultValidator } from "convex/server";
 import { mutation, query } from "./_generated/server";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import type { Id } from "./_generated/dataModel";
@@ -246,15 +247,14 @@ export const updateBusinessSettings = mutation({
 });
 
 export const balanceAdjustments = query({
-  args: {},
-  returns: v.union(v.object({ access: v.literal("restricted") }), v.object({ access: v.literal("ready"), rows: v.array(v.object({
+  args: { paginationOpts: paginationOptsValidator },
+  returns: paginationResultValidator(v.object({
     _id: v.id("balanceAdjustments"), account: v.union(v.literal("cash"), v.literal("mobile_money")), countedBalanceUgx: v.number(), deltaUgx: v.number(), occurredOn: v.string(), note: v.string(), state: v.union(v.literal("posted"), v.literal("void")), voidReason: v.optional(v.string()),
-  })) })),
-  handler: async (ctx) => {
+  })),
+  handler: async (ctx, args) => {
     const current = await getMembership(ctx);
-    if (!current || current.membership.role !== "owner") return { access: "restricted" as const };
-    const rows = await ctx.db.query("balanceAdjustments").withIndex("by_business_and_date", q => q.eq("businessId", current.business._id)).order("desc").take(100);
-    return { access: "ready" as const, rows: rows.map(({ _id, account, countedBalanceUgx, deltaUgx, occurredOn, note, state, voidReason }) => ({ _id, account, countedBalanceUgx, deltaUgx, occurredOn, note, state, voidReason })) };
+    if (!current || current.membership.role !== "owner") throw new Error("Only workspace owners can view balance adjustment history.");
+    return await ctx.db.query("balanceAdjustments").withIndex("by_business_and_created_at", q => q.eq("businessId", current.business._id)).order("desc").paginate(args.paginationOpts);
   },
 });
 
@@ -288,20 +288,13 @@ export const updateBalanceAdjustment = mutation({
     const adjustment = await ctx.db.get("balanceAdjustments", args.adjustmentId);
     if (!adjustment || adjustment.businessId !== current.business._id) throw new Error("Balance adjustment not found.");
     if (adjustment.state !== "posted") throw new Error("Voided adjustments cannot be edited.");
+    if (adjustment.account !== args.account) throw new Error("The account for a saved count cannot be changed. Record a new count for another account, then remove this one with a reason.");
     if (!Number.isSafeInteger(args.countedBalanceUgx) || args.countedBalanceUgx < 0) throw new Error("Enter a valid non-negative counted balance.");
     if (!isIsoDay(args.occurredOn)) throw new Error("Choose a valid adjustment date.");
     const note = args.note.trim();
     if (note.length < 3 || note.length > 300) throw new Error("Explain the balance adjustment in 3 to 300 characters.");
-    const oldBalance = await ctx.db.query("accountBalances").withIndex("by_business_and_account", q => q.eq("businessId", current.business._id).eq("account", adjustment.account)).unique();
-    const newBalance = adjustment.account === args.account ? oldBalance : await ctx.db.query("accountBalances").withIndex("by_business_and_account", q => q.eq("businessId", current.business._id).eq("account", args.account)).unique();
-    const oldBase = addSafeInteger(oldBalance?.balanceUgx ?? 0, -adjustment.deltaUgx, "Account balance");
-    const nextDelta = addSafeInteger(args.countedBalanceUgx, -(adjustment.account === args.account ? oldBase : (newBalance?.balanceUgx ?? 0)), "Balance adjustment");
-    if (adjustment.account === args.account) {
-      await applyAccountEffect(ctx, current.business._id, args.account, addSafeInteger(nextDelta, -adjustment.deltaUgx, "Balance adjustment"));
-    } else {
-      await applyAccountEffect(ctx, current.business._id, adjustment.account, -adjustment.deltaUgx);
-      await applyAccountEffect(ctx, current.business._id, args.account, nextDelta);
-    }
+    const nextDelta = addSafeInteger(adjustment.deltaUgx, args.countedBalanceUgx - adjustment.countedBalanceUgx, "Balance adjustment");
+    await applyAccountEffect(ctx, current.business._id, args.account, addSafeInteger(nextDelta, -adjustment.deltaUgx, "Balance adjustment"));
     const now = Date.now();
     await ctx.db.patch("balanceAdjustments", adjustment._id, { account: args.account, countedBalanceUgx: args.countedBalanceUgx, deltaUgx: nextDelta, occurredOn: args.occurredOn, note, updatedAt: now });
     await ctx.db.insert("auditEvents", { businessId: current.business._id, actorId: current.userId, action: "balance.adjustment_updated", entityType: "balanceAdjustment", entityId: adjustment._id, occurredAt: now, summary: `Updated ${adjustment.account} balance adjustment to ${args.account} · counted ${formatAmount(args.countedBalanceUgx, current.business.currency)}.`, details: JSON.stringify({ before: { account: adjustment.account, countedBalanceUgx: adjustment.countedBalanceUgx, deltaUgx: adjustment.deltaUgx, occurredOn: adjustment.occurredOn, note: adjustment.note }, after: { account: args.account, countedBalanceUgx: args.countedBalanceUgx, deltaUgx: nextDelta, occurredOn: args.occurredOn, note } }) });

@@ -147,7 +147,7 @@ export default defineSchema({
     voidedAt: v.optional(v.number()),
     voidedBy: v.optional(v.id("users")),
     voidReason: v.optional(v.string()),
-  }).index("by_business_and_date", ["businessId", "occurredOn"]),
+  }).index("by_business_and_date", ["businessId", "occurredOn"]).index("by_business_and_created_at", ["businessId", "createdAt"]),
   dailyTotals: defineTable({
     businessId: v.id("businesses"),
     day: v.string(),

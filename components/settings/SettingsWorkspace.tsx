@@ -1,6 +1,6 @@
 "use client";
 
-import { useMutation, useQuery } from "convex/react";
+import { useMutation, usePaginatedQuery, useQuery } from "convex/react";
 import { Banknote, CircleAlert, Radio, Smartphone } from "lucide-react";
 import { Children, cloneElement, isValidElement, useEffect, useId, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { countries, getEmojiFlag } from "countries-list";
@@ -25,7 +25,7 @@ export function SettingsWorkspace({ tab }: { tab: Tab }) {
   if (tab === "access") return <AccessSettings />;
   if (tab === "releases") return <ReleaseSettings />;
   if (tab === "rules") return <><EditableSettings tab={tab} settings={overview} /><RulesReview /></>;
-  if (tab === "finance") return <><EditableSettings tab={tab} settings={overview} /><BalanceAdjustmentManager settings={overview} /></>;
+  if (tab === "finance") return <><EditableSettings tab={tab} settings={overview} />{overview.role === "owner" ? <BalanceAdjustmentManager settings={overview} /> : <p className="muted-note settings-readonly-note">Only a workspace owner can record or manage counted balance adjustments.</p>}</>;
   return <EditableSettings tab={tab} settings={overview} />;
 }
 
@@ -144,7 +144,7 @@ type BalanceAdjustmentRow = {
   voidReason?: string;
 };
 function BalanceAdjustmentManager({ settings }: { settings: SettingsOverview }) {
-  const rows = useQuery(api.workspace.balanceAdjustments, {});
+  const { results: adjustmentRows, status: adjustmentStatus, loadMore } = usePaginatedQuery(api.workspace.balanceAdjustments, {}, { initialNumItems: 30 });
   const create = useMutation(api.workspace.createBalanceAdjustment);
   const updateAdjustment = useMutation(api.workspace.updateBalanceAdjustment);
   const voidAdjustment = useMutation(api.workspace.voidBalanceAdjustment);
@@ -189,14 +189,14 @@ function BalanceAdjustmentManager({ settings }: { settings: SettingsOverview }) 
   return <section className="card settings-card balance-adjustment-card">
     <div className="card-heading"><div><h2 className="card-title">Record a counted balance</h2><p className="card-subtitle">Enter the cash physically counted or the verified Centipid mobile collection balance. We’ll apply only the difference and keep an audit record.</p></div></div>
     <form className="form-layout" onSubmit={event => void submit(event)}>
-      <label className="field"><span>Account</span><select value={account} onChange={event => setAccount(event.target.value as "cash" | "mobile_money")}><option value="cash">Cash at hand</option><option value="mobile_money">Centipid mobile collection</option></select></label>
+      <label className="field"><span>Account</span><select value={account} disabled={Boolean(editing)} onChange={event => setAccount(event.target.value as "cash" | "mobile_money")}><option value="cash">Cash at hand</option><option value="mobile_money">Centipid mobile collection</option></select>{editing && <small className="muted-note">To move a count to another account, record a new count and remove this one.</small>}</label>
       <label className="field"><span>Counted balance ({settings.currency})</span><input type="number" min="0" step={1 / scale} value={countedBalance} onChange={event => setCountedBalance(event.target.value)} placeholder="Enter the balance you counted" required /></label>
       <label className="field"><span>Count date</span><input type="date" value={occurredOn} onChange={event => setOccurredOn(event.target.value)} required /></label>
       <label className="field field-full"><span>Reason or reference</span><textarea rows={2} maxLength={300} value={note} onChange={event => setNote(event.target.value)} placeholder="e.g. Opening count, Centipid settlement statement, or cash count correction" minLength={3} required /></label>
       <div className="form-actions field-full"><button className="button button-accent" disabled={busy}>{busy ? "Saving…" : editing ? "Save balance changes" : "Record balance"}</button>{editing && <button className="button" type="button" disabled={busy} onClick={resetForm}>Cancel edit</button>}{feedback && <span className={`form-feedback ${feedback.error ? "form-error" : "form-success"}`} role={feedback.error ? "alert" : "status"}>{feedback.message}</span>}</div>
     </form>
-    <div className="balance-adjustment-history"><div className="card-heading"><div><h3 className="card-title">Balance record history</h3><p className="card-subtitle">Latest 100 counts and corrections. Removed records remain visible as reversed.</p></div></div>
-      {rows === undefined ? <p className="muted-note">Loading balance records…</p> : rows.access !== "ready" ? <p className="muted-note">Balance record history is only available to workspace owners.</p> : rows.rows.length === 0 ? <p className="muted-note">No counted balances recorded yet.</p> : <div className="table-scroll"><table className="data-table"><thead><tr><th>Date</th><th>Account</th><th>Counted balance</th><th>Reason</th><th>Status</th><th>Actions</th></tr></thead><tbody>{rows.rows.map(row => <tr key={row._id} className={row.state === "void" ? "balance-adjustment-void" : undefined}><td>{row.occurredOn}</td><td>{row.account === "cash" ? "Cash at hand" : "Centipid mobile collection"}</td><td>{money(row.countedBalanceUgx)}</td><td>{row.note}{row.voidReason && <small className="balance-adjustment-reason">Reversal: {row.voidReason}</small>}</td><td>{row.state === "posted" ? "Active" : "Reversed"}</td><td>{row.state === "posted" ? <div className="balance-adjustment-actions"><button type="button" className="button button-small" onClick={() => startEdit(row)}>Edit</button><button type="button" className="button button-small button-danger-quiet" onClick={() => { setVoidId(row._id); setVoidReason(""); }}>Remove</button></div> : "—"}{voidId === row._id && row.state === "posted" && <div className="balance-adjustment-void-form"><label>Reason for removal<textarea rows={2} maxLength={300} value={voidReason} onChange={event => setVoidReason(event.target.value)} /></label><div className="form-actions"><button type="button" className="button button-danger" disabled={busy} onClick={() => void remove(row)}>Confirm removal</button><button type="button" className="button" disabled={busy} onClick={() => setVoidId(null)}>Cancel</button></div></div>}</td></tr>)}</tbody></table></div>}
+    <div className="balance-adjustment-history"><div className="card-heading"><div><h3 className="card-title">Balance record history</h3><p className="card-subtitle">Counts and corrections, newest first. Removed records remain visible as reversed.</p></div></div>
+      {adjustmentStatus === "LoadingFirstPage" ? <p className="muted-note">Loading balance records…</p> : adjustmentRows.length === 0 ? <p className="muted-note">No counted balances recorded yet.</p> : <><div className="table-scroll"><table className="data-table"><thead><tr><th>Date</th><th>Account</th><th>Counted balance</th><th>Reason</th><th>Status</th><th>Actions</th></tr></thead><tbody>{adjustmentRows.map(row => <tr key={row._id} className={row.state === "void" ? "balance-adjustment-void" : undefined}><td>{row.occurredOn}</td><td>{row.account === "cash" ? "Cash at hand" : "Centipid mobile collection"}</td><td>{money(row.countedBalanceUgx)}</td><td>{row.note}{row.voidReason && <small className="balance-adjustment-reason">Reversal: {row.voidReason}</small>}</td><td>{row.state === "posted" ? "Active" : "Reversed"}</td><td>{row.state === "posted" ? <div className="balance-adjustment-actions"><button type="button" className="button button-small" onClick={() => startEdit(row)}>Edit</button><button type="button" className="button button-small button-danger-quiet" onClick={() => { setVoidId(row._id); setVoidReason(""); }}>Remove</button></div> : "—"}{voidId === row._id && row.state === "posted" && <div className="balance-adjustment-void-form"><label>Reason for removal<textarea rows={2} maxLength={300} value={voidReason} onChange={event => setVoidReason(event.target.value)} /></label><div className="form-actions"><button type="button" className="button button-danger" disabled={busy} onClick={() => void remove(row)}>Confirm removal</button><button type="button" className="button" disabled={busy} onClick={() => setVoidId(null)}>Cancel</button></div></div>}</td></tr>)}</tbody></table></div>{adjustmentStatus === "CanLoadMore" && <button type="button" className="button" onClick={() => loadMore(30)}>Load older balance records</button>}{adjustmentStatus === "LoadingMore" && <p className="muted-note" role="status">Loading older balance records…</p>}</>}
     </div>
   </section>;
 }

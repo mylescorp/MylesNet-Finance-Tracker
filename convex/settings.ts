@@ -43,6 +43,7 @@ async function hasCurrencySensitiveData(ctx: MutationCtx, businessId: Id<"busine
     ctx.db.query("bills").withIndex("by_business_and_active_due", q => q.eq("businessId", businessId)).first(),
     ctx.db.query("billPayments").withIndex("by_business_and_date", q => q.eq("businessId", businessId)).first(),
     ctx.db.query("reconciliations").withIndex("by_business_and_date", q => q.eq("businessId", businessId)).first(),
+    ctx.db.query("balanceAdjustments").withIndex("by_business_and_created_at", q => q.eq("businessId", businessId)).first(),
   ]);
   return checks.some(Boolean);
 }
@@ -57,6 +58,7 @@ async function hasPostedLedgerActivity(ctx: QueryCtx | MutationCtx, businessId: 
     ctx.db.query("loanRepayments").withIndex("by_business_and_date", q => q.eq("businessId", businessId)).first(),
     ctx.db.query("billPayments").withIndex("by_business_and_date", q => q.eq("businessId", businessId)).first(),
     ctx.db.query("reconciliations").withIndex("by_business_and_date", q => q.eq("businessId", businessId)).first(),
+    ctx.db.query("balanceAdjustments").withIndex("by_business_and_created_at", q => q.eq("businessId", businessId)).first(),
   ]);
   return checks.some(Boolean);
 }
@@ -88,6 +90,7 @@ export const overview = query({
     const firstEntry = await ctx.db.query("entries").withIndex("by_business_and_date", q => q.eq("businessId", current.business._id)).first();
     const firstOperationalRecord = await ctx.db.query("operationalRecords").withIndex("by_business_and_kind_and_date", q => q.eq("businessId", current.business._id)).first();
     const balances = await ctx.db.query("accountBalances").withIndex("by_business_and_account", q => q.eq("businessId", current.business._id)).take(2);
+    const firstBalanceAdjustment = await ctx.db.query("balanceAdjustments").withIndex("by_business_and_created_at", q => q.eq("businessId", current.business._id)).first();
     const openingBalancesLocked = await hasPostedLedgerActivity(ctx, current.business._id);
     const fallback = defaults();
     const digits = currencyMinorDigits(current.business.currency);
@@ -100,7 +103,7 @@ export const overview = query({
       currency: current.business.currency,
       currencyMinorDigits: digits,
       settingsUpdatedAt: prefs?.updatedAt ?? current.business.createdAt,
-      currencyLocked: Boolean(firstEntry || firstOperationalRecord || balances.some(b => (b.openingBalanceUgx ?? 0) !== 0)),
+      currencyLocked: Boolean(firstEntry || firstOperationalRecord || firstBalanceAdjustment || balances.some(b => (b.openingBalanceUgx ?? 0) !== 0)),
       openingBalancesLocked,
       cashOpeningBalance: (balances.find(b => b.account === "cash")?.openingBalanceUgx ?? 0) / scale,
       mobileOpeningBalance: (balances.find(b => b.account === "mobile_money")?.openingBalanceUgx ?? 0) / scale,
