@@ -306,7 +306,7 @@ export default defineSchema({
     createdBy: v.id("users"),
     createdAt: v.number(),
     revokedAt: v.optional(v.number()),
-  }).index("by_business", ["businessId"]).index("by_token_hash", ["tokenHash"]),
+  }).index("by_business", ["businessId"]).index("by_business_and_active", ["businessId", "active"]).index("by_token_hash", ["tokenHash"]),
   googleFormReceipts: defineTable({
     businessId: v.id("businesses"),
     sourceKey: v.string(),

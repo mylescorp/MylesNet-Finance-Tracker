@@ -45,6 +45,7 @@ After staging parity, set the dedicated secret in the production Convex deployme
 
 - Added a common `Add an entry` starting point that routes to the existing authenticated Sales, Expense, Movement, Savings, and Loan forms.
 - Added a separate Convex Google Form endpoint with a dedicated owner-managed token sent in a bearer header, idempotent response receipts, member-email matching, and automatic posting for valid Sales and Expense submissions. The sales mappings match the current `Code.gs` field labels and default app income categories.
+- Greptile review fixes on this branch query active tokens directly (so revocation/rotation has no historical-row limit) and bound queue retries so permanently failing rows cannot block new submissions; failed rows can be manually retried after correction.
 - Added an owner-visible receipt list in Settings → Data. Other form types and invalid/unmapped records are clearly held for review and do not affect balances.
 - Added a companion Apps Script queue with retry delivery and a setup guide. It is source-only and has not been installed into the live Apps Script project.
 - TypeScript typecheck passes. Convex code generation could not run because this isolated checkout has no configured development deployment; the API type map was updated locally. No Convex or Vercel deployment was made.

@@ -9,7 +9,7 @@ This bridge is a separate ingress path for the existing accountant Form. It does
 - Valid Sales and Expense submissions are posted to the ledger when the existing workspace categories and accounts match.
 - Movement, Savings / investment, Loan, unknown, invalid, or incomplete submissions are recorded as `Needs review` and do not change balances.
 - The respondent email is used only to match an active owner/cashier membership; it is not saved in the receipt or finance notes. Unmatched respondents are held for review.
-- Retries run every five minutes and retain a short status in the hidden queue; Convex keeps an owner-visible receipt history in Settings → Data.
+- Retries run every five minutes, stop after eight transient failures, and mark permanent 4xx failures as `failed` so they cannot block later rows. The hidden queue keeps the failure result; `retryFailedGoogleFormRow_` can manually requeue a failed row after fixing the cause. Convex keeps an owner-visible receipt history in Settings → Data.
 
 ## Staging setup
 

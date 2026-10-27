@@ -104,6 +104,7 @@ function flushGoogleFormQueue_() {
       const { row: targetRow, payload, state, attempts } = task;
       let result = 'retry';
       let nextState = 'retry';
+      const nextAttempts = Number(attempts || 0) + 1;
       try {
         const response = UrlFetchApp.fetch(endpoint.replace(/\?token=[A-Fa-f0-9]{64}$/, ''), {
           method: 'post', contentType: 'application/json', payload: String(payload), muteHttpExceptions: true,
@@ -113,15 +114,35 @@ function flushGoogleFormQueue_() {
         const body = JSON.parse(response.getContentText() || '{}');
         result = String(body.status || `http_${code}`).slice(0, 80);
         if (code >= 200 && code < 300 && ['posted', 'needs_review', 'duplicate'].includes(body.status)) nextState = body.status === 'needs_review' ? 'needs_review' : 'delivered';
+        else if (code >= 400 && code < 500) nextState = 'failed';
+        else if (code >= 200 && code < 300) nextState = 'failed';
       } catch (error) {
         result = error && error.message ? String(error.message).slice(0, 80) : 'delivery_failed';
       }
+      if (nextState === 'retry' && nextAttempts >= 8) nextState = 'failed';
       lock.waitLock(20000);
       try {
         const currentState = queue.getRange(targetRow, 3).getValue();
-        if (currentState === state) queue.getRange(targetRow, 3, 1, 4).setValues([[nextState, Number(attempts || 0) + 1, new Date(), result]]);
+        if (currentState === state) queue.getRange(targetRow, 3, 1, 4).setValues([[nextState, nextAttempts, new Date(), result]]);
       } finally { lock.releaseLock(); }
   });
+}
+
+function retryFailedGoogleFormRow_() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const queue = ss && ss.getSheetByName(GOOGLE_FORM_QUEUE_TAB_);
+  if (!queue) throw new Error('Google Form queue is missing.');
+  const ui = SpreadsheetApp.getUi();
+  const answer = ui.prompt('Retry a failed Google Form row', 'Enter the queue row number shown in the hidden Google_Form_Sync_Queue tab.', ui.ButtonSet.OK_CANCEL);
+  if (answer.getSelectedButton() !== ui.Button.OK) return;
+  const row = Number(answer.getResponseText());
+  if (!Number.isInteger(row) || row < 2 || row > queue.getLastRow() || queue.getRange(row, 3).getValue() !== 'failed') {
+    ui.alert('That row is not a failed queue item.');
+    return;
+  }
+  queue.getRange(row, 3).setValue('retry');
+  queue.getRange(row, 5).setValue(new Date());
+  ui.alert('Queue row marked for retry. It will be sent by the next scheduled flush.');
 }
 
 function configureGoogleFormIngressUrl_() {

@@ -28,8 +28,8 @@ export const createToken = mutation({
     const { userId, business } = await owner(ctx);
     const token = [...crypto.getRandomValues(new Uint8Array(32))].map(byte => byte.toString(16).padStart(2, "0")).join("");
     const tokenHash = await sha256(token);
-    const integrations = await ctx.db.query("googleFormIntegrations").withIndex("by_business", q => q.eq("businessId", business._id)).take(20);
-    for (const integration of integrations) if (integration.active) await ctx.db.patch("googleFormIntegrations", integration._id, { active: false, revokedAt: Date.now() });
+    const integrations = await ctx.db.query("googleFormIntegrations").withIndex("by_business_and_active", q => q.eq("businessId", business._id).eq("active", true)).collect();
+    for (const integration of integrations) await ctx.db.patch("googleFormIntegrations", integration._id, { active: false, revokedAt: Date.now() });
     await ctx.db.insert("googleFormIntegrations", { businessId: business._id, tokenHash, active: true, createdBy: userId, createdAt: Date.now() });
     await ctx.db.insert("auditEvents", { businessId: business._id, actorId: userId, action: "integration.google_form.rotated", entityType: "integration", entityId: tokenHash.slice(0, 16), occurredAt: Date.now(), summary: "Google Form ingress token created or rotated." });
     return token;
@@ -40,8 +40,8 @@ export const revokeToken = mutation({
   args: {}, returns: v.null(),
   handler: async ctx => {
     const { userId, business } = await owner(ctx);
-    const rows = await ctx.db.query("googleFormIntegrations").withIndex("by_business", q => q.eq("businessId", business._id)).take(20);
-    for (const integration of rows) if (integration.active) await ctx.db.patch("googleFormIntegrations", integration._id, { active: false, revokedAt: Date.now() });
+    const rows = await ctx.db.query("googleFormIntegrations").withIndex("by_business_and_active", q => q.eq("businessId", business._id).eq("active", true)).collect();
+    for (const integration of rows) await ctx.db.patch("googleFormIntegrations", integration._id, { active: false, revokedAt: Date.now() });
     await ctx.db.insert("auditEvents", { businessId: business._id, actorId: userId, action: "integration.google_form.revoked", entityType: "integration", entityId: business._id, occurredAt: Date.now(), summary: "Google Form ingress access revoked." });
     return null;
   },
@@ -51,8 +51,8 @@ export const status = query({
   args: {}, returns: v.object({ enabled: v.boolean() }),
   handler: async ctx => {
     const { business } = await owner(ctx);
-    const rows = await ctx.db.query("googleFormIntegrations").withIndex("by_business", q => q.eq("businessId", business._id)).take(20);
-    return { enabled: rows.some(row => row.active) };
+    const active = await ctx.db.query("googleFormIntegrations").withIndex("by_business_and_active", q => q.eq("businessId", business._id).eq("active", true)).first();
+    return { enabled: !!active };
   },
 });
 
