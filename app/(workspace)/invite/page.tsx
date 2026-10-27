@@ -1,0 +1,7 @@
+import { WorkspaceTitle } from "@/components/AppShell";
+import { InvitationAcceptance } from "@/components/settings/InvitationAcceptance";
+
+export default async function InvitePage({ searchParams }: { searchParams: Promise<{ token?: string }> }) {
+  const { token } = await searchParams;
+  return <><WorkspaceTitle eyebrow="Workspace access" title="Accept invitation" description="Join the workspace using the Google account the invitation was sent to." /><InvitationAcceptance token={token ?? ""} /></>;
+}

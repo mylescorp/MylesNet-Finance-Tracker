@@ -1,6 +1,6 @@
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { env } from "./_generated/server";
-import { v } from "convex/values";
+import { ConvexError, v } from "convex/values";
 import { mutation, query } from "./_generated/server";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import type { Id } from "./_generated/dataModel";
@@ -11,6 +11,12 @@ function addSafeInteger(left: number, right: number, label: string) {
     throw new Error(`${label} cannot be represented safely.`);
   }
   return result;
+}
+
+function formatAmount(amountMinor: number, currency: string) {
+  let digits = 0;
+  try { digits = new Intl.NumberFormat("en", { style: "currency", currency }).resolvedOptions().maximumFractionDigits ?? 0; } catch { /* unsupported currency is rejected before it is stored */ }
+  return `${new Intl.NumberFormat("en", { minimumFractionDigits: digits, maximumFractionDigits: digits }).format(amountMinor / 10 ** digits)} ${currency}`;
 }
 
 const accessResult = v.union(
@@ -95,6 +101,7 @@ export const claimFirstOwner = mutation({
     const businessId = await ctx.db.insert("businesses", {
       name,
       currency: "UGX",
+      countryCode: "UG",
       timezone: "Africa/Kampala",
       weekStartsOn: "monday",
       createdBy: userId,
@@ -151,7 +158,8 @@ export const businessSettings = query({
     v.object({
       access: v.literal("ready"),
       businessName: v.string(),
-      currency: v.literal("UGX"),
+      countryCode: v.string(),
+      currency: v.string(),
       timezone: v.string(),
       weekStartsOn: v.union(v.literal("monday"), v.literal("sunday")),
       role: v.union(v.literal("owner"), v.literal("partner"), v.literal("cashier")),
@@ -166,6 +174,7 @@ export const businessSettings = query({
     return {
       access: "ready" as const,
       businessName: current.business.name,
+      countryCode: current.business.countryCode ?? "UG",
       currency: current.business.currency,
       timezone: current.business.timezone,
       weekStartsOn: current.business.weekStartsOn ?? "monday",
@@ -326,7 +335,7 @@ export const dashboardSummary = query({
 });
 
 export const recentEntries = query({
-  args: { limit: v.optional(v.number()) },
+  args: { limit: v.optional(v.number()), kind: v.optional(v.union(v.literal("sale"), v.literal("expense"))), from: v.optional(v.string()), toExclusive: v.optional(v.string()) },
   returns: v.array(
     v.object({
       _id: v.id("entries"),
@@ -343,14 +352,19 @@ export const recentEntries = query({
     const current = await getMembership(ctx);
     if (!current) return [];
     if (current.membership.role === "partner") return [];
-    const limit = Math.max(1, Math.min(Math.floor(args.limit ?? 10), 50));
-    const rows = await ctx.db
-      .query("entries")
-      .withIndex("by_business_and_date", (q) =>
-        q.eq("businessId", current.business._id),
-      )
-      .order("desc")
-      .take(limit);
+    const limit = Math.max(1, Math.min(Math.floor(args.limit ?? 10), 500));
+    if ((args.from && !isIsoDay(args.from)) || (args.toExclusive && !isIsoDay(args.toExclusive)) || (args.from && args.toExclusive && args.from >= args.toExclusive)) throw new Error("Choose a valid entry date range.");
+    const rows = args.kind
+      ? await ctx.db.query("entries").withIndex("by_business_and_kind_and_date", q =>
+        args.from && args.toExclusive ? q.eq("businessId", current.business._id).eq("kind", args.kind!).gte("occurredOn", args.from).lt("occurredOn", args.toExclusive)
+          : args.from ? q.eq("businessId", current.business._id).eq("kind", args.kind!).gte("occurredOn", args.from)
+          : args.toExclusive ? q.eq("businessId", current.business._id).eq("kind", args.kind!).lt("occurredOn", args.toExclusive)
+          : q.eq("businessId", current.business._id).eq("kind", args.kind!)).order("desc").take(limit)
+      : await ctx.db.query("entries").withIndex("by_business_and_date", q =>
+        args.from && args.toExclusive ? q.eq("businessId", current.business._id).gte("occurredOn", args.from).lt("occurredOn", args.toExclusive)
+          : args.from ? q.eq("businessId", current.business._id).gte("occurredOn", args.from)
+          : args.toExclusive ? q.eq("businessId", current.business._id).lt("occurredOn", args.toExclusive)
+          : q.eq("businessId", current.business._id)).order("desc").take(limit);
     return rows.map(({ _id, kind, amountUgx, occurredOn, account, category, note, state }) => ({
       _id,
       kind,
@@ -364,6 +378,99 @@ export const recentEntries = query({
   },
 });
 
+export const searchEntries = query({
+  args: { term: v.string(), limit: v.optional(v.number()) },
+  returns: v.array(v.object({
+    _id: v.id("entries"),
+    kind: v.union(v.literal("sale"), v.literal("expense")),
+    amountUgx: v.number(),
+    occurredOn: v.string(),
+    category: v.string(),
+    note: v.string(),
+  })),
+  handler: async (ctx, args) => {
+    const current = await getMembership(ctx);
+    const term = args.term.trim();
+    if (!current || current.membership.role === "partner" || term.length < 2 || term.length > 80) return [];
+    const limit = Math.max(1, Math.min(Math.floor(args.limit ?? 8), 12));
+    const [notes, categories] = await Promise.all([
+      ctx.db.query("entries").withSearchIndex("search_note", (q) => q.search("note", term).eq("businessId", current.business._id)).take(limit),
+      ctx.db.query("entries").withSearchIndex("search_category", (q) => q.search("category", term).eq("businessId", current.business._id)).take(limit),
+    ]);
+    const unique = new Map([...notes, ...categories].map((entry) => [entry._id, entry]));
+    return [...unique.values()]
+      .sort((a, b) => b.occurredOn.localeCompare(a.occurredOn) || b.createdAt - a.createdAt)
+      .slice(0, limit)
+      .map(({ _id, kind, amountUgx, occurredOn, category, note }) => ({ _id, kind, amountUgx, occurredOn, category, note }));
+  },
+});
+
+const operationalKind = v.union(v.literal("movement"), v.literal("holding"), v.literal("loan"), v.literal("bill"));
+
+export const operationalRecords = query({
+  args: { kind: operationalKind },
+  returns: v.array(v.object({
+    _id: v.id("operationalRecords"), kind: operationalKind, title: v.string(), amountUgx: v.number(),
+    occurredOn: v.string(), account: v.optional(v.union(v.literal("cash"), v.literal("mobile_money"))),
+    destinationAccount: v.optional(v.union(v.literal("cash"), v.literal("mobile_money"))),
+    movementType: v.optional(v.union(v.literal("transfer"), v.literal("withdrawal"))),
+    cadence: v.optional(v.union(v.literal("weekly"), v.literal("monthly"), v.literal("quarterly"), v.literal("annually"))),
+    note: v.string(),
+  })),
+  handler: async (ctx, args) => {
+    const current = await getMembership(ctx);
+    if (!current || current.membership.role === "partner") return [];
+    return (await ctx.db.query("operationalRecords").withIndex("by_business_and_kind_and_date", q => q.eq("businessId", current.business._id).eq("kind", args.kind)).order("desc").take(200))
+      .map(({ _id, kind, title, amountUgx, occurredOn, account, destinationAccount, movementType, cadence, note }) => ({ _id, kind, title, amountUgx, occurredOn, account, destinationAccount, movementType, cadence, note }));
+  },
+});
+
+export const createOperationalRecord = mutation({
+  args: {
+    kind: operationalKind, title: v.string(), amountUgx: v.number(), occurredOn: v.string(),
+    account: v.optional(v.union(v.literal("cash"), v.literal("mobile_money"))),
+    destinationAccount: v.optional(v.union(v.literal("cash"), v.literal("mobile_money"))),
+    movementType: v.optional(v.union(v.literal("transfer"), v.literal("withdrawal"))),
+    cadence: v.optional(v.union(v.literal("weekly"), v.literal("monthly"), v.literal("quarterly"), v.literal("annually"))),
+    note: v.string(), idempotencyKey: v.string(),
+  },
+  returns: v.id("operationalRecords"),
+  handler: async (ctx, args) => {
+    const current = await getMembership(ctx);
+    if (!current || current.membership.role === "partner") throw new Error("Workspace access is required to save this record.");
+    if (!isIsoDay(args.occurredOn)) throw new Error("Choose a valid business date.");
+    if (!Number.isSafeInteger(args.amountUgx) || args.amountUgx <= 0) throw new Error(`Amount must be a positive whole minor-unit amount in ${current.business.currency}.`);
+    const title = args.title.trim();
+    const note = args.note.trim();
+    if (title.length < 2 || title.length > 100 || note.length > 300) throw new Error("Enter a title of 2–100 characters and a note of at most 300 characters.");
+    if (args.idempotencyKey.length < 16 || args.idempotencyKey.length > 120) throw new Error("This request could not be verified. Try again.");
+    const existing = await ctx.db.query("operationalRecords").withIndex("by_business_and_idempotency", q => q.eq("businessId", current.business._id).eq("idempotencyKey", args.idempotencyKey)).unique();
+    if (existing) {
+      const isSameRequest = existing.kind === args.kind && existing.title === title && existing.amountUgx === args.amountUgx && existing.occurredOn === args.occurredOn && existing.account === args.account && existing.destinationAccount === args.destinationAccount && existing.movementType === args.movementType && existing.cadence === args.cadence && existing.note === note;
+      if (!isSameRequest) throw new Error("This request key was already used for another record.");
+      return existing._id;
+    }
+    if (args.kind === "movement") {
+      if (!args.account || !args.movementType || (args.movementType === "transfer" && (!args.destinationAccount || args.destinationAccount === args.account))) throw new Error("Choose a source account and a different destination for transfers.");
+      const source = await ctx.db.query("accountBalances").withIndex("by_business_and_account", q => q.eq("businessId", current.business._id).eq("account", args.account!)).unique();
+      if (args.movementType === "withdrawal" && (source?.balanceUgx ?? 0) < args.amountUgx) throw new Error("The withdrawal is larger than the available account balance.");
+      if (args.movementType === "withdrawal") {
+        if (source) await ctx.db.patch("accountBalances", source._id, { balanceUgx: addSafeInteger(source.balanceUgx, -args.amountUgx, "Account balance"), updatedAt: Date.now() });
+      } else {
+        const destination = await ctx.db.query("accountBalances").withIndex("by_business_and_account", q => q.eq("businessId", current.business._id).eq("account", args.destinationAccount!)).unique();
+        if ((source?.balanceUgx ?? 0) < args.amountUgx) throw new Error("The transfer is larger than the available source balance.");
+        if (source) await ctx.db.patch("accountBalances", source._id, { balanceUgx: addSafeInteger(source.balanceUgx, -args.amountUgx, "Account balance"), updatedAt: Date.now() });
+        if (destination) await ctx.db.patch("accountBalances", destination._id, { balanceUgx: addSafeInteger(destination.balanceUgx, args.amountUgx, "Account balance"), updatedAt: Date.now() });
+        else await ctx.db.insert("accountBalances", { businessId: current.business._id, account: args.destinationAccount!, balanceUgx: args.amountUgx, updatedAt: Date.now() });
+      }
+    }
+    if (args.kind === "bill" && !args.cadence) throw new Error("Choose how often this bill recurs.");
+    const id = await ctx.db.insert("operationalRecords", { ...args, title, note, businessId: current.business._id, createdBy: current.userId, createdAt: Date.now() });
+    await ctx.db.insert("auditEvents", { businessId: current.business._id, actorId: current.userId, action: `record.${args.kind}.created`, entityType: args.kind, entityId: id, occurredAt: Date.now(), summary: `Created ${args.kind} record: ${title}.` });
+    return id;
+  },
+});
+
 export const createEntry = mutation({
   args: {
     kind: v.union(v.literal("sale"), v.literal("expense")),
@@ -373,6 +480,8 @@ export const createEntry = mutation({
     category: v.string(),
     note: v.string(),
     idempotencyKey: v.string(),
+    confirmPossibleDuplicate: v.optional(v.boolean()),
+    confirmNegativeBalance: v.optional(v.boolean()),
   },
   returns: v.id("entries"),
   handler: async (ctx, args) => {
@@ -382,13 +491,15 @@ export const createEntry = mutation({
       throw new Error("Partner accounts cannot add ledger entries.");
     }
     if (!Number.isSafeInteger(args.amountUgx) || args.amountUgx <= 0) {
-      throw new Error("Amount must be a positive whole number of UGX.");
+      throw new Error(`Amount must be a positive valid amount in ${current.business.currency}.`);
     }
     if (!isIsoDay(args.occurredOn)) throw new Error("Choose a valid date.");
     if (args.category.trim().length < 1 || args.category.length > 80) {
       throw new Error("Enter a category using 1 to 80 characters.");
     }
     if (args.note.length > 300) throw new Error("Notes can be up to 300 characters.");
+    const preferences = await ctx.db.query("workspacePreferences").withIndex("by_business", q => q.eq("businessId", current.business._id)).unique();
+    if (preferences?.requireEntryNote && !args.note.trim()) throw new Error("Add a note before saving. This workspace requires a note on each entry.");
     if (args.idempotencyKey.length < 16 || args.idempotencyKey.length > 120) {
       throw new Error("Entry request is invalid. Please try again.");
     }
@@ -413,9 +524,26 @@ export const createEntry = mutation({
       return duplicate._id;
     }
 
+    const duplicateWindowDays = preferences?.duplicateWindowDays ?? 1;
+    if (duplicateWindowDays > 0 && !args.confirmPossibleDuplicate) {
+      const date = new Date(`${args.occurredOn}T00:00:00.000Z`);
+      const from = new Date(date); from.setUTCDate(from.getUTCDate() - duplicateWindowDays);
+      const to = new Date(date); to.setUTCDate(to.getUTCDate() + duplicateWindowDays);
+      const possibleDuplicates = await ctx.db.query("entries").withIndex("by_business_and_kind_and_date", q =>
+        q.eq("businessId", current.business._id).eq("kind", args.kind)
+          .gte("occurredOn", from.toISOString().slice(0, 10)).lte("occurredOn", to.toISOString().slice(0, 10)),
+      ).take(100);
+      const match = possibleDuplicates.find(entry => entry.state === "posted" && entry.account === args.account && entry.amountUgx === args.amountUgx && entry.category === args.category.trim());
+      if (match) throw new ConvexError({ code: "CONFIRM_DUPLICATE", message: `Similar ${args.kind} from ${match.occurredOn} was recorded for ${args.category.trim()}. Review it before continuing.` });
+    }
+
+    const currentAccount = await ctx.db.query("accountBalances").withIndex("by_business_and_account", q => q.eq("businessId", current.business._id).eq("account", args.account)).unique();
+    const accountDelta = args.kind === "sale" ? args.amountUgx : -args.amountUgx;
+    if (preferences?.negativeBalanceWarning !== false && !args.confirmNegativeBalance && (currentAccount?.balanceUgx ?? 0) + accountDelta < 0) {
+      throw new ConvexError({ code: "CONFIRM_NEGATIVE", message: `This entry will put ${args.account === "cash" ? "cash" : "mobile money"} below zero. Review the balance before continuing.` });
+    }
+
     const now = Date.now();
-    const accountDelta =
-      (args.kind === "sale" ? args.amountUgx : -args.amountUgx);
     await applyAccountEffect(ctx, current.business._id, args.account, accountDelta);
     const entryId = await ctx.db.insert("entries", {
       businessId: current.business._id,
@@ -477,8 +605,12 @@ export const createEntry = mutation({
       entityType: "entry",
       entityId: entryId,
       occurredAt: now,
-      summary: `${args.kind} · ${args.amountUgx} UGX · ${args.occurredOn}`,
+      summary: `${args.kind} · ${formatAmount(args.amountUgx, current.business.currency)} · ${args.occurredOn}`,
     });
+    if (args.confirmPossibleDuplicate || args.confirmNegativeBalance) {
+      const confirmed = [args.confirmPossibleDuplicate && "possible duplicate", args.confirmNegativeBalance && "negative balance"].filter(Boolean).join(" and ");
+      await ctx.db.insert("auditEvents", { businessId: current.business._id, actorId: current.userId, action: "entry.rule_override", entityType: "entry", entityId: entryId, occurredAt: now, summary: `Confirmed ${confirmed} warning before posting.` });
+    }
     return entryId;
   },
 });

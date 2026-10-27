@@ -12,7 +12,8 @@ export default defineSchema({
   ...authTables,
   businesses: defineTable({
     name: v.string(),
-    currency: v.literal("UGX"),
+    currency: v.string(),
+    countryCode: v.optional(v.string()),
     timezone: v.string(),
     weekStartsOn: v.optional(v.union(v.literal("monday"), v.literal("sunday"))),
     createdBy: v.id("users"),
@@ -36,9 +37,28 @@ export default defineSchema({
     expiresAt: v.number(),
     acceptedAt: v.optional(v.number()),
     active: v.boolean(),
+    tokenHash: v.optional(v.string()),
   })
     .index("by_email", ["email"])
-    .index("by_business_and_active", ["businessId", "active"]),
+    .index("by_business_and_active", ["businessId", "active"])
+    .index("by_token_hash", ["tokenHash"]),
+  workspacePreferences: defineTable({
+    businessId: v.id("businesses"),
+    locale: v.optional(v.string()),
+    dateFormat: v.optional(v.union(v.literal("DD/MM/YYYY"), v.literal("MM/DD/YYYY"), v.literal("YYYY-MM-DD"))),
+    fiscalYearStartMonth: v.optional(v.number()),
+    incomeCategories: v.optional(v.array(v.string())),
+    expenseCategories: v.optional(v.array(v.string())),
+    highExpenseReviewUgx: v.optional(v.number()),
+    weakDaySalesUgx: v.optional(v.number()),
+    monthlySalesTargetUgx: v.optional(v.number()),
+    monthlyExpenseWarningUgx: v.optional(v.number()),
+    duplicateWindowDays: v.optional(v.number()),
+    requireEntryNote: v.optional(v.boolean()),
+    negativeBalanceWarning: v.optional(v.boolean()),
+    updatedAt: v.number(),
+    updatedBy: v.id("users"),
+  }).index("by_business", ["businessId"]),
   partners: defineTable({
     businessId: v.id("businesses"),
     name: v.string(),
@@ -64,11 +84,31 @@ export default defineSchema({
   })
     .index("by_business_and_date", ["businessId", "occurredOn"])
     .index("by_business_and_kind_and_date", ["businessId", "kind", "occurredOn"])
+    .index("by_business_and_idempotency", ["businessId", "idempotencyKey"])
+    .searchIndex("search_note", { searchField: "note", filterFields: ["businessId"] })
+    .searchIndex("search_category", { searchField: "category", filterFields: ["businessId"] }),
+  operationalRecords: defineTable({
+    businessId: v.id("businesses"),
+    kind: v.union(v.literal("movement"), v.literal("holding"), v.literal("loan"), v.literal("bill")),
+    title: v.string(),
+    amountUgx: v.number(),
+    occurredOn: v.string(),
+    account: v.optional(v.union(v.literal("cash"), v.literal("mobile_money"))),
+    destinationAccount: v.optional(v.union(v.literal("cash"), v.literal("mobile_money"))),
+    movementType: v.optional(v.union(v.literal("transfer"), v.literal("withdrawal"))),
+    cadence: v.optional(v.union(v.literal("weekly"), v.literal("monthly"), v.literal("quarterly"), v.literal("annually"))),
+    note: v.string(),
+    idempotencyKey: v.string(),
+    createdBy: v.id("users"),
+    createdAt: v.number(),
+  })
+    .index("by_business_and_kind_and_date", ["businessId", "kind", "occurredOn"])
     .index("by_business_and_idempotency", ["businessId", "idempotencyKey"]),
   accountBalances: defineTable({
     businessId: v.id("businesses"),
     account: v.union(v.literal("cash"), v.literal("mobile_money")),
     balanceUgx: v.number(),
+    openingBalanceUgx: v.optional(v.number()),
     updatedAt: v.number(),
   }).index("by_business_and_account", ["businessId", "account"]),
   dailyTotals: defineTable({
