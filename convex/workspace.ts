@@ -83,7 +83,7 @@ export const claimFirstOwner = mutation({
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Sign in before setting up the workspace.");
-    const setupCode = (env as typeof env & { OWNER_SETUP_CODE?: string }).OWNER_SETUP_CODE;
+    const setupCode = env.OWNER_SETUP_CODE;
     if (!setupCode || args.setupCode.length < 32 || args.setupCode !== setupCode) {
       throw new Error("Workspace setup is not available. Ask the administrator to configure the one-time owner setup code.");
     }
