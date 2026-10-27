@@ -107,11 +107,11 @@ const specs: Record<string, BoardSpec> = {
     ],
   },
   "monthly-pnl": {
-    title: "Monthly P&L", eyebrow: "Reports", description: "Review revenue, operating costs, and net result from recorded entries.", source: "09 · Monthly P&L",
-    metrics: ["Sales YTD", "Operating costs", "Operating profit", "Equipment", "Net profit"],
+    title: "Monthly P&L", eyebrow: "Reports", description: "Review recorded sales, total expenses, and cashbook net from saved entries.", source: "09 · Monthly P&L",
+    metrics: ["Sales YTD", "Total expenses", "Cashbook net", "Equipment", "Net profit"],
     sections: [
       { title: "Profit and loss by month", detail: "Monthly totals use saved cashbook entries. Missing source history is not filled with sample values.", kind: "table" },
-      { title: "Year-to-date statement", detail: "Sales, operating costs, operating profit, margin, equipment, and net result.", kind: "table" },
+      { title: "Year-to-date statement", detail: "Monthly sales, total expenses, and cashbook net from recorded entries.", kind: "table" },
       { title: "Operating margin and equipment", detail: "Compare recorded operating costs and equipment spend by period.", kind: "chart" },
       { title: "Budget versus actual", detail: "Budgets are read from Finance settings when configured." },
       { title: "Month-end close and shareable statement", detail: "Close controls and share links require permissions and configured export delivery." },
@@ -263,10 +263,14 @@ export function BoardRoute({ route }: { route: string }) {
   const entries = useQuery(api.workspace.recentEntries, { limit: entryLimit, kind: entryKind, from: range.from, toExclusive: range.toExclusive });
   const yearRange = useMemo(() => rangeFor("Year", today, weekStartsOn, fiscalStartMonth), [today, weekStartsOn, fiscalStartMonth]);
   const yearSummary = useQuery(api.workspace.dashboardSummary, yearRange);
+  const weekRange = useMemo(() => rangeFor("Week", today, weekStartsOn, fiscalStartMonth), [today, weekStartsOn, fiscalStartMonth]);
+  const weekSummary = useQuery(api.workspace.dashboardSummary, screen?.title === "Daily Report" ? weekRange : "skip");
 
   if (!screen) return <WorkspaceTitle eyebrow="MylesNet" title="Page not found" description="Choose a section from the navigation." />;
 
   const stats = summary?.access === "ready" ? summary : null;
+  const yearDays = yearSummary?.access === "ready" ? yearSummary.days : undefined;
+  const weekDays = weekSummary?.access === "ready" ? weekSummary.days : undefined;
   const metricValues: Record<string, string> = {
     Sales: fmt(stats?.salesUgx),
     "Best day": stats ? fmt(Math.max(0, ...stats.days.map((day) => day.salesUgx))) : "—",
@@ -282,8 +286,8 @@ export function BoardRoute({ route }: { route: string }) {
     "Entry basis": "Recorded",
     "Approval queue": "—",
     "Sales YTD": fmt(yearSummary?.access === "ready" ? yearSummary.salesUgx : undefined),
-    "Operating costs": fmt(stats?.expensesUgx),
-    "Operating profit": stats ? fmt(stats.salesUgx - stats.expensesUgx) : "—",
+    "Total expenses": fmt(stats?.expensesUgx),
+    "Cashbook net": stats ? fmt(stats.salesUgx - stats.expensesUgx) : "—",
     // A net profit figure is withheld until equipment and other adjustments are modeled.
     "Balance difference": "—",
     Currency: currency,
@@ -333,9 +337,11 @@ export function BoardRoute({ route }: { route: string }) {
       </Card>}
       {screen.sections.map((section) => <Card className="board-section-card" key={section.title}>
         <div className="card-heading"><div><h2 className="card-title">{section.title}</h2><p className="card-subtitle">{section.detail}</p></div></div>
-        {section.kind === "table" && screen.title === "Sales" || section.kind === "table" && screen.title === "Expenses" ? (
+        {section.kind === "table" && (screen.title === "Sales" || screen.title === "Expenses") ? (
           hasRecordData ? <div className="table-scroll"><table className="data-table"><thead><tr><th>Date</th><th>Type</th><th>Category</th><th>Account</th><th>Amount</th><th>Status</th></tr></thead><tbody>{selectedEntries.map((entry) => <tr key={entry._id}><td>{fmtDate(entry.occurredOn)}</td><td>{entry.kind}</td><td>{entry.category}</td><td>{entry.account === "cash" ? "Cash" : "Mobile money"}</td><td>{fmt(entry.amountUgx)}</td><td><span className={`status-chip ${entry.state === "posted" ? "status-ok" : "status-warning"}`}>{entry.state}</span></td></tr>)}</tbody></table></div> : <EmptyPanel message="No entries yet." next="Add an entry to populate this view. The design preview figures are examples, not live business data." />
-        ) : section.kind === "chart" ? <ChartPanel summary={stats} title={section.title} message={section.detail} currency={currency} scale={currencyScale} locale={locale} />
+        ) : section.kind === "table" && screen.title === "Daily Report" ? <DailyHistoryTable days={weekDays} loading={weekSummary === undefined} formatDay={fmtDate} formatMoney={fmt} />
+          : section.kind === "table" && screen.title === "Monthly P&L" ? <MonthlyPnlTable days={yearDays} loading={yearSummary === undefined} locale={locale} formatMoney={fmt} />
+          : section.kind === "chart" ? <ChartPanel summary={stats} title={section.title} message={section.detail} currency={currency} scale={currencyScale} locale={locale} />
           : section.kind === "workflow" ? <WorkflowPanel screen={screen} section={section.title} />
             : <EmptyPanel message={hasRecordData ? "Live records are available for the selected period." : "No records yet."} next={section.detail} />}
       </Card>)}
@@ -350,6 +356,32 @@ export function BoardRoute({ route }: { route: string }) {
 
 function EmptyPanel({ message, next }: { message: string; next: string }) {
   return <div className="empty-state compact-empty"><strong>{message}</strong><span>{next}</span></div>;
+}
+
+type DailyTotal = { day: string; salesUgx: number; expensesUgx: number };
+
+function DailyHistoryTable({ days, loading, formatDay, formatMoney }: { days: DailyTotal[] | undefined; loading: boolean; formatDay: (day: string) => string; formatMoney: (amount: number) => string }) {
+  if (!days) return <EmptyPanel message={loading ? "Loading daily activity…" : "Daily history is not available for this account."} next="This report uses saved cashbook totals for the current business week." />;
+  if (days.length === 0) return <EmptyPanel message="No daily activity has been recorded this week." next="Saved sales and expenses will appear here by business date." />;
+  const totals = days.reduce((result, day) => ({ sales: result.sales + day.salesUgx, expenses: result.expenses + day.expensesUgx }), { sales: 0, expenses: 0 });
+  return <div className="table-scroll"><table className="data-table"><thead><tr><th>Business date</th><th>Sales</th><th>Total expenses</th><th>Cashbook net</th></tr></thead><tbody>{days.map(day => <tr key={day.day}><td>{formatDay(day.day)}</td><td>{formatMoney(day.salesUgx)}</td><td>{formatMoney(day.expensesUgx)}</td><td>{formatMoney(day.salesUgx - day.expensesUgx)}</td></tr>)}</tbody><tfoot><tr><th>This week</th><th>{formatMoney(totals.sales)}</th><th>{formatMoney(totals.expenses)}</th><th>{formatMoney(totals.sales - totals.expenses)}</th></tr></tfoot></table></div>;
+}
+
+function MonthlyPnlTable({ days, loading, locale, formatMoney }: { days: DailyTotal[] | undefined; loading: boolean; locale: string; formatMoney: (amount: number) => string }) {
+  if (!days) return <EmptyPanel message={loading ? "Loading year-to-date statement…" : "This statement is not available for this account."} next="Year-to-date values use the workspace fiscal year and saved cashbook totals." />;
+  const monthTotals = new Map<string, { sales: number; expenses: number }>();
+  for (const day of days) {
+    const month = day.day.slice(0, 7);
+    const current = monthTotals.get(month) ?? { sales: 0, expenses: 0 };
+    current.sales += day.salesUgx;
+    current.expenses += day.expensesUgx;
+    monthTotals.set(month, current);
+  }
+  const rows = [...monthTotals.entries()].sort(([first], [second]) => first.localeCompare(second));
+  if (rows.length === 0) return <EmptyPanel message="No year-to-date activity has been recorded." next="Monthly results will appear here as sales and expenses are saved." />;
+  const totals = rows.reduce((result, [, month]) => ({ sales: result.sales + month.sales, expenses: result.expenses + month.expenses }), { sales: 0, expenses: 0 });
+  const monthLabel = (month: string) => new Intl.DateTimeFormat(locale, { month: "long", year: "numeric", timeZone: "UTC" }).format(new Date(`${month}-01T00:00:00.000Z`));
+  return <div className="table-scroll"><table className="data-table"><thead><tr><th>Month</th><th>Sales</th><th>Total expenses</th><th>Cashbook net</th></tr></thead><tbody>{rows.map(([month, values]) => <tr key={month}><td>{monthLabel(month)}</td><td>{formatMoney(values.sales)}</td><td>{formatMoney(values.expenses)}</td><td>{formatMoney(values.sales - values.expenses)}</td></tr>)}</tbody><tfoot><tr><th>Year to date</th><th>{formatMoney(totals.sales)}</th><th>{formatMoney(totals.expenses)}</th><th>{formatMoney(totals.sales - totals.expenses)}</th></tr></tfoot></table></div>;
 }
 
 function ChartPanel({ summary, title, message, currency, scale, locale }: { summary: { days: { day: string; salesUgx: number; expensesUgx: number }[] } | null; title: string; message: string; currency: string; scale: number; locale: string }) {

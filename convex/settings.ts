@@ -333,6 +333,10 @@ export const acceptInvite = mutation({
     if (invite.email.toLowerCase() !== user.email.toLowerCase()) throw new Error("Sign in using the invited email address.");
     const existing = await ctx.db.query("memberships").withIndex("by_business_and_user", q => q.eq("businessId", invite.businessId).eq("userId", userId)).unique();
     if (existing?.active) throw new Error("You already have access to this workspace.");
+    const currentMemberships = await ctx.db.query("memberships").withIndex("by_user", q => q.eq("userId", userId)).collect();
+    if (currentMemberships.some(membership => membership.active && membership.businessId !== invite.businessId)) {
+      throw new Error("This account already has an active workspace. Sign in with another account or ask the current workspace owner to deactivate your access first.");
+    }
     if (existing) await ctx.db.patch("memberships", existing._id, { active: true, role: invite.role });
     else await ctx.db.insert("memberships", { businessId: invite.businessId, userId, role: invite.role, active: true, createdAt: Date.now() });
     await ctx.db.patch("invitations", invite._id, { active: false, acceptedAt: Date.now() });
