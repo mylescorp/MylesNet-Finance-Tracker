@@ -85,7 +85,10 @@ export function CsvImportPanel() {
         reportSummary = JSON.stringify({ summary: parsedReport.summary, paymentMethods: parsedReport.paymentMethods, dailyRevenue: parsedReport.dailyRevenue, dailyUsage: parsedReport.dailyUsage, routers: parsedReport.routers });
         if (reportSummary.length > 60_000) throw new Error("Centipid report metadata is too large to archive; no rows were imported.");
       }
-      const importIdentity = isReport ? { type: "centipid_analytics" } : { type: "cashbook", mapping, kind, defaultAccount, currency: settings?.access === "ready" ? settings.currency : "" };
+      const importIdentity: Record<string, unknown> = isReport ? { type: "centipid_analytics" } : { type: "cashbook", mapping, currency: settings?.access === "ready" ? settings.currency : "" };
+      if (!isReport && mapping.kind < 0) importIdentity.kind = kind;
+      const hasBlankMappedAccount = mapping.account < 0 || csvRows.slice(1).filter(row => row.some(cell => cell.trim())).some(row => !(row[mapping.account]?.trim()));
+      if (!isReport && hasBlankMappedAccount) importIdentity.defaultAccount = defaultAccount;
       const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`${fileText}\0${JSON.stringify(importIdentity)}`));
       const sourceHash = [...new Uint8Array(digest)].map(x => x.toString(16).padStart(2, "0")).join("");
       const batch = await beginBatch({ sourceHash, fileName, importType: isReport ? "centipid_analytics" : "cashbook", totalRows: entries.length, ...(reportSummary ? { reportSummary } : {}) });
