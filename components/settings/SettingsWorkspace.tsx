@@ -145,12 +145,18 @@ type BalanceAdjustmentRow = {
   voidReason?: string;
 };
 function parseBalanceMinorUnits(value: string, decimalPlaces: number): number | null {
-  const match = /^(\d+)(?:\.(\d*))?$/.exec(value.trim());
-  if (!match || match[1].length > 16) return null;
-  const fraction = match[2] ?? "";
-  if (fraction.length > decimalPlaces && /[1-9]/.test(fraction.slice(decimalPlaces))) return null;
+  const match = /^(\d*)(?:\.(\d*))?(?:[eE]([+-]?\d+))?$/.exec(value.trim());
+  if (!match || (!match[1] && !match[2])) return null;
+  const exponent = Number(match[3] ?? 0);
+  if (!Number.isInteger(exponent) || Math.abs(exponent) > 100) return null;
+  const digits = `${match[1]}${match[2] ?? ""}`;
+  const decimalPoint = match[1].length + exponent;
+  const whole = decimalPoint <= 0 ? "0" : decimalPoint >= digits.length ? `${digits}${"0".repeat(decimalPoint - digits.length)}` : digits.slice(0, decimalPoint);
+  const fraction = decimalPoint <= 0 ? `${"0".repeat(-decimalPoint)}${digits}` : decimalPoint >= digits.length ? "" : digits.slice(decimalPoint);
+  const normalizedWhole = whole.replace(/^0+(?=\d)/, "");
+  if (normalizedWhole.length > 16 || (fraction.length > decimalPlaces && /[1-9]/.test(fraction.slice(decimalPlaces)))) return null;
   const fractionalMinor = fraction.slice(0, decimalPlaces).padEnd(decimalPlaces, "0");
-  const amount = Number(`${match[1]}${fractionalMinor}`);
+  const amount = Number(`${normalizedWhole}${fractionalMinor}`);
   return Number.isSafeInteger(amount) ? amount : null;
 }
 function BalanceAdjustmentManager({ settings }: { settings: SettingsOverview }) {
