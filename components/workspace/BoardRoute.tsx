@@ -8,6 +8,7 @@ import { api } from "@/convex/_generated/api";
 import { Card, WorkspaceTitle } from "@/components/AppShell";
 import { SettingsNav } from "@/components/settings/SettingsNav";
 import { EntryForm } from "@/components/workspace/EntryForm";
+import { OperationalRecordForm } from "@/components/workspace/OperationalRecordForm";
 import { formatBusinessDay } from "@/lib/format";
 
 type BoardSpec = {
@@ -263,14 +264,20 @@ export function BoardRoute({ route }: { route: string }) {
   const entries = useQuery(api.workspace.recentEntries, { limit: entryLimit, kind: entryKind, from: range.from, toExclusive: range.toExclusive });
   const yearRange = useMemo(() => rangeFor("Year", today, weekStartsOn, fiscalStartMonth), [today, weekStartsOn, fiscalStartMonth]);
   const yearSummary = useQuery(api.workspace.dashboardSummary, yearRange);
-  const weekRange = useMemo(() => rangeFor("Week", today, weekStartsOn, fiscalStartMonth), [today, weekStartsOn, fiscalStartMonth]);
-  const weekSummary = useQuery(api.workspace.dashboardSummary, screen?.title === "Daily Report" ? weekRange : "skip");
+  const trailingSevenRange = useMemo(() => {
+    const from = new Date(`${today}T00:00:00.000Z`);
+    from.setUTCDate(from.getUTCDate() - 6);
+    const to = new Date(`${today}T00:00:00.000Z`);
+    to.setUTCDate(to.getUTCDate() + 1);
+    return { from: from.toISOString().slice(0, 10), toExclusive: to.toISOString().slice(0, 10) };
+  }, [today]);
+  const trailingSevenSummary = useQuery(api.workspace.dashboardSummary, screen?.title === "Daily Report" ? trailingSevenRange : "skip");
 
   if (!screen) return <WorkspaceTitle eyebrow="MylesNet" title="Page not found" description="Choose a section from the navigation." />;
 
   const stats = summary?.access === "ready" ? summary : null;
   const yearDays = yearSummary?.access === "ready" ? yearSummary.days : undefined;
-  const weekDays = weekSummary?.access === "ready" ? weekSummary.days : undefined;
+  const weekDays = trailingSevenSummary?.access === "ready" ? trailingSevenSummary.days : undefined;
   const metricValues: Record<string, string> = {
     Sales: fmt(stats?.salesUgx),
     "Best day": stats ? fmt(Math.max(0, ...stats.days.map((day) => day.salesUgx))) : "—",
@@ -339,10 +346,10 @@ export function BoardRoute({ route }: { route: string }) {
         <div className="card-heading"><div><h2 className="card-title">{section.title}</h2><p className="card-subtitle">{section.detail}</p></div></div>
         {section.kind === "table" && (screen.title === "Sales" || screen.title === "Expenses") ? (
           hasRecordData ? <div className="table-scroll"><table className="data-table"><thead><tr><th>Date</th><th>Type</th><th>Category</th><th>Account</th><th>Amount</th><th>Status</th></tr></thead><tbody>{selectedEntries.map((entry) => <tr key={entry._id}><td>{fmtDate(entry.occurredOn)}</td><td>{entry.kind}</td><td>{entry.category}</td><td>{entry.account === "cash" ? "Cash" : "Mobile money"}</td><td>{fmt(entry.amountUgx)}</td><td><span className={`status-chip ${entry.state === "posted" ? "status-ok" : "status-warning"}`}>{entry.state}</span></td></tr>)}</tbody></table></div> : <EmptyPanel message="No entries yet." next="Add an entry to populate this view. The design preview figures are examples, not live business data." />
-        ) : section.kind === "table" && screen.title === "Daily Report" ? <DailyHistoryTable days={weekDays} loading={weekSummary === undefined} formatDay={fmtDate} formatMoney={fmt} />
+        ) : section.kind === "table" && screen.title === "Daily Report" ? <DailyHistoryTable days={weekDays} today={today} loading={trailingSevenSummary === undefined} formatDay={fmtDate} formatMoney={fmt} />
           : section.kind === "table" && screen.title === "Monthly P&L" ? <MonthlyPnlTable days={yearDays} loading={yearSummary === undefined} locale={locale} formatMoney={fmt} />
           : section.kind === "chart" ? <ChartPanel summary={stats} title={section.title} message={section.detail} currency={currency} scale={currencyScale} locale={locale} />
-          : section.kind === "workflow" ? <WorkflowPanel screen={screen} section={section.title} />
+          : section.kind === "workflow" ? <WorkflowPanel screen={screen} section={section.title} currency={currency} scale={currencyScale} />
             : <EmptyPanel message={hasRecordData ? "Live records are available for the selected period." : "No records yet."} next={section.detail} />}
       </Card>)}
       {screen.title === "Sales" || screen.title === "Expenses" ? <Card className="board-section-card">
@@ -360,11 +367,19 @@ function EmptyPanel({ message, next }: { message: string; next: string }) {
 
 type DailyTotal = { day: string; salesUgx: number; expensesUgx: number };
 
-function DailyHistoryTable({ days, loading, formatDay, formatMoney }: { days: DailyTotal[] | undefined; loading: boolean; formatDay: (day: string) => string; formatMoney: (amount: number) => string }) {
-  if (!days) return <EmptyPanel message={loading ? "Loading daily activity…" : "Daily history is not available for this account."} next="This report uses saved cashbook totals for the current business week." />;
-  if (days.length === 0) return <EmptyPanel message="No daily activity has been recorded this week." next="Saved sales and expenses will appear here by business date." />;
-  const totals = days.reduce((result, day) => ({ sales: result.sales + day.salesUgx, expenses: result.expenses + day.expensesUgx }), { sales: 0, expenses: 0 });
-  return <div className="table-scroll"><table className="data-table"><thead><tr><th>Business date</th><th>Sales</th><th>Total expenses</th><th>Cashbook net</th></tr></thead><tbody>{days.map(day => <tr key={day.day}><td>{formatDay(day.day)}</td><td>{formatMoney(day.salesUgx)}</td><td>{formatMoney(day.expensesUgx)}</td><td>{formatMoney(day.salesUgx - day.expensesUgx)}</td></tr>)}</tbody><tfoot><tr><th>This week</th><th>{formatMoney(totals.sales)}</th><th>{formatMoney(totals.expenses)}</th><th>{formatMoney(totals.sales - totals.expenses)}</th></tr></tfoot></table></div>;
+function DailyHistoryTable({ days, today, loading, formatDay, formatMoney }: { days: DailyTotal[] | undefined; today: string; loading: boolean; formatDay: (day: string) => string; formatMoney: (amount: number) => string }) {
+  if (!days) return <EmptyPanel message={loading ? "Loading daily activity…" : "Daily history is not available for this account."} next="This report shows seven consecutive business dates ending today." />;
+  const byDate = new Map(days.map(day => [day.day, day]));
+  const start = new Date(`${today}T00:00:00.000Z`);
+  start.setUTCDate(start.getUTCDate() - 6);
+  const recentDays = Array.from({ length: 7 }, (_, index) => {
+    const date = new Date(start);
+    date.setUTCDate(date.getUTCDate() + index);
+    const key = date.toISOString().slice(0, 10);
+    return byDate.get(key) ?? { day: key, salesUgx: 0, expensesUgx: 0 };
+  });
+  const totals = recentDays.reduce((result, day) => ({ sales: result.sales + day.salesUgx, expenses: result.expenses + day.expensesUgx }), { sales: 0, expenses: 0 });
+  return <div className="table-scroll"><table className="data-table"><thead><tr><th>Business date</th><th>Sales</th><th>Total expenses</th><th>Cashbook net</th><th>Activity</th></tr></thead><tbody>{recentDays.map(day => <tr key={day.day}><td>{formatDay(day.day)}</td><td>{formatMoney(day.salesUgx)}</td><td>{formatMoney(day.expensesUgx)}</td><td>{formatMoney(day.salesUgx - day.expensesUgx)}</td><td>{byDate.has(day.day) ? "Recorded" : "No recorded activity"}</td></tr>)}</tbody><tfoot><tr><th>Last 7 days</th><th>{formatMoney(totals.sales)}</th><th>{formatMoney(totals.expenses)}</th><th>{formatMoney(totals.sales - totals.expenses)}</th><th /></tr></tfoot></table></div>;
 }
 
 function MonthlyPnlTable({ days, loading, locale, formatMoney }: { days: DailyTotal[] | undefined; loading: boolean; locale: string; formatMoney: (amount: number) => string }) {
@@ -401,8 +416,10 @@ function ChartPanel({ summary, title, message, currency, scale, locale }: { summ
   </>;
 }
 
-function WorkflowPanel({ screen, section }: { screen: BoardSpec; section: string }) {
+function WorkflowPanel({ screen, section, currency, scale }: { screen: BoardSpec; section: string; currency: string; scale: number }) {
   if (section === "Add an expense" || section === "Add a sale") return <div className="empty-state compact-empty"><strong>Entry capture is available above.</strong><span>Use the saved cashbook form so the balance and audit trail update together.</span></div>;
+  const recordKind = section === "Movement tracking status" ? "movement" : section === "Holdings tracking status" ? "holding" : section === "Loan tracking status" ? "loan" : section === "Bill tracking status" ? "bill" : null;
+  if (recordKind) return <OperationalRecordForm kind={recordKind} currency={currency} scale={scale} />;
   const settingsWorkflow = screen.settings || screen.title === "Reconcile";
   return <div className="workflow-callout"><span className="workflow-indicator" /><div><strong>{settingsWorkflow ? `${section} is not configured yet` : `${section} is not available yet`}</strong><p className="muted-note">{settingsWorkflow ? "Review the related Finance or Rules settings. This card does not create financial records." : "This workflow is a product roadmap item; it does not yet save records or change account balances."}</p>{settingsWorkflow && <Link href={screen.title === "Reconcile" ? "/settings/rules" : "/settings/finance"} className="text-link">Review related settings →</Link>}</div></div>;
 }

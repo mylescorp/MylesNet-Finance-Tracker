@@ -405,6 +405,72 @@ export const searchEntries = query({
   },
 });
 
+const operationalKind = v.union(v.literal("movement"), v.literal("holding"), v.literal("loan"), v.literal("bill"));
+
+export const operationalRecords = query({
+  args: { kind: operationalKind },
+  returns: v.array(v.object({
+    _id: v.id("operationalRecords"), kind: operationalKind, title: v.string(), amountUgx: v.number(),
+    occurredOn: v.string(), account: v.optional(v.union(v.literal("cash"), v.literal("mobile_money"))),
+    destinationAccount: v.optional(v.union(v.literal("cash"), v.literal("mobile_money"))),
+    movementType: v.optional(v.union(v.literal("transfer"), v.literal("withdrawal"))),
+    cadence: v.optional(v.union(v.literal("weekly"), v.literal("monthly"), v.literal("quarterly"), v.literal("annually"))),
+    note: v.string(),
+  })),
+  handler: async (ctx, args) => {
+    const current = await getMembership(ctx);
+    if (!current || current.membership.role === "partner") return [];
+    return (await ctx.db.query("operationalRecords").withIndex("by_business_and_kind_and_date", q => q.eq("businessId", current.business._id).eq("kind", args.kind)).order("desc").take(200))
+      .map(({ _id, kind, title, amountUgx, occurredOn, account, destinationAccount, movementType, cadence, note }) => ({ _id, kind, title, amountUgx, occurredOn, account, destinationAccount, movementType, cadence, note }));
+  },
+});
+
+export const createOperationalRecord = mutation({
+  args: {
+    kind: operationalKind, title: v.string(), amountUgx: v.number(), occurredOn: v.string(),
+    account: v.optional(v.union(v.literal("cash"), v.literal("mobile_money"))),
+    destinationAccount: v.optional(v.union(v.literal("cash"), v.literal("mobile_money"))),
+    movementType: v.optional(v.union(v.literal("transfer"), v.literal("withdrawal"))),
+    cadence: v.optional(v.union(v.literal("weekly"), v.literal("monthly"), v.literal("quarterly"), v.literal("annually"))),
+    note: v.string(), idempotencyKey: v.string(),
+  },
+  returns: v.id("operationalRecords"),
+  handler: async (ctx, args) => {
+    const current = await getMembership(ctx);
+    if (!current || current.membership.role === "partner") throw new Error("Workspace access is required to save this record.");
+    if (!isIsoDay(args.occurredOn)) throw new Error("Choose a valid business date.");
+    if (!Number.isSafeInteger(args.amountUgx) || args.amountUgx <= 0) throw new Error(`Amount must be a positive whole minor-unit amount in ${current.business.currency}.`);
+    const title = args.title.trim();
+    const note = args.note.trim();
+    if (title.length < 2 || title.length > 100 || note.length > 300) throw new Error("Enter a title of 2–100 characters and a note of at most 300 characters.");
+    if (args.idempotencyKey.length < 16 || args.idempotencyKey.length > 120) throw new Error("This request could not be verified. Try again.");
+    const existing = await ctx.db.query("operationalRecords").withIndex("by_business_and_idempotency", q => q.eq("businessId", current.business._id).eq("idempotencyKey", args.idempotencyKey)).unique();
+    if (existing) {
+      const isSameRequest = existing.kind === args.kind && existing.title === title && existing.amountUgx === args.amountUgx && existing.occurredOn === args.occurredOn && existing.account === args.account && existing.destinationAccount === args.destinationAccount && existing.movementType === args.movementType && existing.cadence === args.cadence && existing.note === note;
+      if (!isSameRequest) throw new Error("This request key was already used for another record.");
+      return existing._id;
+    }
+    if (args.kind === "movement") {
+      if (!args.account || !args.movementType || (args.movementType === "transfer" && (!args.destinationAccount || args.destinationAccount === args.account))) throw new Error("Choose a source account and a different destination for transfers.");
+      const source = await ctx.db.query("accountBalances").withIndex("by_business_and_account", q => q.eq("businessId", current.business._id).eq("account", args.account!)).unique();
+      if (args.movementType === "withdrawal" && (source?.balanceUgx ?? 0) < args.amountUgx) throw new Error("The withdrawal is larger than the available account balance.");
+      if (args.movementType === "withdrawal") {
+        if (source) await ctx.db.patch("accountBalances", source._id, { balanceUgx: addSafeInteger(source.balanceUgx, -args.amountUgx, "Account balance"), updatedAt: Date.now() });
+      } else {
+        const destination = await ctx.db.query("accountBalances").withIndex("by_business_and_account", q => q.eq("businessId", current.business._id).eq("account", args.destinationAccount!)).unique();
+        if ((source?.balanceUgx ?? 0) < args.amountUgx) throw new Error("The transfer is larger than the available source balance.");
+        if (source) await ctx.db.patch("accountBalances", source._id, { balanceUgx: addSafeInteger(source.balanceUgx, -args.amountUgx, "Account balance"), updatedAt: Date.now() });
+        if (destination) await ctx.db.patch("accountBalances", destination._id, { balanceUgx: addSafeInteger(destination.balanceUgx, args.amountUgx, "Account balance"), updatedAt: Date.now() });
+        else await ctx.db.insert("accountBalances", { businessId: current.business._id, account: args.destinationAccount!, balanceUgx: args.amountUgx, updatedAt: Date.now() });
+      }
+    }
+    if (args.kind === "bill" && !args.cadence) throw new Error("Choose how often this bill recurs.");
+    const id = await ctx.db.insert("operationalRecords", { ...args, title, note, businessId: current.business._id, createdBy: current.userId, createdAt: Date.now() });
+    await ctx.db.insert("auditEvents", { businessId: current.business._id, actorId: current.userId, action: `record.${args.kind}.created`, entityType: args.kind, entityId: id, occurredAt: Date.now(), summary: `Created ${args.kind} record: ${title}.` });
+    return id;
+  },
+});
+
 export const createEntry = mutation({
   args: {
     kind: v.union(v.literal("sale"), v.literal("expense")),

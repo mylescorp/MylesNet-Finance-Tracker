@@ -87,6 +87,23 @@ export default defineSchema({
     .index("by_business_and_idempotency", ["businessId", "idempotencyKey"])
     .searchIndex("search_note", { searchField: "note", filterFields: ["businessId"] })
     .searchIndex("search_category", { searchField: "category", filterFields: ["businessId"] }),
+  operationalRecords: defineTable({
+    businessId: v.id("businesses"),
+    kind: v.union(v.literal("movement"), v.literal("holding"), v.literal("loan"), v.literal("bill")),
+    title: v.string(),
+    amountUgx: v.number(),
+    occurredOn: v.string(),
+    account: v.optional(v.union(v.literal("cash"), v.literal("mobile_money"))),
+    destinationAccount: v.optional(v.union(v.literal("cash"), v.literal("mobile_money"))),
+    movementType: v.optional(v.union(v.literal("transfer"), v.literal("withdrawal"))),
+    cadence: v.optional(v.union(v.literal("weekly"), v.literal("monthly"), v.literal("quarterly"), v.literal("annually"))),
+    note: v.string(),
+    idempotencyKey: v.string(),
+    createdBy: v.id("users"),
+    createdAt: v.number(),
+  })
+    .index("by_business_and_kind_and_date", ["businessId", "kind", "occurredOn"])
+    .index("by_business_and_idempotency", ["businessId", "idempotencyKey"]),
   accountBalances: defineTable({
     businessId: v.id("businesses"),
     account: v.union(v.literal("cash"), v.literal("mobile_money")),
