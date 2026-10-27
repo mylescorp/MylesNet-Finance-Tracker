@@ -4,6 +4,12 @@ import { internalMutation, mutation, query } from "./_generated/server";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { isIgnoredCentipidEvent } from "./centipidUtils";
 
+function addSafeInteger(left: number, right: number, label: string) {
+  const result = left + right;
+  if (!Number.isSafeInteger(result)) throw new ConvexError(`${label} exceeds the safe amount range.`);
+  return result;
+}
+
 async function owner(ctx: MutationCtx | QueryCtx) {
   const userId = await getAuthUserId(ctx);
   if (!userId) throw new ConvexError("Sign in before managing Centipid integration.");
@@ -112,14 +118,29 @@ export const processWebhook = internalMutation({
     const balance = await ctx.db.query("accountBalances").withIndex("by_business_and_account", q => q.eq("businessId", business._id).eq("account", account)).unique();
     const delta = entryKind === "sale" ? amountUgx : -amountUgx;
     if (balance) {
-      const next = balance.balanceUgx + delta;
-      if (!Number.isSafeInteger(next)) throw new ConvexError("Webhook account balance exceeds the safe amount range.");
+      const next = addSafeInteger(balance.balanceUgx, delta, "Webhook account balance");
       await ctx.db.patch("accountBalances", balance._id, { balanceUgx: next, updatedAt: now });
     } else await ctx.db.insert("accountBalances", { businessId: business._id, account, balanceUgx: delta, updatedAt: now });
     const entryId = await ctx.db.insert("entries", { businessId: business._id, kind: entryKind, amountUgx, occurredOn, account, category, note, source: "webhook", idempotencyKey, state: "posted", createdBy: business.createdBy, createdAt: now });
     const day = await ctx.db.query("dailyTotals").withIndex("by_business_and_day", q => q.eq("businessId", business._id).eq("day", occurredOn)).unique();
-    if (day) await ctx.db.patch("dailyTotals", day._id, { salesUgx: day.salesUgx + (entryKind === "sale" ? amountUgx : 0), expensesUgx: day.expensesUgx + (entryKind === "expense" ? amountUgx : 0), saleCount: day.saleCount + (entryKind === "sale" ? 1 : 0), expenseCount: day.expenseCount + (entryKind === "expense" ? 1 : 0) });
-    else await ctx.db.insert("dailyTotals", { businessId: business._id, day: occurredOn, salesUgx: entryKind === "sale" ? amountUgx : 0, expensesUgx: entryKind === "expense" ? amountUgx : 0, saleCount: entryKind === "sale" ? 1 : 0, expenseCount: entryKind === "expense" ? 1 : 0 });
+    const centipidMobileUgx = kind === "payment" ? amountUgx : 0;
+    const centipidVoucherUgx = kind === "voucher" ? amountUgx : 0;
+    if (day) await ctx.db.patch("dailyTotals", day._id, {
+      salesUgx: addSafeInteger(day.salesUgx, entryKind === "sale" ? amountUgx : 0, "Daily sales total"),
+      expensesUgx: addSafeInteger(day.expensesUgx, entryKind === "expense" ? amountUgx : 0, "Daily expenses total"),
+      saleCount: addSafeInteger(day.saleCount, entryKind === "sale" ? 1 : 0, "Daily sale count"),
+      expenseCount: addSafeInteger(day.expenseCount, entryKind === "expense" ? 1 : 0, "Daily expense count"),
+      centipidMobileUgx: addSafeInteger(day.centipidMobileUgx ?? 0, centipidMobileUgx, "Centipid mobile total"),
+      centipidVoucherUgx: addSafeInteger(day.centipidVoucherUgx ?? 0, centipidVoucherUgx, "Centipid voucher total"),
+    });
+    else await ctx.db.insert("dailyTotals", {
+      businessId: business._id, day: occurredOn,
+      salesUgx: entryKind === "sale" ? amountUgx : 0,
+      expensesUgx: entryKind === "expense" ? amountUgx : 0,
+      saleCount: entryKind === "sale" ? 1 : 0,
+      expenseCount: entryKind === "expense" ? 1 : 0,
+      centipidMobileUgx, centipidVoucherUgx,
+    });
     await ctx.db.insert("webhookReceipts", { businessId: business._id, eventKey: args.eventKey, event: args.event, status: "success", routed: kind, entryId, createdAt: now });
     await ctx.db.insert("auditEvents", { businessId: business._id, actorId: business.createdBy, action: "webhook.entry_created", entityType: "entry", entityId: entryId, occurredAt: now, summary: `Centipid ${kind} recorded · ${occurredOn} · ${category}.` });
     return { status: "success" as const, routed: kind };
