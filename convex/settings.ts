@@ -55,6 +55,8 @@ export const overview = query({
     if (current.membership.role === "partner") return { access: "restricted" as const, role: "partner" as const };
     const prefs = await ctx.db.query("workspacePreferences").withIndex("by_business", q => q.eq("businessId", current.business._id)).unique();
     const firstEntry = await ctx.db.query("entries").withIndex("by_business_and_date", q => q.eq("businessId", current.business._id)).first();
+    const firstOperationalRecord = await ctx.db.query("operationalRecords").withIndex("by_business_and_kind_and_date", q => q.eq("businessId", current.business._id)).first();
+    const firstMovement = await ctx.db.query("operationalRecords").withIndex("by_business_and_kind_and_date", q => q.eq("businessId", current.business._id).eq("kind", "movement")).first();
     const balances = await ctx.db.query("accountBalances").withIndex("by_business_and_account", q => q.eq("businessId", current.business._id)).take(2);
     const fallback = defaults();
     const digits = currencyMinorDigits(current.business.currency);
@@ -67,7 +69,8 @@ export const overview = query({
       currency: current.business.currency,
       currencyMinorDigits: digits,
       settingsUpdatedAt: prefs?.updatedAt ?? current.business.createdAt,
-      currencyLocked: Boolean(firstEntry || balances.some(b => (b.openingBalanceUgx ?? 0) !== 0)),
+      currencyLocked: Boolean(firstEntry || firstOperationalRecord || balances.some(b => (b.openingBalanceUgx ?? 0) !== 0)),
+      openingBalancesLocked: Boolean(firstEntry || firstMovement),
       cashOpeningBalance: (balances.find(b => b.account === "cash")?.openingBalanceUgx ?? 0) / scale,
       mobileOpeningBalance: (balances.find(b => b.account === "mobile_money")?.openingBalanceUgx ?? 0) / scale,
       timezone: current.business.timezone,
@@ -135,10 +138,11 @@ export const update = mutation({
     const weakDaySalesMinor = toMinorUnits(args.weakDaySalesUgx, scale);
     const monthlySalesTargetMinor = toMinorUnits(args.monthlySalesTargetUgx, scale);
     const monthlyExpenseWarningMinor = toMinorUnits(args.monthlyExpenseWarningUgx, scale);
+    const firstOperationalRecord = await ctx.db.query("operationalRecords").withIndex("by_business_and_kind_and_date", q => q.eq("businessId", current.business._id)).first();
     if (args.currency !== current.business.currency) {
       const firstEntry = await ctx.db.query("entries").withIndex("by_business_and_date", q => q.eq("businessId", current.business._id)).first();
       const balances = await ctx.db.query("accountBalances").withIndex("by_business_and_account", q => q.eq("businessId", current.business._id)).take(2);
-      if (firstEntry || balances.some(b => (b.openingBalanceUgx ?? 0) !== 0)) throw new Error("Currency is locked after the first opening balance or cashbook entry so existing amounts are never relabelled. Contact support for a reviewed currency migration.");
+      if (firstEntry || firstOperationalRecord || balances.some(b => (b.openingBalanceUgx ?? 0) !== 0)) throw new Error("Currency is locked after a financial record or opening balance so saved amounts are never relabelled. Contact support for a reviewed currency migration.");
     }
     const businessPatch = {
       name: businessName, countryCode: args.countryCode, currency: args.currency,
@@ -146,13 +150,14 @@ export const update = mutation({
     };
     await ctx.db.patch("businesses", current.business._id, businessPatch);
     const firstEntry = await ctx.db.query("entries").withIndex("by_business_and_date", q => q.eq("businessId", current.business._id)).first();
+    const firstMovement = await ctx.db.query("operationalRecords").withIndex("by_business_and_kind_and_date", q => q.eq("businessId", current.business._id).eq("kind", "movement")).first();
     const currentBalances = await ctx.db.query("accountBalances").withIndex("by_business_and_account", q => q.eq("businessId", current.business._id)).take(2);
     const cashDoc = currentBalances.find(b => b.account === "cash");
     const mobileDoc = currentBalances.find(b => b.account === "mobile_money");
-    if (firstEntry && (cashOpeningMinor !== (cashDoc?.openingBalanceUgx ?? 0) || mobileOpeningMinor !== (mobileDoc?.openingBalanceUgx ?? 0))) {
-      throw new Error("Opening balances are locked after the first transaction. Use an auditable adjustment entry instead.");
+    if ((firstEntry || firstMovement) && (cashOpeningMinor !== (cashDoc?.openingBalanceUgx ?? 0) || mobileOpeningMinor !== (mobileDoc?.openingBalanceUgx ?? 0))) {
+      throw new Error("Opening balances are locked after the first transaction or account movement. Use an auditable adjustment entry instead.");
     }
-    if (!firstEntry) {
+    if (!firstEntry && !firstMovement) {
       const now = Date.now();
       if (cashDoc) await ctx.db.patch("accountBalances", cashDoc._id, { balanceUgx: cashOpeningMinor, openingBalanceUgx: cashOpeningMinor, updatedAt: now });
       else if (cashOpeningMinor !== 0) await ctx.db.insert("accountBalances", { businessId: current.business._id, account: "cash", balanceUgx: cashOpeningMinor, openingBalanceUgx: cashOpeningMinor, updatedAt: now });

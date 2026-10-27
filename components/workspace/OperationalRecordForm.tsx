@@ -6,12 +6,14 @@ import { api } from "@/convex/_generated/api";
 
 type RecordKind = "movement" | "holding" | "loan" | "bill";
 
-export function OperationalRecordForm({ kind, currency, scale = 1 }: { kind: RecordKind; currency: string; scale?: number }) {
+export function OperationalRecordForm({ kind, currency, scale = 1, businessDay }: { kind: RecordKind; currency: string; scale?: number; businessDay: string }) {
   const save = useMutation(api.workspace.createOperationalRecord);
   const records = useQuery(api.workspace.operationalRecords, { kind });
   const [title, setTitle] = useState("");
   const [amount, setAmount] = useState("");
-  const [occurredOn, setOccurredOn] = useState(() => new Date().toISOString().slice(0, 10));
+  const [occurredOn, setOccurredOn] = useState("");
+  const [dateEdited, setDateEdited] = useState(false);
+  const businessDate = dateEdited ? occurredOn : businessDay;
   const [account, setAccount] = useState<"cash" | "mobile_money">("cash");
   const [destinationAccount, setDestinationAccount] = useState<"cash" | "mobile_money">("mobile_money");
   const [movementType, setMovementType] = useState<"transfer" | "withdrawal">("transfer");
@@ -26,12 +28,13 @@ export function OperationalRecordForm({ kind, currency, scale = 1 }: { kind: Rec
     event.preventDefault();
     setBusy(true); setFeedback(null);
     try {
-      const amountMinor = Number(amount) * scale;
-      if (!Number.isSafeInteger(amountMinor) || amountMinor <= 0) throw new Error("Enter an amount using the selected currency’s supported decimal places.");
+      const scaledAmount = Number(amount) * scale;
+      const roundedAmount = Math.round(scaledAmount);
+      if (!Number.isSafeInteger(roundedAmount) || roundedAmount <= 0 || Math.abs(scaledAmount - roundedAmount) > 1e-7) throw new Error("Enter an amount using the selected currency’s supported decimal places.");
       requestKey.current ??= crypto.randomUUID();
-      await save({ kind, title, amountUgx: amountMinor, occurredOn, account: kind === "movement" ? account : undefined, destinationAccount: kind === "movement" && movementType === "transfer" ? destinationAccount : undefined, movementType: kind === "movement" ? movementType : undefined, cadence: kind === "bill" ? cadence : undefined, note, idempotencyKey: requestKey.current });
+      await save({ kind, title, amountUgx: roundedAmount, occurredOn: businessDate, account: kind === "movement" ? account : undefined, destinationAccount: kind === "movement" && movementType === "transfer" ? destinationAccount : undefined, movementType: kind === "movement" ? movementType : undefined, cadence: kind === "bill" ? cadence : undefined, note, idempotencyKey: requestKey.current });
       requestKey.current = null;
-      setTitle(""); setAmount(""); setNote("");
+      setTitle(""); setAmount(""); setNote(""); setDateEdited(false); setOccurredOn("");
       setFeedback({ message: `${titleFor} saved.`, error: false });
     } catch (error) {
       setFeedback({ message: error instanceof Error ? error.message : "Could not save this record.", error: true });
@@ -42,7 +45,7 @@ export function OperationalRecordForm({ kind, currency, scale = 1 }: { kind: Rec
     <form className="form-layout" onSubmit={event => void submit(event)}>
       <label className="field"><span>{kind === "holding" ? "Holding name" : kind === "loan" ? "Lender or loan name" : kind === "bill" ? "Bill name" : "Movement description"}</span><input value={title} onChange={event => { requestKey.current = null; setTitle(event.target.value); }} minLength={2} maxLength={100} required /></label>
       <label className="field"><span>{kind === "holding" ? "Current value" : kind === "loan" ? "Principal amount" : "Amount"} ({currency})</span><input type="number" min="0" step={1 / scale} value={amount} onChange={event => { requestKey.current = null; setAmount(event.target.value); }} required /></label>
-      <label className="field"><span>{kind === "bill" ? "Next due date" : "Business date"}</span><input type="date" value={occurredOn} onChange={event => { requestKey.current = null; setOccurredOn(event.target.value); }} required /></label>
+      <label className="field"><span>{kind === "bill" ? "Next due date" : "Business date"}</span><input type="date" value={businessDate} onChange={event => { requestKey.current = null; setDateEdited(true); setOccurredOn(event.target.value); }} required /></label>
       {kind === "movement" && <>
         <label className="field"><span>Movement type</span><select value={movementType} onChange={event => { requestKey.current = null; setMovementType(event.target.value as typeof movementType); }}><option value="transfer">Transfer between accounts</option><option value="withdrawal">Withdrawal from account</option></select></label>
         <label className="field"><span>{movementType === "transfer" ? "From account" : "Account"}</span><select value={account} onChange={event => { requestKey.current = null; setAccount(event.target.value as typeof account); }}><option value="cash">Cash</option><option value="mobile_money">Mobile money</option></select></label>
