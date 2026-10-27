@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { Card, WorkspaceTitle } from "@/components/AppShell";
+import { SettingsNav } from "@/components/settings/SettingsNav";
 
 const screens: Record<string, { title: string; section: string; description: string; source: string }> = {
   analytics: { title: "Analytics", section: "Reports", description: "Explore performance trends and compare reporting periods.", source: "02-Analytics" },
@@ -20,12 +21,6 @@ const screens: Record<string, { title: string; section: string; description: str
   "settings/releases": { title: "Releases", section: "Settings", description: "Review application version and release notes.", source: "18-Settings-Releases" },
 };
 
-const settingLinks = [
-  ["General", "/settings/general"], ["Finance", "/settings/finance"],
-  ["Rules", "/settings/rules"], ["Data", "/settings/data"],
-  ["Access", "/settings/access"], ["Releases", "/settings/releases"],
-];
-
 export default async function WorkspaceScreen({ params }: { params: Promise<{ segments: string[] }> }) {
   const { segments } = await params;
   const key = segments.join("/");
@@ -34,7 +29,7 @@ export default async function WorkspaceScreen({ params }: { params: Promise<{ se
   const settings = key.startsWith("settings/");
   return <>
     <WorkspaceTitle eyebrow={screen.section} title={screen.title} description={screen.description} />
-    {settings && <nav className="settings-links" aria-label="Settings sections">{settingLinks.map(([label, href]) => <Link key={href} href={href} aria-current={href === `/${key}` ? "page" : undefined}>{label}</Link>)}</nav>}
+    {settings && <SettingsNav current={`/${key}`} />}
     <Card>
       <div className="eyebrow">Screen foundation · Board {screen.source}</div>
       <h2 className="card-title" style={{ marginTop: 10 }}>This workspace view is being connected to live records.</h2>

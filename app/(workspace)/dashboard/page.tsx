@@ -9,16 +9,19 @@ import { api } from "@/convex/_generated/api";
 import { Card, WorkspaceTitle } from "@/components/AppShell";
 import { OwnerSetup } from "@/components/workspace/OwnerSetup";
 
-function todayKey() {
-  return new Intl.DateTimeFormat("en-CA", { timeZone: "Africa/Kampala", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
+function todayKey(timezone: string) {
+  return new Intl.DateTimeFormat("en-CA", { timeZone: timezone, year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
 }
 function money(amount: number) {
   return new Intl.NumberFormat("en-UG", { maximumFractionDigits: 0 }).format(amount);
 }
-function periodRange(period: string, today: string) {
+function periodRange(period: string, today: string, weekStartsOn: "monday" | "sunday") {
   const date = new Date(`${today}T00:00:00Z`);
   let start = new Date(date);
-  if (period === "week") start.setUTCDate(date.getUTCDate() - ((date.getUTCDay() + 6) % 7));
+  if (period === "week") {
+    const offset = weekStartsOn === "sunday" ? date.getUTCDay() : (date.getUTCDay() + 6) % 7;
+    start.setUTCDate(date.getUTCDate() - offset);
+  }
   if (period === "month") start = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), 1));
   if (period === "year") start = new Date(Date.UTC(date.getUTCFullYear(), 0, 1));
   const from = start.toISOString().slice(0, 10);
@@ -28,9 +31,12 @@ function periodRange(period: string, today: string) {
 
 export default function DashboardPage() {
   const [period, setPeriod] = useState("month");
-  const [businessDay, setBusinessDay] = useState(todayKey);
+  const settings = useQuery(api.workspace.businessSettings, {});
+  const timezone = settings?.access === "ready" ? settings.timezone : "Africa/Kampala";
+  const weekStartsOn = settings?.access === "ready" ? settings.weekStartsOn : "monday";
+  const [businessDay, setBusinessDay] = useState(() => todayKey("Africa/Kampala"));
   useEffect(() => {
-    const refreshBusinessDay = () => setBusinessDay(todayKey());
+    const refreshBusinessDay = () => setBusinessDay(todayKey(timezone));
     refreshBusinessDay();
     const timer = window.setInterval(refreshBusinessDay, 30_000);
     window.addEventListener("focus", refreshBusinessDay);
@@ -40,10 +46,10 @@ export default function DashboardPage() {
       window.removeEventListener("focus", refreshBusinessDay);
       document.removeEventListener("visibilitychange", refreshBusinessDay);
     };
-  }, []);
+  }, [timezone]);
   const range = useMemo(
-    () => periodRange(period, businessDay),
-    [period, businessDay],
+    () => periodRange(period, businessDay, weekStartsOn),
+    [period, businessDay, weekStartsOn],
   );
   const summary = useQuery(api.workspace.dashboardSummary, range);
   const recent = useQuery(api.workspace.recentEntries, { limit: 8 });

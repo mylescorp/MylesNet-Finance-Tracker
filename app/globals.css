@@ -85,6 +85,10 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .settings-links { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:18px; }
 .settings-links a { border:1px solid var(--mn-line); background:var(--mn-card); border-radius:8px; padding:9px 12px; color:var(--mn-muted); }
 .settings-links a[aria-current="page"] { color:var(--mn-accent); border-color:var(--mn-accent); background:var(--mn-accent-bg); }
+.settings-stack { display:grid; gap:16px; }
+.settings-card .form-layout { max-width:none; }
+.settings-note-card { margin-top:16px; }
+.settings-readonly-note { margin:16px 0 0; }
 .signin-frame { min-height:100vh; display:grid; place-items:center; padding:24px; }
 .signin-card { width:min(100%,420px); padding:32px; }
 .signin-logo { width:190px; height:58px; object-fit:contain; object-position:left; margin-bottom:24px; }
