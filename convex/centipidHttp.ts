@@ -73,19 +73,24 @@ export const webhook = httpAction(async (ctx, request) => {
   const transactionIdRaw = asText(pick(body, payload, ["transaction_id", "transaction", "reference", "ref", "receipt", "receipt_number", "payment_id", "id"])).slice(0, 120);
   const transactionId = maskPII(transactionIdRaw);
   const rawHash = await hash(raw || JSON.stringify(payload));
-  const eventGroup = kind === "expense" ? "expense" : "sale";
+  const eventGroup = kind === "expense" ? "expense" : kind === "ignored" || amount <= 0 ? `ignored:${event}` : "sale";
   const eventKey = await hash(transactionIdRaw ? `${eventGroup}:${transactionIdRaw}` : rawHash);
   const paymentMethod = maskPII(asText(pick(body, payload, ["gateway", "payment_method", "method", "provider"]) || (kind === "voucher" ? "Voucher Redemption" : "Centipid System")).slice(0, 120));
   let description = maskPII(asText(pick(body, payload, ["description", "note"])).slice(0, 240));
   if (kind === "voucher") description = `Voucher Redeemed: ${maskPII(asText(pick(body, payload, ["code", "voucher_code", "serial", "voucher"]))) || "Hotspot Voucher"}`;
   else if (!description) description = "Automated billing sync via Centipid Webhook";
   const customer = maskCustomer(asText(pick(body, payload, ["customer_email", "subscriber", "customer", "user", "username", "phone", "msisdn", "email"])) || "Unknown").slice(0, 100);
-  const result = await ctx.runMutation(internal.centipid.processWebhook, {
-    tokenHash, eventKey, rawHash, event, kind, amount, transactionId, paymentMethod, description, customer,
-    category: maskPII(asText(pick(body, payload, ["category", "expense_category", "type"])).slice(0, 100)),
-    account: asText(pick(body, payload, ["account", "paid_from", "source"])).slice(0, 100),
-    paidTo: maskPII(asText(pick(body, payload, ["paid_to", "vendor", "payee", "title", "name", "description"])).slice(0, 100)),
-  });
+  let result;
+  try {
+    result = await ctx.runMutation(internal.centipid.processWebhook, {
+      tokenHash, eventKey, rawHash, event, kind, amount, transactionId, paymentMethod, description, customer,
+      category: maskPII(asText(pick(body, payload, ["category", "expense_category", "type"])).slice(0, 100)),
+      account: asText(pick(body, payload, ["account", "paid_from", "source"])).slice(0, 100),
+      paidTo: maskPII(asText(pick(body, payload, ["paid_to", "vendor", "payee", "title", "name", "description"])).slice(0, 100)),
+    });
+  } catch {
+    return json({ status: "error", message: "Processing failed" });
+  }
   if (result.status === "success") return json({ status: "success", routed: result.routed });
   if (result.status === "ignored") return json({ status: "ignored", event: result.event ?? event });
   if (result.status === "duplicate") return json({ status: "duplicate" });

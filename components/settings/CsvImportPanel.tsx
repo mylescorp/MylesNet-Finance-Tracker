@@ -61,7 +61,7 @@ export function CsvImportPanel() {
         else throw new Error(`Row ${index + 2}: unsupported entry kind “${value(mapping.kind)}”. Use sale or expense.`);
       }
       const rawAccount = value(mapping.account).trim().toLowerCase().replaceAll(" ", "_");
-      const rowAccount = mapping.account < 0 || !rawAccount ? defaultAccount : rawAccount === "cash" ? "cash" : ["mobile_money", "mobile", "momo", "mobilemoney"].includes(rawAccount) ? "mobile_money" : null;
+      const rowAccount = mapping.account < 0 || !rawAccount ? defaultAccount : /cash/.test(rawAccount) ? "cash" : /mobile|momo|mobilemoney|mpesa|airtel|centipid/.test(rawAccount) ? "mobile_money" : null;
       if (!rowAccount) throw new Error(`Row ${index + 2}: account must be cash or mobile_money.`);
       const amountUgx = parseAmount(value(mapping.amount), 10 ** settings.currencyMinorDigits);
       const category = value(mapping.category).trim();

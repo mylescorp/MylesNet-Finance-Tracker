@@ -68,7 +68,7 @@ export const processWebhook = internalMutation({
     const business = await ctx.db.get("businesses", integration.businessId);
     if (!business) return { status: "unauthorized" as const };
     const prior = await ctx.db.query("webhookReceipts").withIndex("by_business_and_event", q => q.eq("businessId", business._id).eq("eventKey", args.eventKey)).unique();
-    if (prior) return { status: "duplicate" as const };
+    if (prior) return prior.status === "ignored" ? { status: "ignored" as const, event: prior.event } : { status: "duplicate" as const };
 
     const prefs = await ctx.db.query("workspacePreferences").withIndex("by_business", q => q.eq("businessId", business._id)).unique();
     const ignoredEvent = isIgnoredCentipidEvent(args.event);
