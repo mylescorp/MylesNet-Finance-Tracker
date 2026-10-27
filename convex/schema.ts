@@ -10,6 +10,14 @@ const role = v.union(
 
 export default defineSchema({
   ...authTables,
+  userProfiles: defineTable({
+    userId: v.id("users"),
+    displayName: v.optional(v.string()),
+    phone: v.optional(v.string()),
+    photoId: v.optional(v.id("_storage")),
+    photoRemoved: v.optional(v.boolean()),
+    updatedAt: v.number(),
+  }).index("by_user", ["userId"]),
   businesses: defineTable({
     name: v.string(),
     currency: v.string(),
