@@ -342,7 +342,7 @@ export const recentEntries = query({
       kind: v.union(v.literal("sale"), v.literal("expense")),
       amountUgx: v.number(),
       occurredOn: v.string(),
-      account: v.union(v.literal("cash"), v.literal("mobile_money")),
+      account: v.union(v.literal("cash"), v.literal("mobile_money"), v.literal("unallocated")),
       category: v.string(),
       note: v.string(),
       state: v.union(v.literal("posted"), v.literal("void")),
@@ -661,7 +661,7 @@ export const voidEntry = mutation({
         "Daily expense count",
       ),
     });
-    await applyAccountEffect(
+    if (entry.account !== "unallocated") await applyAccountEffect(
       ctx,
       current.business._id,
       entry.account,
