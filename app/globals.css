@@ -18,6 +18,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .sidebar-brand img { display:block; object-fit:contain; object-position:left center; width:153px; height:46px; }
 .sidebar-collapse-button { flex:none; width:30px; height:30px; display:grid; place-items:center; border:1px solid transparent; border-radius:8px; color:var(--mn-muted); background:transparent; cursor:pointer; transition:background var(--mn-dur-fast), color var(--mn-dur-fast), border-color var(--mn-dur-fast); }
 .sidebar-collapse-button:hover { color:var(--mn-ink); background:var(--mn-inset); border-color:var(--mn-line); }
+.sidebar-mobile-close { display:none; }
 .sidebar-workspace { width:100%; display:flex; align-items:center; gap:10px; min-height:54px; padding:8px 9px; border:1px solid var(--mn-line); border-radius:11px; color:var(--mn-ink); background:var(--mn-bg); text-align:left; cursor:default; }
 .sidebar-workspace-mark { flex:none; width:34px; height:34px; display:grid; place-items:center; border-radius:9px; color:var(--mn-on-accent); background:var(--mn-accent); font-weight:700; font-size:15px; }
 .sidebar-workspace-copy { display:flex; flex-direction:column; min-width:0; gap:3px; }
@@ -148,11 +149,13 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 }
 @media(max-width:760px) {
   .app-frame,.app-frame-collapsed { display:block; }
-  .app-sidebar,.app-frame-collapsed .app-sidebar { position:fixed; top:0; bottom:0; left:0; width:min(292px,calc(100vw - 52px)); height:100dvh; padding:16px 12px 14px; transform:translateX(-102%); transition:transform var(--mn-dur-slow) var(--mn-ease-standard); box-shadow:none; }
-  .app-frame-menu-open .app-sidebar { transform:translateX(0); box-shadow:var(--mn-shadow-menu); }
+  .app-sidebar,.app-frame-collapsed .app-sidebar { position:fixed; top:0; bottom:0; left:0; z-index:40; width:min(292px,calc(100vw - 52px)); height:100dvh; padding:16px 12px 14px; transform:translateX(-102%); visibility:hidden; transition:transform var(--mn-dur-slow) var(--mn-ease-standard), visibility 0s linear var(--mn-dur-slow); box-shadow:none; }
+  .app-frame-menu-open .app-sidebar { transform:translateX(0); visibility:visible; transition:transform var(--mn-dur-slow) var(--mn-ease-standard), visibility 0s; box-shadow:var(--mn-shadow-menu); }
   .app-frame-collapsed .sidebar-brand { display:flex; }
   .app-frame-collapsed .sidebar-brand-row { justify-content:space-between; }
   .app-frame-collapsed .sidebar-collapse-button,.sidebar-collapse-button { display:none; }
+  .sidebar-mobile-close { flex:none; width:38px; height:38px; display:grid; place-items:center; border:1px solid var(--mn-line); border-radius:9px; color:var(--mn-muted); background:var(--mn-card); cursor:pointer; }
+  .sidebar-mobile-close:hover { color:var(--mn-ink); background:var(--mn-inset); }
   .app-frame-collapsed .sidebar-workspace { justify-content:flex-start; padding:8px 9px; }
   .app-frame-collapsed .sidebar-workspace-copy,.app-frame-collapsed .sidebar-workspace-chevron,.app-frame-collapsed .sidebar-group-label,.app-frame-collapsed .sidebar-link-label,.app-frame-collapsed .sidebar-support span:last-child { display:flex; }
   .app-frame-collapsed .sidebar-group-label { display:block; }
@@ -161,7 +164,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .app-frame-collapsed .sidebar-support { justify-content:flex-start; padding:4px 8px; }
   .app-frame-collapsed .sidebar-quick-add { min-height:42px; padding:0 12px; }
   .app-frame-collapsed .sidebar-quick-add .sidebar-link-label { display:block; }
-  .sidebar-backdrop { position:fixed; inset:0; z-index:calc(var(--mn-z-sidebar) - 1); display:block; border:0; background:rgba(12,15,20,.44); backdrop-filter:blur(2px); animation:sidebar-backdrop-in var(--mn-dur-base) ease-out; }
+  .sidebar-backdrop { position:fixed; inset:0; z-index:39; display:block; border:0; background:rgba(12,15,20,.44); backdrop-filter:blur(2px); animation:sidebar-backdrop-in var(--mn-dur-base) ease-out; }
   .app-header { height:60px; padding:0 14px; gap:10px; }
   .mobile-menu-button { display:grid; place-items:center; width:38px; height:38px; padding:0; }
   .header-actions { margin-left:auto; gap:10px; }

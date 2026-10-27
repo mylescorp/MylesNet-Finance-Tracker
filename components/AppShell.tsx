@@ -10,7 +10,7 @@ import {
 import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { ReactNode, useEffect, useState } from "react";
+import { ReactNode, useEffect, useRef, useState } from "react";
 import { api } from "@/convex/_generated/api";
 
 const navGroups = [
@@ -43,22 +43,52 @@ export function AppShell({ children }: { children: ReactNode }) {
   const access = useQuery(api.workspace.currentAccess, {});
   const [mobileOpen, setMobileOpen] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
+  const menuButtonRef = useRef<HTMLButtonElement>(null);
+  const sidebarCloseRef = useRef<HTMLButtonElement>(null);
   const accountLabel = access?.access === "ready" ? access.businessName : "My account";
   const activePage = navGroups.flatMap(group => group.items).find(item => pathname === item.href || pathname.startsWith(`${item.href}/`));
+  const settingsPageLabels: Record<string, string> = {
+    general: "General settings", finance: "Finance settings", rules: "Rules",
+    data: "Data", access: "Access", releases: "Releases",
+  };
+  const routePageLabel = activePage?.label
+    ?? (pathname.startsWith("/settings/") ? settingsPageLabels[pathname.split("/")[2]] ?? "Settings" : undefined)
+    ?? (pathname === "/issues" ? "Needs attention" : "Workspace");
   useEffect(() => {
-    if (!mobileOpen) return;
-    const closeOnEscape = (event: KeyboardEvent) => { if (event.key === "Escape") setMobileOpen(false); };
+    const media = window.matchMedia("(max-width: 760px)");
+    if (!mobileOpen || !media.matches) return;
+    const previousOverflow = document.body.style.overflow;
+    const menuButton = menuButtonRef.current;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setMobileOpen(false);
+      if (event.key !== "Tab") return;
+      const drawer = document.getElementById("workspace-sidebar");
+      const focusable = drawer?.querySelectorAll<HTMLElement>('a[href], button:not([disabled]), [tabindex]:not([tabindex="-1"])');
+      if (!focusable?.length) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && (document.activeElement === first || !drawer?.contains(document.activeElement))) {
+        event.preventDefault(); last.focus();
+      } else if (!event.shiftKey && (document.activeElement === last || !drawer?.contains(document.activeElement))) {
+        event.preventDefault(); first.focus();
+      }
+    };
+    const closeOnDesktop = (event: MediaQueryListEvent) => { if (!event.matches) setMobileOpen(false); };
     document.body.style.overflow = "hidden";
     window.addEventListener("keydown", closeOnEscape);
+    media.addEventListener("change", closeOnDesktop);
+    sidebarCloseRef.current?.focus();
     return () => {
-      document.body.style.overflow = "";
+      document.body.style.overflow = previousOverflow;
       window.removeEventListener("keydown", closeOnEscape);
+      media.removeEventListener("change", closeOnDesktop);
+      if (media.matches) menuButton?.focus();
     };
   }, [mobileOpen]);
 
   return (
     <div className={`app-frame${collapsed ? " app-frame-collapsed" : ""}${mobileOpen ? " app-frame-menu-open" : ""}`}>
-      <aside className="app-sidebar" id="workspace-sidebar" aria-label="Workspace sidebar">
+      <aside className="app-sidebar" id="workspace-sidebar" aria-label="Workspace sidebar" role={mobileOpen ? "dialog" : undefined} aria-modal={mobileOpen || undefined}>
         <div className="sidebar-brand-row">
           <Link className="sidebar-brand" href="/dashboard" aria-label="MylesNet Finance home" onClick={() => setMobileOpen(false)}>
             <Image src="/brand/logo.png" width={174} height={52} alt="MylesNet" priority />
@@ -66,6 +96,7 @@ export function AppShell({ children }: { children: ReactNode }) {
           <button className="sidebar-collapse-button" type="button" aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"} aria-pressed={collapsed} onClick={() => setCollapsed(value => !value)} title={collapsed ? "Expand sidebar" : "Collapse sidebar"}>
             {collapsed ? <ChevronsRight size={17} /> : <ChevronsLeft size={17} />}
           </button>
+          <button ref={sidebarCloseRef} className="sidebar-mobile-close" type="button" aria-label="Close navigation" onClick={() => setMobileOpen(false)}><X size={19} /></button>
         </div>
         <div className="sidebar-workspace" aria-label={`Current workspace: ${accountLabel}`} title={accountLabel}>
           <span className="sidebar-workspace-mark" aria-hidden="true">M</span>
@@ -87,16 +118,16 @@ export function AppShell({ children }: { children: ReactNode }) {
         </nav>
         <div className="sidebar-bottom">
           <div className="sidebar-support"><span className="sidebar-support-dot" /><span><strong>Workspace protected</strong><small>Secure finance access</small></span></div>
-          <Link className="sidebar-quick-add" href="/sales" onClick={() => setMobileOpen(false)}><span className="sidebar-quick-add-plus" aria-hidden="true">+</span><span className="sidebar-link-label">Add an entry</span></Link>
+          <Link className="sidebar-quick-add" href="/sales" aria-label="Add an entry" title={collapsed ? "Add an entry" : undefined} onClick={() => setMobileOpen(false)}><span className="sidebar-quick-add-plus" aria-hidden="true">+</span><span className="sidebar-link-label">Add an entry</span></Link>
         </div>
       </aside>
       {mobileOpen && <button className="sidebar-backdrop" type="button" aria-label="Close navigation" onClick={() => setMobileOpen(false)} />}
       <div className="app-main-column">
       <header className="app-header">
-        <button className="button mobile-menu-button" type="button" aria-label={mobileOpen ? "Close navigation" : "Open navigation"} aria-expanded={mobileOpen} aria-controls="workspace-sidebar" onClick={() => setMobileOpen((open) => !open)}>
+        <button ref={menuButtonRef} className="button mobile-menu-button" type="button" aria-label={mobileOpen ? "Close navigation" : "Open navigation"} aria-expanded={mobileOpen} aria-controls="workspace-sidebar" onClick={() => setMobileOpen((open) => !open)}>
           {mobileOpen ? <X size={19} /> : <Menu size={19} />}
         </button>
-        <div className="topbar-page-context"><span>MYLESNET</span><strong>{activePage?.label ?? "Workspace"}</strong></div>
+        <div className="topbar-page-context"><span>MYLESNET</span><strong>{routePageLabel}</strong></div>
         <div className="header-actions">
           <div className="search-box" role="search">
             <Search size={16} aria-hidden="true" />
