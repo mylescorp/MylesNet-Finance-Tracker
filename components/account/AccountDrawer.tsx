@@ -27,10 +27,16 @@ export function AccountDrawer({ onClose }: Props) {
   const profile = useQuery(api.users.profile, {});
   const saveProfile = useMutation(api.users.saveProfile);
   const uploadUrl = useMutation(api.users.generateProfilePhotoUploadUrl);
+  const registerUpload = useMutation(api.users.registerProfilePhotoUpload);
+  const discardUpload = useMutation(api.users.discardProfilePhotoUpload);
   const { signOut } = useAuthActions();
   const router = useRouter();
   const drawerRef = useRef<HTMLElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const pendingPhotoIdRef = useRef<Id<"_storage"> | undefined>(undefined);
+  const previewUrlRef = useRef<string | undefined>(undefined);
+  const busyRef = useRef(false);
+  const mountedRef = useRef(false);
   const [nameDraft, setNameDraft] = useState<string>();
   const [phoneDraft, setPhoneDraft] = useState<string>();
   const [photoUrlDraft, setPhotoUrlDraft] = useState<string | null>();
@@ -42,8 +48,10 @@ export function AccountDrawer({ onClose }: Props) {
 
   useEffect(() => {
     const previousOverflow = document.body.style.overflow;
+    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    mountedRef.current = true;
     const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
+      if (event.key === "Escape" && !busyRef.current) onClose();
       if (event.key !== "Tab") return;
       const focusable = drawerRef.current?.querySelectorAll<HTMLElement>('a[href], button:not([disabled]), input:not([disabled])');
       if (!focusable?.length) return;
@@ -55,8 +63,44 @@ export function AccountDrawer({ onClose }: Props) {
     document.body.style.overflow = "hidden";
     window.addEventListener("keydown", closeOnEscape);
     drawerRef.current?.querySelector<HTMLElement>("button")?.focus();
-    return () => { document.body.style.overflow = previousOverflow; window.removeEventListener("keydown", closeOnEscape); };
-  }, [onClose]);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener("keydown", closeOnEscape);
+      const pendingPhotoId = pendingPhotoIdRef.current;
+      mountedRef.current = false;
+      if (pendingPhotoId) void discardUpload({ storageId: pendingPhotoId }).catch(() => {});
+      const previewUrl = previewUrlRef.current;
+      if (previewUrl) URL.revokeObjectURL(previewUrl);
+      if (previousFocus?.isConnected) previousFocus.focus();
+    };
+  }, [discardUpload, onClose]);
+
+  function setBusyState(value: boolean) {
+    busyRef.current = value;
+    setBusy(value);
+  }
+
+  function setPreviewFile(file: File) {
+    if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current);
+    const url = URL.createObjectURL(file);
+    previewUrlRef.current = url;
+    setPhotoUrlDraft(url);
+  }
+
+  async function handleRemovePhoto() {
+    const pendingPhotoId = pendingPhotoIdRef.current;
+    if (pendingPhotoId) {
+      try { await discardUpload({ storageId: pendingPhotoId }); }
+      catch (cause) { setError(cause instanceof Error ? cause.message : "The pending photo could not be removed."); return; }
+      pendingPhotoIdRef.current = undefined;
+    }
+    if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current);
+    previewUrlRef.current = undefined;
+    setPhotoUrlDraft(null);
+    setRemovePhoto(true);
+    setPhotoId(undefined);
+    setNotice("Photo will be removed when you save.");
+  }
 
   async function handlePhotoChange(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
@@ -66,35 +110,49 @@ export function AccountDrawer({ onClose }: Props) {
     if (!["image/jpeg", "image/png", "image/webp"].includes(file.type) || file.size > 5 * 1024 * 1024) {
       setError("Choose a JPEG, PNG, or WebP image under 5 MB."); return;
     }
-    setBusy(true);
+    setBusyState(true);
     try {
       const url = await uploadUrl({});
       const response = await fetch(url, { method: "POST", headers: { "Content-Type": file.type }, body: file });
       if (!response.ok) throw new Error("The photo could not be uploaded. Please try again.");
       const result = await response.json() as { storageId: Id<"_storage"> };
+      await registerUpload({ storageId: result.storageId });
+      if (!mountedRef.current) {
+        await discardUpload({ storageId: result.storageId });
+        return;
+      }
+      const previousPending = pendingPhotoIdRef.current;
+      pendingPhotoIdRef.current = result.storageId;
       setPhotoId(result.storageId);
-      setPhotoUrlDraft(URL.createObjectURL(file));
+      setPreviewFile(file);
       setRemovePhoto(false);
       setNotice("Photo ready. Save your profile to apply it.");
+      if (previousPending) void discardUpload({ storageId: previousPending }).catch(() => {});
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "The photo could not be uploaded.");
-    } finally { setBusy(false); }
+    } finally { setBusyState(false); }
   }
 
   async function handleSave(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault(); setBusy(true); setError(""); setNotice("");
+    event.preventDefault(); setBusyState(true); setError(""); setNotice("");
     try {
       await saveProfile({ displayName: nameDraft ?? profile?.displayName ?? "", phone: phoneDraft ?? profile?.phone ?? "", photoId, removePhoto });
-      setPhotoId(undefined); setRemovePhoto(false); setNotice("Your profile has been saved.");
+      pendingPhotoIdRef.current = undefined;
+      setPhotoId(undefined);
+      if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current);
+      previewUrlRef.current = undefined;
+      setPhotoUrlDraft(undefined);
+      setRemovePhoto(false);
+      setNotice("Your profile has been saved.");
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Your profile could not be saved.");
-    } finally { setBusy(false); }
+    } finally { setBusyState(false); }
   }
 
   async function handleSignOut() {
-    setBusy(true);
+    setBusyState(true);
     try { await signOut(); router.replace("/signin"); }
-    catch (cause) { setError(cause instanceof Error ? cause.message : "Could not sign out. Try again."); setBusy(false); }
+    catch (cause) { setError(cause instanceof Error ? cause.message : "Could not sign out. Try again."); setBusyState(false); }
   }
 
   const name = nameDraft ?? profile?.displayName ?? "";
@@ -103,11 +161,11 @@ export function AccountDrawer({ onClose }: Props) {
   const displayName = name.trim() || profile?.email?.split("@")[0] || "Your account";
   const activePhoto = removePhoto ? null : photoUrl;
 
-  return <div className="account-overlay" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+  return <div className="account-overlay" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !busy) onClose(); }}>
     <aside className="account-drawer" ref={drawerRef} role="dialog" aria-modal="true" aria-labelledby="account-drawer-title">
       <header className="account-drawer-header">
         <div><span className="account-kicker">MYLESNET IDENTITY</span><h1 id="account-drawer-title">Your account</h1></div>
-        <button className="account-close" type="button" onClick={onClose} aria-label="Close account drawer"><X size={19} /></button>
+        <button className="account-close" type="button" onClick={onClose} aria-label="Close account drawer" disabled={busy}><X size={19} /></button>
       </header>
       {profile === undefined ? <div className="account-loading" role="status">Loading your account…</div> : profile === null ? <div className="account-loading" role="status">Sign in to manage your account.</div> : <>
         <section className="account-identity-card">
@@ -125,7 +183,7 @@ export function AccountDrawer({ onClose }: Props) {
           <label className="account-field"><span>Email address <small>Google account</small></span><span className="account-input-wrap account-input-readonly"><Mail size={16} /><input value={profile.email} readOnly aria-readonly="true" /></span></label>
           <label className="account-field"><span>Phone number <small>Optional</small></span><span className="account-input-wrap"><Phone size={16} /><input type="tel" value={phone} onChange={(event) => setPhoneDraft(event.target.value)} maxLength={32} autoComplete="tel" placeholder="Add a contact number" /></span></label>
           <input ref={fileInputRef} className="account-file-input" type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => void handlePhotoChange(event)} aria-label="Upload profile photo" />
-          <div className="account-photo-actions"><button type="button" className="account-upload-button" onClick={() => fileInputRef.current?.click()} disabled={busy}><Upload size={14} />{photoUrl && !removePhoto ? "Change photo" : "Add a profile photo"}</button>{photoUrl && !removePhoto && <button type="button" className="account-remove-photo" onClick={() => { setRemovePhoto(true); setPhotoId(undefined); setNotice("Photo will be removed when you save."); }} disabled={busy}>Remove</button>}<span>JPG, PNG or WebP · max 5 MB</span></div>
+          <div className="account-photo-actions"><button type="button" className="account-upload-button" onClick={() => fileInputRef.current?.click()} disabled={busy}><Upload size={14} />{photoUrl && !removePhoto ? "Change photo" : "Add a profile photo"}</button>{photoUrl && !removePhoto && <button type="button" className="account-remove-photo" onClick={() => void handleRemovePhoto()} disabled={busy}>Remove</button>}<span>JPG, PNG or WebP · max 5 MB</span></div>
           {(notice || error) && <p className={`account-feedback${error ? " account-feedback-error" : ""}`} role={error ? "alert" : "status"}>{error || <><Check size={14} />{notice}</>}</p>}
           <button className="account-save-button" type="submit" disabled={busy || !name.trim()}>{busy ? "Saving…" : "Save changes"}<ChevronRight size={16} /></button>
         </form>

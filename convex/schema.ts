@@ -18,6 +18,13 @@ export default defineSchema({
     photoRemoved: v.optional(v.boolean()),
     updatedAt: v.number(),
   }).index("by_user", ["userId"]),
+  profilePhotoUploads: defineTable({
+    userId: v.id("users"),
+    storageId: v.id("_storage"),
+    createdAt: v.number(),
+  })
+    .index("by_storage", ["storageId"])
+    .index("by_user", ["userId"]),
   businesses: defineTable({
     name: v.string(),
     currency: v.string(),
