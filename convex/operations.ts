@@ -107,7 +107,7 @@ export const overview = query({
       loans: v.array(v.object({ _id: v.id("loans"), lender: v.string(), principalUgx: v.number(), outstandingPrincipalUgx: v.number(), annualRateBps: v.number(), termMonths: v.number(), startedOn: v.string(), account: accountV, status: v.union(v.literal("active"), v.literal("paid_off")) })),
       loanRepayments: v.array(v.object({ _id: v.id("loanRepayments"), lender: v.string(), amountUgx: v.number(), principalUgx: v.number(), interestUgx: v.number(), account: accountV, paidOn: v.string() })),
       bills: v.array(v.object({ _id: v.id("bills"), name: v.string(), category: v.string(), amountUgx: v.number(), account: accountV, recurrence: v.union(v.literal("weekly"), v.literal("monthly"), v.literal("quarterly"), v.literal("yearly")), nextDueOn: v.string(), active: v.boolean() })),
-      billPayments: v.array(v.object({ _id: v.id("billPayments"), billName: v.string(), amountUgx: v.number(), paidOn: v.string() })),
+      billPayments: v.array(v.object({ _id: v.id("billPayments"), billName: v.string(), amountUgx: v.number(), account: v.optional(accountV), paidOn: v.string() })),
       reconciliations: v.array(v.object({ _id: v.id("reconciliations"), account: accountV, asOfDate: v.string(), bookBalanceUgx: v.number(), countedBalanceUgx: v.number(), varianceUgx: v.number(), status: v.union(v.literal("matched"), v.literal("open"), v.literal("explained")), note: v.string(), explanation: v.optional(v.string()) })),
       partners: v.array(v.object({ _id: v.id("partners"), name: v.string(), ownershipBps: v.number(), active: v.boolean() })),
     }),
@@ -145,7 +145,7 @@ export const overview = query({
       loans: loans.map(row => ({ _id: row._id, lender: row.lender, principalUgx: row.principalUgx, outstandingPrincipalUgx: row.outstandingPrincipalUgx, annualRateBps: row.annualRateBps, termMonths: row.termMonths, startedOn: row.startedOn, account: row.account, status: row.status })),
       loanRepayments: loanRepayments.map(row => ({ _id: row._id, lender: loanById.get(row.loanId) ?? "Loan", amountUgx: row.amountUgx, principalUgx: row.principalUgx, interestUgx: row.interestUgx, account: row.account, paidOn: row.paidOn })),
       bills: bills.map(row => ({ _id: row._id, name: row.name, category: row.category, amountUgx: row.amountUgx, account: row.account, recurrence: row.recurrence, nextDueOn: row.nextDueOn, active: row.active })),
-      billPayments: billPayments.map(row => ({ _id: row._id, billName: billById.get(row.billId) ?? "Inactive bill", amountUgx: row.amountUgx, paidOn: row.paidOn })),
+      billPayments: billPayments.map(row => ({ _id: row._id, billName: billById.get(row.billId) ?? "Inactive bill", amountUgx: row.amountUgx, account: row.account, paidOn: row.paidOn })),
       reconciliations: reconciliations.map(row => ({ _id: row._id, account: row.account, asOfDate: row.asOfDate, bookBalanceUgx: row.bookBalanceUgx, countedBalanceUgx: row.countedBalanceUgx, varianceUgx: row.varianceUgx, status: row.status, note: row.note, explanation: row.explanation })),
       partners: partners.map(row => ({ _id: row._id, name: row.name, ownershipBps: row.ownershipBps, active: row.active })),
     };
@@ -322,7 +322,7 @@ export const recordLoanRepayment = mutation({
   handler: async (ctx, args) => {
     const current = await workspace(ctx);
     if (!current || current.membership.role !== "owner") throw new Error("Only a workspace owner can record loan repayments.");
-    if (!Number.isSafeInteger(args.principalUgx) || args.principalUgx <= 0 || !Number.isSafeInteger(args.interestUgx) || args.interestUgx < 0 || !validDay(args.paidOn) || args.idempotencyKey.length < 16 || args.idempotencyKey.length > 120) throw new Error("Repayment details are invalid.");
+    if (!Number.isSafeInteger(args.principalUgx) || args.principalUgx < 0 || !Number.isSafeInteger(args.interestUgx) || args.interestUgx < 0 || (args.principalUgx === 0 && args.interestUgx === 0) || !validDay(args.paidOn) || args.idempotencyKey.length < 16 || args.idempotencyKey.length > 120) throw new Error("Repayment must include a positive principal or interest amount.");
     const duplicate = await ctx.db.query("loanRepayments").withIndex("by_business_and_idempotency", q => q.eq("businessId", current.business._id).eq("idempotencyKey", args.idempotencyKey)).unique();
     if (duplicate) {
       assertSameRequest(duplicate.loanId === args.loanId && duplicate.principalUgx === args.principalUgx && duplicate.interestUgx === args.interestUgx && duplicate.account === args.account && duplicate.paidOn === args.paidOn);
@@ -383,7 +383,7 @@ export const createBill = mutation({
 });
 
 export const recordBillPayment = mutation({
-  args: { billId: v.id("bills"), paidOn: v.string(), amountUgx: v.optional(v.number()), idempotencyKey: v.string(), confirmNegativeBalance: v.optional(v.boolean()) },
+  args: { billId: v.id("bills"), paidOn: v.string(), amountUgx: v.optional(v.number()), account: accountV, idempotencyKey: v.string(), confirmNegativeBalance: v.optional(v.boolean()) },
   returns: v.id("billPayments"),
   handler: async (ctx, args) => {
     const current = await workspace(ctx);
@@ -395,18 +395,18 @@ export const recordBillPayment = mutation({
     if (!Number.isSafeInteger(amountUgx) || amountUgx <= 0) throw new Error("Payment amount must be a positive whole-unit amount.");
     const duplicate = await ctx.db.query("billPayments").withIndex("by_business_and_idempotency", q => q.eq("businessId", current.business._id).eq("idempotencyKey", args.idempotencyKey)).unique();
     if (duplicate) {
-      assertSameRequest(duplicate.billId === args.billId && duplicate.paidOn === args.paidOn && duplicate.amountUgx === amountUgx);
+      assertSameRequest(duplicate.billId === args.billId && duplicate.paidOn === args.paidOn && duplicate.amountUgx === amountUgx && (duplicate.account ?? bill.account) === args.account);
       return duplicate._id;
     }
-    await checkOutflow(ctx, current.business._id, bill.account, -amountUgx, args.confirmNegativeBalance ?? false);
-    await applyAccountDelta(ctx, current.business._id, bill.account, -amountUgx);
-    const entryId = await postExpense(ctx, { businessId: current.business._id, userId: current.userId, amountUgx, occurredOn: args.paidOn, account: bill.account, category: bill.category, note: `Bill payment: ${bill.name}`, idempotencyKey: `bill-expense:${args.idempotencyKey}`, action: "bill.payment_expense_recorded", operationSource: "bill_payment", operationKey: args.idempotencyKey });
+    await checkOutflow(ctx, current.business._id, args.account, -amountUgx, args.confirmNegativeBalance ?? false);
+    await applyAccountDelta(ctx, current.business._id, args.account, -amountUgx);
+    const entryId = await postExpense(ctx, { businessId: current.business._id, userId: current.userId, amountUgx, occurredOn: args.paidOn, account: args.account, category: bill.category, note: `Bill payment: ${bill.name}`, idempotencyKey: `bill-expense:${args.idempotencyKey}`, action: "bill.payment_expense_recorded", operationSource: "bill_payment", operationKey: args.idempotencyKey });
     const scheduleStartDueOn = bill.scheduleStartDueOn ?? bill.nextDueOn;
     const startDate = new Date(`${scheduleStartDueOn}T00:00:00.000Z`);
     const scheduleAnchorDay = bill.scheduleAnchorDay ?? startDate.getUTCDate();
     const scheduleEndOfMonth = bill.scheduleEndOfMonth ?? scheduleAnchorDay === new Date(Date.UTC(startDate.getUTCFullYear(), startDate.getUTCMonth() + 1, 0)).getUTCDate();
     await ctx.db.patch("bills", bill._id, { nextDueOn: nextOccurrence(bill.nextDueOn, bill.recurrence, scheduleAnchorDay, scheduleEndOfMonth), scheduleStartDueOn, scheduleAnchorDay, scheduleEndOfMonth });
-    const paymentId = await ctx.db.insert("billPayments", { businessId: current.business._id, billId: bill._id, entryId, amountUgx, paidOn: args.paidOn, idempotencyKey: args.idempotencyKey, createdBy: current.userId, createdAt: Date.now() });
+    const paymentId = await ctx.db.insert("billPayments", { businessId: current.business._id, billId: bill._id, entryId, amountUgx, account: args.account, paidOn: args.paidOn, idempotencyKey: args.idempotencyKey, createdBy: current.userId, createdAt: Date.now() });
     await audit(ctx, current, "bill.payment_recorded", "billPayment", paymentId, `${bill.name} · ${amountUgx} · ${args.paidOn}`);
     return paymentId;
   },

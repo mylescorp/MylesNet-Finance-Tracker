@@ -222,6 +222,7 @@ export default defineSchema({
     billId: v.id("bills"),
     entryId: v.id("entries"),
     amountUgx: v.number(),
+    account: v.optional(v.union(v.literal("cash"), v.literal("mobile_money"))),
     paidOn: v.string(),
     idempotencyKey: v.string(),
     createdBy: v.id("users"),
