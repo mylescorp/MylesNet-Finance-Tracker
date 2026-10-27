@@ -170,6 +170,10 @@ export const update = mutation({
     const monthlySalesTargetMinor = toMinorUnits(args.monthlySalesTargetUgx, scale);
     const monthlyExpenseWarningMinor = toMinorUnits(args.monthlyExpenseWarningUgx, scale);
     const currencySensitiveDataExists = await hasCurrencySensitiveData(ctx, current.business._id);
+    if (args.currency !== current.business.currency) {
+      const activeImport = await ctx.db.query("importBatches").withIndex("by_business_and_status", q => q.eq("businessId", current.business._id).eq("status", "in_progress")).first();
+      if (activeImport) throw new Error("Workspace currency cannot change while a CSV import is in progress. Finish or resume the import first.");
+    }
     const ledgerActivityExists = await hasPostedLedgerActivity(ctx, current.business._id);
     const balances = await ctx.db.query("accountBalances").withIndex("by_business_and_account", q => q.eq("businessId", current.business._id)).take(2);
     const hasNonOpeningBalance = balances.some(b => b.balanceUgx !== (b.openingBalanceUgx ?? 0));

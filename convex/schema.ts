@@ -262,6 +262,7 @@ export default defineSchema({
     fileName: v.string(),
     importType: v.union(v.literal("cashbook"), v.literal("centipid_analytics")),
     sourceHash: v.string(),
+    currency: v.optional(v.string()),
     totalRows: v.number(),
     importedCount: v.number(),
     skippedCount: v.number(),
@@ -269,7 +270,7 @@ export default defineSchema({
     status: v.union(v.literal("in_progress"), v.literal("completed")),
     createdBy: v.id("users"),
     createdAt: v.number(),
-  }).index("by_business_and_created", ["businessId", "createdAt"]).index("by_business_and_source", ["businessId", "sourceHash"]),
+  }).index("by_business_and_created", ["businessId", "createdAt"]).index("by_business_and_source", ["businessId", "sourceHash"]).index("by_business_and_status", ["businessId", "status"]),
   importReportDetails: defineTable({
     businessId: v.id("businesses"),
     batchId: v.id("importBatches"),

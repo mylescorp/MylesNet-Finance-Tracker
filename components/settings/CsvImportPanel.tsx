@@ -75,9 +75,10 @@ export function CsvImportPanel() {
   async function runImport() {
     setBusy(true); setError(""); setMessage("");
     try {
+      if (!settings || settings.access !== "ready") throw new Error("Workspace settings are not ready.");
       const isReport = looksCentipid;
       const parsedReport = isReport ? parseCentipid(csvRows) : null;
-      if (parsedReport && settings?.access === "ready" && settings.currency !== "UGX") throw new Error("This Centipid report contains UGX totals. Change the workspace currency to UGX before importing; currency conversion is not supported.");
+      if (parsedReport && settings.currency !== "UGX") throw new Error("This Centipid report contains UGX totals. Change the workspace currency to UGX before importing; currency conversion is not supported.");
       const entries = parsedReport?.rows ?? flatRows();
       if (!entries.length && !parsedReport) throw new Error("There are no importable rows in this file.");
       let reportSummary: string | undefined;
@@ -91,7 +92,7 @@ export function CsvImportPanel() {
       if (!isReport && hasBlankMappedAccount) importIdentity.defaultAccount = defaultAccount;
       const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`${fileText}\0${JSON.stringify(importIdentity)}`));
       const sourceHash = [...new Uint8Array(digest)].map(x => x.toString(16).padStart(2, "0")).join("");
-      const batch = await beginBatch({ sourceHash, fileName, importType: isReport ? "centipid_analytics" : "cashbook", totalRows: entries.length, ...(reportSummary ? { reportSummary } : {}) });
+      const batch = await beginBatch({ sourceHash, fileName, importType: isReport ? "centipid_analytics" : "cashbook", currency: settings.currency, totalRows: entries.length, ...(reportSummary ? { reportSummary } : {}) });
       if (batch.status === "completed") {
         setMessage(`This file was already imported: ${batch.importedCount} entries recorded, ${batch.skippedCount} duplicates skipped.`);
         return;

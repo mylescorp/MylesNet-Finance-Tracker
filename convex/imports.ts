@@ -43,7 +43,7 @@ export const importRows = mutation({
   handler: async (ctx, args) => {
     const { userId, business } = await ownerContext(ctx);
     const batch = await ctx.db.get("importBatches", args.batchId);
-    if (!batch || batch.businessId !== business._id || batch.status !== "in_progress" || args.startRow !== batch.progressRows || args.rows.length < 1 || args.rows.length > 25 || batch.progressRows + args.rows.length > batch.totalRows) {
+    if (!batch || batch.businessId !== business._id || batch.currency !== business.currency || batch.status !== "in_progress" || args.startRow !== batch.progressRows || args.rows.length < 1 || args.rows.length > 25 || batch.progressRows + args.rows.length > batch.totalRows) {
       throw new ConvexError("Import batch is invalid. Use batches of 1 to 25 rows.");
     }
     if (batch.importType === "centipid_analytics" && business.currency !== "UGX") throw new ConvexError("Centipid analytics totals are UGX; the workspace must use UGX.");
@@ -95,16 +95,17 @@ export const importRows = mutation({
 
 export const beginBatch = mutation({
   args: {
-    sourceHash: v.string(), fileName: v.string(), importType, totalRows: v.number(), reportSummary: v.optional(v.string()),
+    sourceHash: v.string(), fileName: v.string(), importType, currency: v.string(), totalRows: v.number(), reportSummary: v.optional(v.string()),
   },
   returns: v.object({ batchId: v.id("importBatches"), status: v.union(v.literal("in_progress"), v.literal("completed")), progressRows: v.number(), importedCount: v.number(), skippedCount: v.number() }),
   handler: async (ctx, args) => {
     const { userId, business } = await ownerContext(ctx);
     if (!/^[a-f0-9]{64}$/.test(args.sourceHash) || args.fileName.trim().length < 1 || args.fileName.length > 180 || !Number.isSafeInteger(args.totalRows) || args.totalRows < 0 || args.totalRows > 10_000 || (args.reportSummary?.length ?? 0) > 64_000) throw new ConvexError("Import summary is invalid.");
+    if (args.currency !== business.currency) throw new ConvexError("Workspace currency changed while you prepared the import. Reload the page and review the CSV again.");
     if (args.importType === "centipid_analytics" && business.currency !== "UGX") throw new ConvexError("Centipid analytics reports are denominated in UGX. Set the workspace currency to UGX first.");
     const duplicate = await ctx.db.query("importBatches").withIndex("by_business_and_source", q => q.eq("businessId", business._id).eq("sourceHash", args.sourceHash)).unique();
     if (duplicate) {
-      if (duplicate.importType !== args.importType || duplicate.totalRows !== args.totalRows) throw new ConvexError("This file hash is already associated with a different import shape.");
+      if (duplicate.importType !== args.importType || duplicate.totalRows !== args.totalRows || duplicate.currency !== args.currency) throw new ConvexError("This file hash is already associated with a different import shape.");
       return { batchId: duplicate._id, status: duplicate.status, progressRows: duplicate.progressRows, importedCount: duplicate.importedCount, skippedCount: duplicate.skippedCount };
     }
     const { reportSummary, ...batchArgs } = args;

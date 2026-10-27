@@ -22,7 +22,12 @@ function parseAmount(value: unknown) {
   return Number(String(value ?? "").replace(/[^0-9.\-]/g, "")) || 0;
 }
 function maskPII(value: string) {
-  return value.replace(/([A-Za-z0-9._%+-]{2})[A-Za-z0-9._%+-]*@([A-Za-z0-9.-]+\.[A-Za-z]{2,})/g, "$1***@$2").replace(/\+?\d{10,13}/g, text => `***${text.slice(-3)}`);
+  return value
+    .replace(/([A-Za-z0-9._%+-]{2})[A-Za-z0-9._%+-]*@([A-Za-z0-9.-]+\.[A-Za-z]{2,})/g, "$1***@$2")
+    .replace(/(^|[^\w])\+?\(?\d(?:[\s().-]*\d){8,12}\)?(?!\w)/g, (match, boundary: string) => {
+      const digits = match.replace(/\D/g, "");
+      return `${boundary}***${digits.slice(-3)}`;
+    });
 }
 function maskCustomer(value: string) {
   if (value.includes("@")) return maskPII(value);
