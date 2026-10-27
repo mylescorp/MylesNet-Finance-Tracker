@@ -50,7 +50,7 @@ export const overview = query({
     const membership = active[0];
     const business = await ctx.db.get("businesses", membership.businessId);
     if (!business) return { access: "pending" as const };
-    if (membership.role === "partner") return { access: "restricted" as const };
+    if (membership.role === "partner" || membership.role === "finance_approver") return { access: "restricted" as const };
 
     const month = monthBounds(args.today);
     const runwayFrom = shiftDay(args.today, -29);

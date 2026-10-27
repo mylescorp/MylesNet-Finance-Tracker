@@ -256,7 +256,7 @@ export const ruleReview = query({
   args: {},
   handler: async (ctx) => {
     const current = await activeWorkspace(ctx);
-    if (!current || current.membership.role === "partner") return { access: "restricted" as const, currency: "UGX", highExpenses: [], weakDays: [] };
+    if (!current || current.membership.role === "partner" || current.membership.role === "finance_approver") return { access: "restricted" as const, currency: "UGX", highExpenses: [], weakDays: [] };
     const prefs = await ctx.db.query("workspacePreferences").withIndex("by_business", q => q.eq("businessId", current.business._id)).unique();
     const scale = 10 ** (currencyMinorDigits(current.business.currency) ?? 0);
     const threshold = prefs?.highExpenseReviewUgx ?? 500000 * scale;
@@ -278,7 +278,7 @@ export const monthlyTargets = query({
   args: { from: v.string(), toExclusive: v.string() },
   handler: async (ctx, args) => {
     const current = await activeWorkspace(ctx);
-    if (!current || current.membership.role === "partner") return { access: "restricted" as const };
+    if (!current || current.membership.role === "partner" || current.membership.role === "finance_approver") return { access: "restricted" as const };
     const prefs = await ctx.db.query("workspacePreferences").withIndex("by_business", q => q.eq("businessId", current.business._id)).unique();
     const days = await ctx.db.query("dailyTotals").withIndex("by_business_and_day", q => q.eq("businessId", current.business._id).gte("day", args.from).lt("day", args.toExclusive)).take(40);
     return {
