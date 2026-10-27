@@ -31,6 +31,36 @@ async function activeWorkspace(ctx: QueryCtx | MutationCtx) {
   return business ? { userId, membership, business } : null;
 }
 
+async function hasCurrencySensitiveData(ctx: MutationCtx, businessId: Id<"businesses">) {
+  const checks = await Promise.all([
+    ctx.db.query("entries").withIndex("by_business_and_date", q => q.eq("businessId", businessId)).first(),
+    ctx.db.query("operationalRecords").withIndex("by_business_and_kind_and_date", q => q.eq("businessId", businessId)).first(),
+    ctx.db.query("movements").withIndex("by_business_and_date", q => q.eq("businessId", businessId)).first(),
+    ctx.db.query("savingsHoldings").withIndex("by_business_and_active", q => q.eq("businessId", businessId)).first(),
+    ctx.db.query("savingsFlows").withIndex("by_business_and_date", q => q.eq("businessId", businessId)).first(),
+    ctx.db.query("loans").withIndex("by_business_and_status", q => q.eq("businessId", businessId)).first(),
+    ctx.db.query("loanRepayments").withIndex("by_business_and_date", q => q.eq("businessId", businessId)).first(),
+    ctx.db.query("bills").withIndex("by_business_and_active_due", q => q.eq("businessId", businessId)).first(),
+    ctx.db.query("billPayments").withIndex("by_business_and_date", q => q.eq("businessId", businessId)).first(),
+    ctx.db.query("reconciliations").withIndex("by_business_and_date", q => q.eq("businessId", businessId)).first(),
+  ]);
+  return checks.some(Boolean);
+}
+
+async function hasPostedLedgerActivity(ctx: MutationCtx, businessId: Id<"businesses">) {
+  const checks = await Promise.all([
+    ctx.db.query("entries").withIndex("by_business_and_date", q => q.eq("businessId", businessId)).first(),
+    ctx.db.query("operationalRecords").withIndex("by_business_and_kind_and_date", q => q.eq("businessId", businessId)).first(),
+    ctx.db.query("movements").withIndex("by_business_and_date", q => q.eq("businessId", businessId)).first(),
+    ctx.db.query("savingsFlows").withIndex("by_business_and_date", q => q.eq("businessId", businessId)).first(),
+    ctx.db.query("loans").withIndex("by_business_and_status", q => q.eq("businessId", businessId)).first(),
+    ctx.db.query("loanRepayments").withIndex("by_business_and_date", q => q.eq("businessId", businessId)).first(),
+    ctx.db.query("billPayments").withIndex("by_business_and_date", q => q.eq("businessId", businessId)).first(),
+    ctx.db.query("reconciliations").withIndex("by_business_and_date", q => q.eq("businessId", businessId)).first(),
+  ]);
+  return checks.some(Boolean);
+}
+
 function defaults() {
   return {
     locale: "en-UG",
@@ -136,24 +166,25 @@ export const update = mutation({
     const weakDaySalesMinor = toMinorUnits(args.weakDaySalesUgx, scale);
     const monthlySalesTargetMinor = toMinorUnits(args.monthlySalesTargetUgx, scale);
     const monthlyExpenseWarningMinor = toMinorUnits(args.monthlyExpenseWarningUgx, scale);
-    if (args.currency !== current.business.currency) {
-      const firstEntry = await ctx.db.query("entries").withIndex("by_business_and_date", q => q.eq("businessId", current.business._id)).first();
-      const balances = await ctx.db.query("accountBalances").withIndex("by_business_and_account", q => q.eq("businessId", current.business._id)).take(2);
-      if (firstEntry || balances.some(b => (b.openingBalanceUgx ?? 0) !== 0)) throw new Error("Currency is locked after the first opening balance or cashbook entry so existing amounts are never relabelled. Contact support for a reviewed currency migration.");
+    const currencySensitiveDataExists = await hasCurrencySensitiveData(ctx, current.business._id);
+    const ledgerActivityExists = await hasPostedLedgerActivity(ctx, current.business._id);
+    const balances = await ctx.db.query("accountBalances").withIndex("by_business_and_account", q => q.eq("businessId", current.business._id)).take(2);
+    const hasNonOpeningBalance = balances.some(b => b.balanceUgx !== (b.openingBalanceUgx ?? 0));
+    if (args.currency !== current.business.currency && (currencySensitiveDataExists || hasNonOpeningBalance || balances.some(b => (b.openingBalanceUgx ?? 0) !== 0))) {
+      throw new Error("Currency is locked after any financial record or opening balance so existing amounts are never relabelled. Contact support for a reviewed currency migration.");
     }
     const businessPatch = {
       name: businessName, countryCode: args.countryCode, currency: args.currency,
       timezone: args.timezone, weekStartsOn: args.weekStartsOn,
     };
     await ctx.db.patch("businesses", current.business._id, businessPatch);
-    const firstEntry = await ctx.db.query("entries").withIndex("by_business_and_date", q => q.eq("businessId", current.business._id)).first();
     const currentBalances = await ctx.db.query("accountBalances").withIndex("by_business_and_account", q => q.eq("businessId", current.business._id)).take(2);
     const cashDoc = currentBalances.find(b => b.account === "cash");
     const mobileDoc = currentBalances.find(b => b.account === "mobile_money");
-    if (firstEntry && (cashOpeningMinor !== (cashDoc?.openingBalanceUgx ?? 0) || mobileOpeningMinor !== (mobileDoc?.openingBalanceUgx ?? 0))) {
+    if ((ledgerActivityExists || hasNonOpeningBalance) && (cashOpeningMinor !== (cashDoc?.openingBalanceUgx ?? 0) || mobileOpeningMinor !== (mobileDoc?.openingBalanceUgx ?? 0))) {
       throw new Error("Opening balances are locked after the first transaction. Use an auditable adjustment entry instead.");
     }
-    if (!firstEntry) {
+    if (!ledgerActivityExists && !hasNonOpeningBalance) {
       const now = Date.now();
       if (cashDoc) await ctx.db.patch("accountBalances", cashDoc._id, { balanceUgx: cashOpeningMinor, openingBalanceUgx: cashOpeningMinor, updatedAt: now });
       else if (cashOpeningMinor !== 0) await ctx.db.insert("accountBalances", { businessId: current.business._id, account: "cash", balanceUgx: cashOpeningMinor, openingBalanceUgx: cashOpeningMinor, updatedAt: now });

@@ -65,16 +65,17 @@ async function applyAccountDelta(ctx: MutationCtx, businessId: Id<"businesses">,
 async function postExpense(ctx: MutationCtx, args: {
   businessId: Id<"businesses">; userId: Id<"users">; amountUgx: number; occurredOn: string;
   account: Account; category: string; note: string; idempotencyKey: string; action: string;
+  operationSource: "movement_fee" | "loan_interest" | "bill_payment"; operationKey: string;
 }) {
   const previous = await ctx.db.query("entries").withIndex("by_business_and_idempotency", q => q.eq("businessId", args.businessId).eq("idempotencyKey", args.idempotencyKey)).unique();
   if (previous) {
-    assertSameRequest(previous.kind === "expense" && previous.amountUgx === args.amountUgx && previous.occurredOn === args.occurredOn && previous.account === args.account && previous.category === args.category && previous.note === args.note && previous.state === "posted");
+    assertSameRequest(previous.kind === "expense" && previous.amountUgx === args.amountUgx && previous.occurredOn === args.occurredOn && previous.account === args.account && previous.category === args.category && previous.note === args.note && previous.state === "posted" && previous.operationSource === args.operationSource && previous.operationKey === args.operationKey);
     return previous._id;
   }
   const entryId = await ctx.db.insert("entries", {
     businessId: args.businessId, kind: "expense", amountUgx: args.amountUgx, occurredOn: args.occurredOn,
     account: args.account, category: args.category, note: args.note, source: "manual", idempotencyKey: args.idempotencyKey,
-    state: "posted", createdBy: args.userId, createdAt: Date.now(),
+    state: "posted", operationSource: args.operationSource, operationKey: args.operationKey, createdBy: args.userId, createdAt: Date.now(),
   });
   const day = await ctx.db.query("dailyTotals").withIndex("by_business_and_day", q => q.eq("businessId", args.businessId).eq("day", args.occurredOn)).unique();
   if (day) await ctx.db.patch("dailyTotals", day._id, {
@@ -94,7 +95,7 @@ const accountV = v.union(v.literal("cash"), v.literal("mobile_money"));
 const membershipRoleV = v.union(v.literal("owner"), v.literal("cashier"), v.literal("partner"));
 
 export const overview = query({
-  args: {},
+  args: { from: v.string(), toExclusive: v.string() },
   returns: v.union(
     v.object({ access: v.literal("pending") }),
     v.object({ access: v.literal("restricted") }),
@@ -111,21 +112,22 @@ export const overview = query({
       partners: v.array(v.object({ _id: v.id("partners"), name: v.string(), ownershipBps: v.number(), active: v.boolean() })),
     }),
   ),
-  handler: async (ctx) => {
+  handler: async (ctx, args) => {
+    if (!validDay(args.from) || !validDay(args.toExclusive) || args.from >= args.toExclusive) throw new Error("Choose a valid reporting date range.");
     const current = await workspace(ctx);
     if (!current) return { access: "pending" as const };
     if (current.membership.role === "partner") return { access: "restricted" as const };
     const businessId = current.business._id;
     const [movements, savings, savingsFlows, loans, loanRepayments, bills, billPayments, reconciliations, partners] = await Promise.all([
-      ctx.db.query("movements").withIndex("by_business_and_date", q => q.eq("businessId", businessId)).order("desc").take(100),
-      ctx.db.query("savingsHoldings").withIndex("by_business_and_active", q => q.eq("businessId", businessId).eq("active", true)).take(100),
-      ctx.db.query("savingsFlows").withIndex("by_business_and_date", q => q.eq("businessId", businessId)).order("desc").take(100),
-      ctx.db.query("loans").withIndex("by_business_and_status", q => q.eq("businessId", businessId)).take(100),
-      ctx.db.query("loanRepayments").withIndex("by_business_and_date", q => q.eq("businessId", businessId)).order("desc").take(100),
-      ctx.db.query("bills").withIndex("by_business_and_active_due", q => q.eq("businessId", businessId).eq("active", true)).take(100),
-      ctx.db.query("billPayments").withIndex("by_business_and_date", q => q.eq("businessId", businessId)).order("desc").take(100),
-      ctx.db.query("reconciliations").withIndex("by_business_and_date", q => q.eq("businessId", businessId)).order("desc").take(100),
-      ctx.db.query("partners").withIndex("by_business_and_active", q => q.eq("businessId", businessId).eq("active", true)).take(100),
+      ctx.db.query("movements").withIndex("by_business_and_date", q => q.eq("businessId", businessId).gte("occurredOn", args.from).lt("occurredOn", args.toExclusive)).order("desc").take(100),
+      ctx.db.query("savingsHoldings").withIndex("by_business_and_active", q => q.eq("businessId", businessId).eq("active", true)).take(101),
+      ctx.db.query("savingsFlows").withIndex("by_business_and_date", q => q.eq("businessId", businessId).gte("occurredOn", args.from).lt("occurredOn", args.toExclusive)).order("desc").take(100),
+      ctx.db.query("loans").withIndex("by_business_and_status", q => q.eq("businessId", businessId).eq("status", "active")).take(101),
+      ctx.db.query("loanRepayments").withIndex("by_business_and_date", q => q.eq("businessId", businessId).gte("paidOn", args.from).lt("paidOn", args.toExclusive)).order("desc").take(100),
+      ctx.db.query("bills").withIndex("by_business_and_active_due", q => q.eq("businessId", businessId).eq("active", true)).take(101),
+      ctx.db.query("billPayments").withIndex("by_business_and_date", q => q.eq("businessId", businessId).gte("paidOn", args.from).lt("paidOn", args.toExclusive)).order("desc").take(100),
+      ctx.db.query("reconciliations").withIndex("by_business_and_date", q => q.eq("businessId", businessId).gte("asOfDate", args.from).lt("asOfDate", args.toExclusive)).order("desc").take(100),
+      ctx.db.query("partners").withIndex("by_business_and_active", q => q.eq("businessId", businessId).eq("active", true)).take(101),
     ]);
     const partnerById = new Map(partners.map(p => [p._id, p.name]));
     const holdingById = new Map(savings.map(item => [item._id, item.name]));
@@ -149,14 +151,15 @@ export const overview = query({
 // Partner accounts receive only their own identity, ownership percentage, and
 // attributed capital contributions. Business-wide ledger totals stay private.
 export const partnerStatement = query({
-  args: {},
-  handler: async (ctx) => {
+  args: { from: v.string(), toExclusive: v.string() },
+  handler: async (ctx, args) => {
+    if (!validDay(args.from) || !validDay(args.toExclusive) || args.from >= args.toExclusive) throw new Error("Choose a valid statement date range.");
     const current = await workspace(ctx);
     if (!current || current.membership.role !== "partner" || !current.membership.partnerId) return { access: "restricted" as const };
     const partner = await ctx.db.get("partners", current.membership.partnerId);
     if (!partner || partner.businessId !== current.business._id || !partner.active) return { access: "restricted" as const };
     const contributions = await ctx.db.query("movements")
-      .withIndex("by_business_and_partner_and_date", q => q.eq("businessId", current.business._id).eq("partnerId", partner._id))
+      .withIndex("by_business_and_partner_and_date", q => q.eq("businessId", current.business._id).eq("partnerId", partner._id).gte("occurredOn", args.from).lt("occurredOn", args.toExclusive))
       .order("desc").take(100);
     const legacyCapital = partner.capitalContributedUgx === undefined
       ? await historicalPartnerCapital(ctx, current.business._id, partner._id)
@@ -227,7 +230,7 @@ export const createMovement = mutation({
     }
     const now = Date.now();
     const movementId = await ctx.db.insert("movements", { businessId: current.business._id, kind: args.kind, amountUgx: args.amountUgx, feeUgx: feeUgx || undefined, fromAccount, toAccount, partnerId: args.kind === "capital_contribution" ? args.partnerId : undefined, occurredOn: args.occurredOn, note: args.note.trim(), idempotencyKey: args.idempotencyKey, state: "posted", createdBy: current.userId, createdAt: now });
-    if (args.kind === "withdrawal" && feeUgx > 0) await postExpense(ctx, { businessId: current.business._id, userId: current.userId, amountUgx: feeUgx, occurredOn: args.occurredOn, account: "mobile_money", category: "Mobile money withdrawal fee", note: args.note.trim() || "Fee for cash withdrawal", idempotencyKey: `movement-fee:${args.idempotencyKey}`, action: "movement.fee_recorded" });
+    if (args.kind === "withdrawal" && feeUgx > 0) await postExpense(ctx, { businessId: current.business._id, userId: current.userId, amountUgx: feeUgx, occurredOn: args.occurredOn, account: "mobile_money", category: "Mobile money withdrawal fee", note: args.note.trim() || "Fee for cash withdrawal", idempotencyKey: `movement-fee:${args.idempotencyKey}`, action: "movement.fee_recorded", operationSource: "movement_fee", operationKey: args.idempotencyKey });
     await audit(ctx, current, "movement.created", "movement", movementId, `${args.kind.replaceAll("_", " ")} · ${args.amountUgx}${feeUgx ? ` + ${feeUgx} fee` : ""} · ${args.occurredOn}`);
     return movementId;
   },
@@ -246,7 +249,8 @@ export const createSavingsHolding = mutation({
       return request._id;
     }
     if (args.targetUgx !== undefined && (!Number.isSafeInteger(args.targetUgx) || args.targetUgx <= 0)) throw new Error("Target must be a positive whole-unit amount.");
-    const duplicate = await ctx.db.query("savingsHoldings").withIndex("by_business_and_active", q => q.eq("businessId", current.business._id).eq("active", true)).take(100);
+    const duplicate = await ctx.db.query("savingsHoldings").withIndex("by_business_and_active", q => q.eq("businessId", current.business._id).eq("active", true)).take(101);
+    if (duplicate.length >= 100) throw new Error("This version supports up to 100 active savings holdings in a workspace. Review your savings records before reaching this limit.");
     if (duplicate.some(row => row.name.toLowerCase() === name.toLowerCase())) throw new Error("A savings goal with this name already exists.");
     const holdingId = await ctx.db.insert("savingsHoldings", { businessId: current.business._id, name, targetUgx: args.targetUgx, balanceUgx: 0, active: true, idempotencyKey: args.idempotencyKey, createdBy: current.userId, createdAt: Date.now() });
     await audit(ctx, current, "savings.holding_created", "savingsHolding", holdingId, `Created savings holding: ${name}.`);
@@ -293,6 +297,8 @@ export const createLoan = mutation({
       assertSameRequest(duplicate.lender === lender && duplicate.principalUgx === args.principalUgx && duplicate.annualRateBps === args.annualRateBps && duplicate.termMonths === args.termMonths && duplicate.startedOn === args.startedOn && duplicate.account === args.account && duplicate.note === args.note.trim());
       return duplicate._id;
     }
+    const activeLoans = await ctx.db.query("loans").withIndex("by_business_and_status", q => q.eq("businessId", current.business._id).eq("status", "active")).take(100);
+    if (activeLoans.length >= 100) throw new Error("A workspace can have up to 100 active loans. Pay off or review an existing loan before adding another.");
     await applyAccountDelta(ctx, current.business._id, args.account, args.principalUgx);
     const loanId = await ctx.db.insert("loans", { businessId: current.business._id, lender, principalUgx: args.principalUgx, outstandingPrincipalUgx: args.principalUgx, annualRateBps: args.annualRateBps, termMonths: args.termMonths, startedOn: args.startedOn, account: args.account, status: "active", note: args.note.trim(), idempotencyKey: args.idempotencyKey, createdBy: current.userId, createdAt: Date.now() });
     await audit(ctx, current, "loan.disbursed", "loan", loanId, `Loan disbursed from ${lender}; not classified as sales income.`);
@@ -318,7 +324,7 @@ export const recordLoanRepayment = mutation({
     const amountUgx = safeAdd(args.principalUgx, args.interestUgx, "Repayment");
     await checkOutflow(ctx, current.business._id, args.account, -amountUgx, args.confirmNegativeBalance ?? false);
     await applyAccountDelta(ctx, current.business._id, args.account, -amountUgx);
-    if (args.interestUgx > 0) await postExpense(ctx, { businessId: current.business._id, userId: current.userId, amountUgx: args.interestUgx, occurredOn: args.paidOn, account: args.account, category: "Loan interest", note: `Interest repayment to ${loan.lender}`, idempotencyKey: `loan-interest:${args.idempotencyKey}`, action: "loan.interest_recorded" });
+    if (args.interestUgx > 0) await postExpense(ctx, { businessId: current.business._id, userId: current.userId, amountUgx: args.interestUgx, occurredOn: args.paidOn, account: args.account, category: "Loan interest", note: `Interest repayment to ${loan.lender}`, idempotencyKey: `loan-interest:${args.idempotencyKey}`, action: "loan.interest_recorded", operationSource: "loan_interest", operationKey: args.idempotencyKey });
     const outstandingPrincipalUgx = loan.outstandingPrincipalUgx - args.principalUgx;
     await ctx.db.patch("loans", loan._id, { outstandingPrincipalUgx, status: outstandingPrincipalUgx === 0 ? "paid_off" : "active" });
     const repaymentId = await ctx.db.insert("loanRepayments", { businessId: current.business._id, loanId: loan._id, amountUgx, principalUgx: args.principalUgx, interestUgx: args.interestUgx, account: args.account, paidOn: args.paidOn, idempotencyKey: args.idempotencyKey, createdBy: current.userId, createdAt: Date.now() });
@@ -327,7 +333,7 @@ export const recordLoanRepayment = mutation({
   },
 });
 
-function nextOccurrence(day: string, recurrence: "weekly" | "monthly" | "quarterly" | "yearly") {
+function nextOccurrence(day: string, recurrence: "weekly" | "monthly" | "quarterly" | "yearly", anchorDay: number, endOfMonth: boolean) {
   const date = new Date(`${day}T00:00:00.000Z`);
   if (recurrence === "weekly") date.setUTCDate(date.getUTCDate() + 7);
   else {
@@ -336,7 +342,7 @@ function nextOccurrence(day: string, recurrence: "weekly" | "monthly" | "quarter
     date.setUTCDate(1);
     date.setUTCMonth(date.getUTCMonth() + months);
     const lastDay = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 0)).getUTCDate();
-    date.setUTCDate(Math.min(originalDay, lastDay));
+    date.setUTCDate(endOfMonth ? lastDay : Math.min(anchorDay || originalDay, lastDay));
   }
   return date.toISOString().slice(0, 10);
 }
@@ -352,10 +358,15 @@ export const createBill = mutation({
     if (name.length < 2 || name.length > 100 || category.length < 1 || category.length > 80 || !Number.isSafeInteger(args.amountUgx) || args.amountUgx <= 0 || !validDay(args.nextDueOn) || args.idempotencyKey.length < 16 || args.idempotencyKey.length > 120) throw new Error("Bill details are invalid.");
     const duplicate = await ctx.db.query("bills").withIndex("by_business_and_idempotency", q => q.eq("businessId", current.business._id).eq("idempotencyKey", args.idempotencyKey)).unique();
     if (duplicate) {
-      assertSameRequest(duplicate.name === name && duplicate.category === category && duplicate.amountUgx === args.amountUgx && duplicate.account === args.account && duplicate.recurrence === args.recurrence && duplicate.nextDueOn === args.nextDueOn);
+      assertSameRequest(duplicate.name === name && duplicate.category === category && duplicate.amountUgx === args.amountUgx && duplicate.account === args.account && duplicate.recurrence === args.recurrence && (duplicate.scheduleStartDueOn ?? duplicate.nextDueOn) === args.nextDueOn);
       return duplicate._id;
     }
-    const billId = await ctx.db.insert("bills", { businessId: current.business._id, name, category, amountUgx: args.amountUgx, account: args.account, recurrence: args.recurrence, nextDueOn: args.nextDueOn, active: true, idempotencyKey: args.idempotencyKey, createdBy: current.userId, createdAt: Date.now() });
+    const activeBills = await ctx.db.query("bills").withIndex("by_business_and_active_due", q => q.eq("businessId", current.business._id).eq("active", true)).take(100);
+    if (activeBills.length >= 100) throw new Error("This version supports up to 100 active bill reminders in a workspace. Review your bill records before reaching this limit.");
+    const startDate = new Date(`${args.nextDueOn}T00:00:00.000Z`);
+    const anchorDay = startDate.getUTCDate();
+    const endOfMonth = anchorDay === new Date(Date.UTC(startDate.getUTCFullYear(), startDate.getUTCMonth() + 1, 0)).getUTCDate();
+    const billId = await ctx.db.insert("bills", { businessId: current.business._id, name, category, amountUgx: args.amountUgx, account: args.account, recurrence: args.recurrence, nextDueOn: args.nextDueOn, scheduleStartDueOn: args.nextDueOn, scheduleAnchorDay: anchorDay, scheduleEndOfMonth: endOfMonth, active: true, idempotencyKey: args.idempotencyKey, createdBy: current.userId, createdAt: Date.now() });
     await audit(ctx, current, "bill.created", "bill", billId, `Configured ${name}; future payments are not booked automatically.`);
     return billId;
   },
@@ -379,8 +390,12 @@ export const recordBillPayment = mutation({
     }
     await checkOutflow(ctx, current.business._id, bill.account, -amountUgx, args.confirmNegativeBalance ?? false);
     await applyAccountDelta(ctx, current.business._id, bill.account, -amountUgx);
-    const entryId = await postExpense(ctx, { businessId: current.business._id, userId: current.userId, amountUgx, occurredOn: args.paidOn, account: bill.account, category: bill.category, note: `Bill payment: ${bill.name}`, idempotencyKey: `bill-expense:${args.idempotencyKey}`, action: "bill.payment_expense_recorded" });
-    await ctx.db.patch("bills", bill._id, { nextDueOn: nextOccurrence(bill.nextDueOn, bill.recurrence) });
+    const entryId = await postExpense(ctx, { businessId: current.business._id, userId: current.userId, amountUgx, occurredOn: args.paidOn, account: bill.account, category: bill.category, note: `Bill payment: ${bill.name}`, idempotencyKey: `bill-expense:${args.idempotencyKey}`, action: "bill.payment_expense_recorded", operationSource: "bill_payment", operationKey: args.idempotencyKey });
+    const scheduleStartDueOn = bill.scheduleStartDueOn ?? bill.nextDueOn;
+    const startDate = new Date(`${scheduleStartDueOn}T00:00:00.000Z`);
+    const scheduleAnchorDay = bill.scheduleAnchorDay ?? startDate.getUTCDate();
+    const scheduleEndOfMonth = bill.scheduleEndOfMonth ?? scheduleAnchorDay === new Date(Date.UTC(startDate.getUTCFullYear(), startDate.getUTCMonth() + 1, 0)).getUTCDate();
+    await ctx.db.patch("bills", bill._id, { nextDueOn: nextOccurrence(bill.nextDueOn, bill.recurrence, scheduleAnchorDay, scheduleEndOfMonth), scheduleStartDueOn, scheduleAnchorDay, scheduleEndOfMonth });
     const paymentId = await ctx.db.insert("billPayments", { businessId: current.business._id, billId: bill._id, entryId, amountUgx, paidOn: args.paidOn, idempotencyKey: args.idempotencyKey, createdBy: current.userId, createdAt: Date.now() });
     await audit(ctx, current, "bill.payment_recorded", "billPayment", paymentId, `${bill.name} · ${amountUgx} · ${args.paidOn}`);
     return paymentId;
@@ -439,7 +454,8 @@ export const createPartner = mutation({
       assertSameRequest(previous.name === name && previous.ownershipBps === args.ownershipBps);
       return previous._id;
     }
-    const partners = await ctx.db.query("partners").withIndex("by_business_and_active", q => q.eq("businessId", current.business._id).eq("active", true)).take(100);
+    const partners = await ctx.db.query("partners").withIndex("by_business_and_active", q => q.eq("businessId", current.business._id).eq("active", true)).take(101);
+    if (partners.length >= 100) throw new Error("This version supports up to 100 active partner records in a workspace. Review ownership records before reaching this limit.");
     if (partners.some(row => row.name.toLowerCase() === name.toLowerCase())) throw new Error("A partner with this name already exists.");
     if (partners.reduce((sum, row) => safeAdd(sum, row.ownershipBps, "Ownership"), args.ownershipBps) > 10_000) throw new Error("Active partner ownership cannot exceed 100%.");
     const partnerId = await ctx.db.insert("partners", { businessId: current.business._id, name, ownershipBps: args.ownershipBps, capitalContributedUgx: 0, active: true, idempotencyKey: args.idempotencyKey });
