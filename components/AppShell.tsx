@@ -1,17 +1,17 @@
 "use client";
 
-import { useAuthActions } from "@convex-dev/auth/react";
 import { useQuery } from "convex/react";
 import {
   Activity, ArrowDownUp, BarChart3, Bell, CalendarDays, ChevronDown,
   ChevronsLeft, ChevronsRight, FileBarChart, HandCoins, LayoutDashboard,
-  LogOut, Menu, PiggyBank, Receipt, Settings2, UsersRound, Wallet, X,
+  Menu, PiggyBank, Receipt, Settings2, UsersRound, Wallet, X,
 } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
-import { ReactNode, useEffect, useRef, useState } from "react";
+import { usePathname, useRouter } from "next/navigation";
+import { ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import { ThemeControl } from "@/components/ThemeControl";
+import { AccountDrawer, ProfileAvatar } from "@/components/account/AccountDrawer";
 import { GlobalSearch } from "@/components/workspace/GlobalSearch";
 import { api } from "@/convex/_generated/api";
 
@@ -41,11 +41,13 @@ const navGroups = [
 
 export function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
-  const { signOut } = useAuthActions();
+  const router = useRouter();
   const access = useQuery(api.workspace.currentAccess, {});
   const businessSettings = useQuery(api.workspace.businessSettings, {});
+  const profile = useQuery(api.users.profile, {});
   const [mobileOpen, setMobileOpen] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
+  const [accountReturnTo, setAccountReturnTo] = useState("/dashboard");
   const menuButtonRef = useRef<HTMLButtonElement>(null);
   const sidebarCloseRef = useRef<HTMLButtonElement>(null);
   const accountLabel = access?.access === "ready" ? access.businessName : "My account";
@@ -54,9 +56,12 @@ export function AppShell({ children }: { children: ReactNode }) {
     general: "General settings", finance: "Finance settings", rules: "Rules",
     data: "Data", access: "Access", releases: "Releases",
   };
-  const routePageLabel = activePage?.label
+  const routePageLabel = pathname === "/account" ? "Your account" : activePage?.label
     ?? (pathname.startsWith("/settings/") ? settingsPageLabels[pathname.split("/")[2]] ?? "Settings" : undefined)
     ?? (pathname === "/issues" ? "Needs attention" : "Workspace");
+  const closeAccount = useCallback(() => {
+    router.replace(accountReturnTo === "/account" ? "/dashboard" : accountReturnTo);
+  }, [accountReturnTo, router]);
   useEffect(() => {
     const media = window.matchMedia("(max-width: 760px)");
     if (!mobileOpen || !media.matches) return;
@@ -134,10 +139,10 @@ export function AppShell({ children }: { children: ReactNode }) {
           <GlobalSearch />
           <ThemeControl />
           <Link className="utility-link" href="/issues" aria-label="Needs attention"><Bell size={17} /><span>Needs attention</span></Link>
-          <button className="user-menu" type="button" aria-label="Sign out" title={`Sign out of ${accountLabel}`} onClick={() => void signOut()}>
-            <span className="avatar">MN</span>
-            <span className="user-menu-label">{accountLabel}</span>
-            <LogOut size={15} aria-hidden="true" />
+          <button className="user-menu" type="button" aria-label="Open your account" title="Manage your account" onClick={() => { setAccountReturnTo(pathname); router.push("/account"); }}>
+            <ProfileAvatar imageUrl={profile?.photoUrl} name={profile?.displayName || accountLabel} />
+            <span className="user-menu-label">{profile?.displayName || accountLabel}</span>
+            <ChevronDown size={15} aria-hidden="true" />
           </button>
         </div>
       </header>
@@ -145,6 +150,7 @@ export function AppShell({ children }: { children: ReactNode }) {
       <main className="page-content">{children}</main>
       <footer className="app-footer"><span>MylesNet Finance Tracker · {businessSettings?.access === "ready" ? businessSettings.currency : "UGX"}</span><span>Workspace data is protected by your assigned role.</span></footer>
       </div>
+      {pathname === "/account" && <AccountDrawer onClose={closeAccount} />}
     </div>
   );
 }
