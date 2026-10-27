@@ -11,6 +11,7 @@ import { Card, WorkspaceTitle } from "@/components/AppShell";
 import { OwnerSetup } from "@/components/workspace/OwnerSetup";
 import { ConvexLiveStatus } from "@/components/workspace/ConvexLiveStatus";
 import { formatBusinessDay } from "@/lib/format";
+import { AnalyticsInsights } from "@/components/workspace/AnalyticsInsights";
 
 function todayKey(timezone: string) {
   return new Intl.DateTimeFormat("en-CA", { timeZone: timezone, year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
@@ -73,9 +74,10 @@ export default function DashboardPage() {
     };
     if (!isIsoDay(customFrom) || !isIsoDay(customTo)) return "Choose both valid dates.";
     if (customFrom > customTo) return "The end date must be on or after the start date.";
+    if (customTo > businessDay) return "The end date cannot be in the future.";
     if ((Date.parse(`${customTo}T00:00:00.000Z`) - Date.parse(`${customFrom}T00:00:00.000Z`)) / 86400000 + 1 > 370) return "Choose a period of 370 days or less.";
     return "";
-  }, [period, customFrom, customTo]);
+  }, [period, customFrom, customTo, businessDay]);
   const customDatesValid = !customRangeError;
   const customRangeInvalid = period === "custom" && !customDatesValid;
   const range = useMemo(() => {
@@ -163,6 +165,7 @@ export default function DashboardPage() {
       <Card><div className="card-heading"><div><h2 className="card-title">Account balances</h2><p className="card-subtitle">Balances reflect entries recorded in this workspace.</p></div></div><div className="balance-detail"><span>Cash on hand</span><strong>{isReady ? `${formatMoney(readySummary?.cashBalanceUgx ?? 0)} ${currency}` : "—"}</strong></div><div className="balance-detail"><span>Mobile money</span><strong>{isReady ? `${formatMoney(readySummary?.mobileMoneyBalanceUgx ?? 0)} ${currency}` : "—"}</strong></div><p className="muted-note">Add opening balances in Finance settings before using these as a full business position.</p></Card>
       <Card><div className="card-heading"><div><h2 className="card-title">Data health</h2><p className="card-subtitle">Coverage follows configured finance workflows.</p></div></div><div className="health-row"><span>Sales and expenses</span><span className="status-chip status-ok">Live</span></div><div className="health-row"><span>Recurring bills</span><span className="status-chip status-warning">Setup needed</span></div><div className="health-row"><span>Opening balance</span><span className="status-chip status-warning">Review</span></div><Link className="text-link" href="/reconcile">Review reconciliation →</Link></Card>
     </div>
+    {!customRangeInvalid && <AnalyticsInsights range={range} today={today} currency={currency} scale={currencyScale} locale={locale} compact />}
   </>;
 }
 

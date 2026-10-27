@@ -29,6 +29,7 @@ const accessResult = v.union(
       v.literal("owner"),
       v.literal("partner"),
       v.literal("cashier"),
+      v.literal("finance_approver"),
     ),
   }),
 );
@@ -162,7 +163,7 @@ export const businessSettings = query({
       currency: v.string(),
       timezone: v.string(),
       weekStartsOn: v.union(v.literal("monday"), v.literal("sunday")),
-      role: v.union(v.literal("owner"), v.literal("partner"), v.literal("cashier")),
+      role: v.union(v.literal("owner"), v.literal("partner"), v.literal("cashier"), v.literal("finance_approver")),
     }),
   ),
   handler: async (ctx) => {
@@ -437,7 +438,7 @@ export const createOperationalRecord = mutation({
   returns: v.id("operationalRecords"),
   handler: async (ctx, args) => {
     const current = await getMembership(ctx);
-    if (!current || current.membership.role === "partner") throw new Error("Workspace access is required to save this record.");
+    if (!current || (current.membership.role !== "owner" && current.membership.role !== "cashier")) throw new Error("Only an owner or cashier can save this record.");
     if (!isIsoDay(args.occurredOn)) throw new Error("Choose a valid business date.");
     if (!Number.isSafeInteger(args.amountUgx) || args.amountUgx <= 0) throw new Error(`Amount must be a positive whole minor-unit amount in ${current.business.currency}.`);
     const title = args.title.trim();
@@ -487,9 +488,7 @@ export const createEntry = mutation({
   handler: async (ctx, args) => {
     const current = await getMembership(ctx);
     if (!current) throw new Error("Access is pending. Ask an owner for an invitation.");
-    if (current.membership.role === "partner") {
-      throw new Error("Partner accounts cannot add ledger entries.");
-    }
+    if (current.membership.role !== "owner" && current.membership.role !== "cashier") throw new Error("This account cannot add ledger entries.");
     if (!Number.isSafeInteger(args.amountUgx) || args.amountUgx <= 0) {
       throw new Error(`Amount must be a positive valid amount in ${current.business.currency}.`);
     }
