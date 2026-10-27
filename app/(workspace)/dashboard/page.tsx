@@ -8,6 +8,7 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { api } from "@/convex/_generated/api";
 import { Card, WorkspaceTitle } from "@/components/AppShell";
 import { OwnerSetup } from "@/components/workspace/OwnerSetup";
+import { ConvexLiveStatus } from "@/components/workspace/ConvexLiveStatus";
 import { formatBusinessDay } from "@/lib/format";
 
 function todayKey(timezone: string) {
@@ -118,7 +119,7 @@ export default function DashboardPage() {
     {period === "custom" && <div className="custom-period-row"><label>From <input type="date" value={customFrom} onChange={(event) => setCustomFrom(event.target.value)} /></label><label>To <input type="date" value={customTo} min={customFrom || undefined} onChange={(event) => setCustomTo(event.target.value)} /></label>{customRangeError && <span className="form-feedback form-error" role="alert">{customRangeError}</span>}</div>}
     <div className="dashboard-banner"><Image src="/brand/banner.png" alt="MylesNet Finance Tracker" fill priority sizes="(max-width: 760px) 100vw, 1100px" /><div className="banner-caption">Your business, clearly in view.</div></div>
     <div className="board-toolbar no-print">
-      <span className="status-chip status-live">Live · Convex data</span>
+      <ConvexLiveStatus />
       {customRangeInvalid ? <span className="toolbar-range">Complete the custom date range</span> : <span className="toolbar-range">{fmtDate(range.from)} — {fmtDate(rangeLastDay.toISOString().slice(0, 10))}</span>}
       <button className="button" type="button" onClick={() => window.print()}><Printer size={14} />Print</button>
       <button className="button" type="button" onClick={() => window.print()}><Download size={14} />Export PDF</button>

@@ -9,6 +9,7 @@ import { Card, WorkspaceTitle } from "@/components/AppShell";
 import { SettingsNav } from "@/components/settings/SettingsNav";
 import { EntryForm } from "@/components/workspace/EntryForm";
 import { OperationsWorkspace } from "@/components/workspace/OperationsWorkspace";
+import { ConvexLiveStatus } from "@/components/workspace/ConvexLiveStatus";
 import { OperationalRecordForm } from "@/components/workspace/OperationalRecordForm";
 import { formatBusinessDay } from "@/lib/format";
 
@@ -260,11 +261,14 @@ export function BoardRoute({ route }: { route: string }) {
   const fiscalStartMonth = preferences?.access === "ready" ? preferences.fiscalYearStartMonth : 1;
   const range = useMemo(() => rangeFor(period, today, weekStartsOn, fiscalStartMonth), [period, today, weekStartsOn, fiscalStartMonth]);
   const rangeLastDay = new Date(`${range.toExclusive}T00:00:00.000Z`); rangeLastDay.setUTCDate(rangeLastDay.getUTCDate() - 1);
-  const summary = useQuery(api.workspace.dashboardSummary, range);
+  const needsSummary = screen?.entryKind !== undefined || ["Analytics", "Daily Report", "Monthly P&L", "Movements"].includes(screen?.title ?? "");
+  const needsYearSummary = screen?.title === "Monthly P&L";
+  const needsDailyHistory = screen?.title === "Daily Report";
+  const summary = useQuery(api.workspace.dashboardSummary, needsSummary ? range : "skip");
   const entryKind = screen?.title === "Sales" ? "sale" : screen?.title === "Expenses" ? "expense" : undefined;
-  const entries = useQuery(api.workspace.recentEntries, { limit: entryLimit, kind: entryKind, from: range.from, toExclusive: range.toExclusive });
+  const entries = useQuery(api.workspace.recentEntries, entryKind ? { limit: entryLimit, kind: entryKind, from: range.from, toExclusive: range.toExclusive } : "skip");
   const yearRange = useMemo(() => rangeFor("Year", today, weekStartsOn, fiscalStartMonth), [today, weekStartsOn, fiscalStartMonth]);
-  const yearSummary = useQuery(api.workspace.dashboardSummary, yearRange);
+  const yearSummary = useQuery(api.workspace.dashboardSummary, needsYearSummary ? yearRange : "skip");
   const trailingSevenRange = useMemo(() => {
     const from = new Date(`${today}T00:00:00.000Z`);
     from.setUTCDate(from.getUTCDate() - 6);
@@ -272,7 +276,7 @@ export function BoardRoute({ route }: { route: string }) {
     to.setUTCDate(to.getUTCDate() + 1);
     return { from: from.toISOString().slice(0, 10), toExclusive: to.toISOString().slice(0, 10) };
   }, [today]);
-  const trailingSevenSummary = useQuery(api.workspace.dashboardSummary, screen?.title === "Daily Report" ? trailingSevenRange : "skip");
+  const trailingSevenSummary = useQuery(api.workspace.dashboardSummary, needsDailyHistory ? trailingSevenRange : "skip");
 
   if (!screen) return <WorkspaceTitle eyebrow="MylesNet" title="Page not found" description="Choose a section from the navigation." />;
 
@@ -303,6 +307,7 @@ export function BoardRoute({ route }: { route: string }) {
   const selectedEntries = entries?.filter((entry) => entry.state === "posted");
   const hasRecordData = selectedEntries && selectedEntries.length > 0;
   const operationalScreen = ["Movements", "Savings", "Loans", "Partners", "Bills", "Reconcile"].includes(screen.title);
+  const hasAnalyticsActivity = stats?.days.some((day) => day.salesUgx > 0 || day.expensesUgx > 0) ?? false;
 
   async function shareReport() {
     try {
@@ -323,7 +328,7 @@ export function BoardRoute({ route }: { route: string }) {
     />
     {screen.settings && <SettingsNav current={`/${route}`} />}
     <div className="board-toolbar no-print">
-      <span className="status-chip status-live">Live · Convex data</span>
+      <ConvexLiveStatus />
       <span className="toolbar-range">{fmtDate(range.from)} — {fmtDate(rangeLastDay.toISOString().slice(0, 10))}</span>
       <button className="button" type="button" onClick={() => window.print()}><Printer size={14} />Print</button>
       <button className="button" type="button" onClick={() => window.print()}><Download size={14} />Export PDF</button>
@@ -352,7 +357,16 @@ export function BoardRoute({ route }: { route: string }) {
           : section.kind === "table" && screen.title === "Monthly P&L" ? <MonthlyPnlTable days={yearDays} loading={yearSummary === undefined} locale={locale} formatMoney={fmt} />
           : section.kind === "chart" ? <ChartPanel summary={stats} title={section.title} message={section.detail} currency={currency} scale={currencyScale} locale={locale} />
           : section.kind === "workflow" ? <WorkflowPanel screen={screen} section={section.title} currency={currency} scale={currencyScale} businessDay={today} />
-            : <EmptyPanel message={hasRecordData ? "Live records are available for the selected period." : "No records yet."} next={section.detail} />}
+            : <EmptyPanel
+              message={screen.title === "Analytics"
+                ? hasAnalyticsActivity
+                  ? "Recorded activity is reflected in the metrics and charts above."
+                  : "No saved activity exists in the selected period."
+                : hasRecordData
+                  ? "Live records are available for the selected period."
+                  : "No records yet."}
+              next={section.detail}
+            />}
       </Card>)}
       {screen.title === "Sales" || screen.title === "Expenses" ? <Card className="board-section-card">
         <div className="card-heading"><div><h2 className="card-title">Recent cashbook entries</h2><p className="card-subtitle">Latest saved records in this workspace.</p></div></div>
