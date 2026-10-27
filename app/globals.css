@@ -280,6 +280,20 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .settings-facts div { display:flex; flex-direction:column; gap:5px; padding:12px; border-radius:var(--mn-radius-sm); background:var(--mn-inset); min-width:0; }
 .settings-facts span { color:var(--mn-muted); font-size:11px; }
 .settings-facts strong { overflow-wrap:anywhere; font-size:12px; }
+.live-balance-card .card-heading { align-items:flex-start; }
+.live-balance-indicator { display:inline-flex; align-items:center; gap:6px; padding:6px 9px; border:1px solid color-mix(in srgb,var(--mn-ok-fg) 30%,transparent); border-radius:999px; color:var(--mn-ok-fg); font-size:11px; font-weight:650; white-space:nowrap; }
+.live-balance-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px; }
+.live-balance-tile { min-width:0; padding:15px; border:1px solid var(--mn-line); border-radius:var(--mn-radius-sm); background:var(--mn-inset); }
+.live-balance-tile>div { display:flex; align-items:center; gap:8px; color:var(--mn-muted); font-size:12px; }
+.live-balance-tile>div svg { color:var(--mn-accent); flex:none; }
+.live-balance-tile strong { display:block; margin-top:13px; overflow-wrap:anywhere; font-size:clamp(18px,2.5vw,24px); line-height:1.2; }
+.live-balance-tile small { display:block; margin-top:6px; color:var(--mn-muted); font-size:11px; }
+.live-balance-estimate { border-color:color-mix(in srgb,var(--mn-accent) 45%,var(--mn-line)); }
+.live-balance-facts { grid-template-columns:repeat(4,minmax(0,1fr)); margin-top:10px; }
+.live-balance-note { margin:12px 0 0; }
+.live-balance-warning { display:flex; align-items:flex-start; gap:8px; margin:12px 0 0; color:var(--mn-warn-fg); font-size:12px; }
+.live-balance-warning svg { flex:none; }
+@media (max-width:760px) { .live-balance-grid { grid-template-columns:1fr; } .live-balance-facts { grid-template-columns:repeat(2,minmax(0,1fr)); } }
 .global-search-wrap { position:relative; }
 .global-search-results { position:absolute; z-index:var(--mn-z-dropdown); top:calc(100% + 8px); left:0; right:0; min-width:min(460px,85vw); padding:6px; border:1px solid var(--mn-line); border-radius:var(--mn-radius-md); background:var(--mn-card); box-shadow:var(--mn-shadow-menu); }
 .search-result { display:flex; align-items:center; gap:10px; padding:9px; border-radius:var(--mn-radius-sm); }
