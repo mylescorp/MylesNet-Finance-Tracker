@@ -4,7 +4,7 @@ import { useQuery } from "convex/react";
 import { ArrowDownRight, ArrowUpRight, CircleHelp, Receipt, Wallet } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
-import { useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { api } from "@/convex/_generated/api";
 import { Card, WorkspaceTitle } from "@/components/AppShell";
 import { OwnerSetup } from "@/components/workspace/OwnerSetup";
@@ -15,8 +15,7 @@ function todayKey() {
 function money(amount: number) {
   return new Intl.NumberFormat("en-UG", { maximumFractionDigits: 0 }).format(amount);
 }
-function periodRange(period: string) {
-  const today = todayKey();
+function periodRange(period: string, today: string) {
   const date = new Date(`${today}T00:00:00Z`);
   let start = new Date(date);
   if (period === "week") start.setUTCDate(date.getUTCDate() - ((date.getUTCDay() + 6) % 7));
@@ -29,12 +28,28 @@ function periodRange(period: string) {
 
 export default function DashboardPage() {
   const [period, setPeriod] = useState("month");
-  const range = useMemo(() => periodRange(period), [period]);
+  const [businessDay, setBusinessDay] = useState(todayKey);
+  useEffect(() => {
+    const refreshBusinessDay = () => setBusinessDay(todayKey());
+    refreshBusinessDay();
+    const timer = window.setInterval(refreshBusinessDay, 30_000);
+    window.addEventListener("focus", refreshBusinessDay);
+    document.addEventListener("visibilitychange", refreshBusinessDay);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener("focus", refreshBusinessDay);
+      document.removeEventListener("visibilitychange", refreshBusinessDay);
+    };
+  }, []);
+  const range = useMemo(
+    () => periodRange(period, businessDay),
+    [period, businessDay],
+  );
   const summary = useQuery(api.workspace.dashboardSummary, range);
   const recent = useQuery(api.workspace.recentEntries, { limit: 8 });
   const readySummary = summary?.access === "ready" ? summary : null;
   const isReady = readySummary !== null;
-  const today = todayKey();
+  const today = businessDay;
   const todaySales = readySummary?.days.find((day) => day.day === today)?.salesUgx ?? 0;
   const dayBars = readySummary?.days.slice(-14) ?? [];
   const peak = Math.max(1, ...dayBars.map((day) => day.salesUgx));

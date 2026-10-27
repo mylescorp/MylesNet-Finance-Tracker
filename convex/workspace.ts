@@ -5,6 +5,14 @@ import { mutation, query } from "./_generated/server";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import type { Id } from "./_generated/dataModel";
 
+function addSafeInteger(left: number, right: number, label: string) {
+  const result = left + right;
+  if (!Number.isSafeInteger(result)) {
+    throw new Error(`${label} cannot be represented safely.`);
+  }
+  return result;
+}
+
 const accessResult = v.union(
   v.object({ access: v.literal("setup") }),
   v.object({ access: v.literal("pending") }),
@@ -52,7 +60,11 @@ async function applyAccountEffect(
   const updatedAt = Date.now();
   if (current) {
     await ctx.db.patch("accountBalances", current._id, {
-      balanceUgx: current.balanceUgx + deltaUgx,
+      balanceUgx: addSafeInteger(
+        current.balanceUgx,
+        deltaUgx,
+        "Account balance",
+      ),
       updatedAt,
     });
   } else {
@@ -185,8 +197,14 @@ export const dashboardSummary = query({
           .lt("day", args.toExclusive),
       )
       .take(370);
-    const salesUgx = days.reduce((sum, day) => sum + day.salesUgx, 0);
-    const expensesUgx = days.reduce((sum, day) => sum + day.expensesUgx, 0);
+    const salesUgx = days.reduce(
+      (sum, day) => addSafeInteger(sum, day.salesUgx, "Sales total"),
+      0,
+    );
+    const expensesUgx = days.reduce(
+      (sum, day) => addSafeInteger(sum, day.expensesUgx, "Expenses total"),
+      0,
+    );
     const balances = await ctx.db
       .query("accountBalances")
       .withIndex("by_business_and_account", (q) =>
@@ -327,10 +345,26 @@ export const createEntry = mutation({
       .unique();
     if (day) {
       await ctx.db.patch("dailyTotals", day._id, {
-        salesUgx: day.salesUgx + (args.kind === "sale" ? args.amountUgx : 0),
-        expensesUgx: day.expensesUgx + (args.kind === "expense" ? args.amountUgx : 0),
-        saleCount: day.saleCount + (args.kind === "sale" ? 1 : 0),
-        expenseCount: day.expenseCount + (args.kind === "expense" ? 1 : 0),
+        salesUgx: addSafeInteger(
+          day.salesUgx,
+          args.kind === "sale" ? args.amountUgx : 0,
+          "Daily sales total",
+        ),
+        expensesUgx: addSafeInteger(
+          day.expensesUgx,
+          args.kind === "expense" ? args.amountUgx : 0,
+          "Daily expenses total",
+        ),
+        saleCount: addSafeInteger(
+          day.saleCount,
+          args.kind === "sale" ? 1 : 0,
+          "Daily sale count",
+        ),
+        expenseCount: addSafeInteger(
+          day.expenseCount,
+          args.kind === "expense" ? 1 : 0,
+          "Daily expense count",
+        ),
       });
     } else {
       await ctx.db.insert("dailyTotals", {
@@ -380,10 +414,26 @@ export const voidEntry = mutation({
       .unique();
     if (!day) throw new Error("Daily totals are missing; reconcile before voiding this entry.");
     await ctx.db.patch("dailyTotals", day._id, {
-      salesUgx: day.salesUgx - (entry.kind === "sale" ? entry.amountUgx : 0),
-      expensesUgx: day.expensesUgx - (entry.kind === "expense" ? entry.amountUgx : 0),
-      saleCount: day.saleCount - (entry.kind === "sale" ? 1 : 0),
-      expenseCount: day.expenseCount - (entry.kind === "expense" ? 1 : 0),
+      salesUgx: addSafeInteger(
+        day.salesUgx,
+        entry.kind === "sale" ? -entry.amountUgx : 0,
+        "Daily sales total",
+      ),
+      expensesUgx: addSafeInteger(
+        day.expensesUgx,
+        entry.kind === "expense" ? -entry.amountUgx : 0,
+        "Daily expenses total",
+      ),
+      saleCount: addSafeInteger(
+        day.saleCount,
+        entry.kind === "sale" ? -1 : 0,
+        "Daily sale count",
+      ),
+      expenseCount: addSafeInteger(
+        day.expenseCount,
+        entry.kind === "expense" ? -1 : 0,
+        "Daily expense count",
+      ),
     });
     await applyAccountEffect(
       ctx,
