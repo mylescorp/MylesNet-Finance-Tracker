@@ -53,7 +53,7 @@ export function OperationsWorkspace({ screen, currency, scale, locale, timezone,
         } catch (error) {
           const details = error instanceof ConvexError ? error.data as { code?: string; message?: string } : null;
           if (details?.code === "CONFIRM_NEGATIVE" && !confirmNegative) {
-            setWarning({ message: details.message ?? "This transaction may create a negative balance.", retry: () => run(new FormData(element), true) });
+            setWarning({ message: details.message ?? "This transaction may create a negative balance.", retry: async () => { if (element.reportValidity()) await run(new FormData(element), true); } });
           } else setFeedback({ error: true, message: error instanceof Error ? error.message : "Could not save this record." });
         } finally { setBusy(false); }
       };
