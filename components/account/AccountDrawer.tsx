@@ -186,11 +186,18 @@ export function AccountDrawer({ onClose }: Props) {
 
         <form className="account-form" onSubmit={handleSave}>
           <div className="account-section-heading"><div><span className="account-section-icon"><UserRound size={16} /></span><div><h2>Personal details</h2><p>How you appear across MylesNet</p></div></div></div>
+          <div className="account-photo-field">
+            <div className="account-photo-field-copy"><strong>Profile photo</strong><span>Shown on your account and workspace</span></div>
+            <div className="account-photo-actions">
+              <button type="button" className="account-upload-button" onClick={() => fileInputRef.current?.click()} disabled={busy}><Upload size={14} />{photoUrl && !removePhoto ? "Change photo" : "Add photo"}</button>
+              {photoUrl && !removePhoto && <button type="button" className="account-remove-photo" onClick={() => void handleRemovePhoto()} disabled={busy}>Remove</button>}
+              <span>JPG, PNG, WebP · 5 MB max</span>
+            </div>
+          </div>
           <label className="account-field"><span>Display name</span><span className="account-input-wrap"><UserRound size={16} /><input value={name} onChange={(event) => setNameDraft(event.target.value)} maxLength={80} autoComplete="name" required placeholder="Your name" /></span></label>
           <label className="account-field"><span>Email address <small>Google account</small></span><span className="account-input-wrap account-input-readonly"><Mail size={16} /><input value={profile.email} readOnly aria-readonly="true" /></span></label>
           <label className="account-field"><span>Phone number <small>Optional</small></span><span className="account-input-wrap"><Phone size={16} /><input type="tel" value={phone} onChange={(event) => setPhoneDraft(event.target.value)} maxLength={32} autoComplete="tel" placeholder="Add a contact number" /></span></label>
           <input ref={fileInputRef} className="account-file-input" type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => void handlePhotoChange(event)} aria-label="Upload profile photo" />
-          <div className="account-photo-actions"><button type="button" className="account-upload-button" onClick={() => fileInputRef.current?.click()} disabled={busy}><Upload size={14} />{photoUrl && !removePhoto ? "Change photo" : "Add a profile photo"}</button>{photoUrl && !removePhoto && <button type="button" className="account-remove-photo" onClick={() => void handleRemovePhoto()} disabled={busy}>Remove</button>}<span>JPG, PNG or WebP · max 5 MB</span></div>
           {(notice || error) && <p className={`account-feedback${error ? " account-feedback-error" : ""}`} role={error ? "alert" : "status"}>{error || <><Check size={14} />{notice}</>}</p>}
           <button className="account-save-button" type="submit" disabled={busy || !name.trim()}>{busy ? "Saving…" : "Save changes"}<ChevronRight size={16} /></button>
         </form>
