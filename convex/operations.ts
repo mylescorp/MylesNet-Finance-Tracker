@@ -132,6 +132,10 @@ export const overview = query({
     const partnerById = new Map(partners.map(p => [p._id, p.name]));
     const holdingById = new Map(savings.map(item => [item._id, item.name]));
     const loanById = new Map(loans.map(item => [item._id, item.lender]));
+    const repaymentLoans = await Promise.all(loanRepayments.map(row => ctx.db.get("loans", row.loanId)));
+    repaymentLoans.forEach(loan => {
+      if (loan?.businessId === businessId) loanById.set(loan._id, loan.lender);
+    });
     const billById = new Map(bills.map(item => [item._id, item.name]));
     return {
       access: "ready" as const, role: current.membership.role,

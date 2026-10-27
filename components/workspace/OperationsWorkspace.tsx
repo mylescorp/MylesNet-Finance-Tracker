@@ -43,21 +43,21 @@ export function OperationsWorkspace({ screen, currency, scale, locale, timezone,
       const values = new FormData(element);
       const key = keys[scope] ?? crypto.randomUUID();
       setKeys(current => ({ ...current, [scope]: key }));
-      const run = async (confirmNegative: boolean) => {
+      const run = async (currentValues: FormData, confirmNegative: boolean) => {
         setBusy(true); setFeedback(null); setWarning(null);
         try {
-          await action(values, key, confirmNegative);
+          await action(currentValues, key, confirmNegative);
           setKeys(current => { const next = { ...current }; delete next[scope]; return next; });
           element.reset();
           setFeedback({ error: false, message: "Saved. The cashbook and audit trail have been updated." });
         } catch (error) {
           const details = error instanceof ConvexError ? error.data as { code?: string; message?: string } : null;
           if (details?.code === "CONFIRM_NEGATIVE" && !confirmNegative) {
-            setWarning({ message: details.message ?? "This transaction may create a negative balance.", retry: () => run(true) });
+            setWarning({ message: details.message ?? "This transaction may create a negative balance.", retry: () => run(new FormData(element), true) });
           } else setFeedback({ error: true, message: error instanceof Error ? error.message : "Could not save this record." });
         } finally { setBusy(false); }
       };
-      void run(false);
+      void run(values, false);
     };
   }
 
