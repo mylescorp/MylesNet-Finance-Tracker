@@ -32,6 +32,7 @@ export default defineSchema({
   invitations: defineTable({
     email: v.string(),
     role,
+    partnerId: v.optional(v.id("partners")),
     businessId: v.id("businesses"),
     invitedBy: v.id("users"),
     expiresAt: v.number(),
@@ -63,6 +64,7 @@ export default defineSchema({
     businessId: v.id("businesses"),
     name: v.string(),
     ownershipBps: v.number(),
+    capitalContributedUgx: v.optional(v.number()),
     active: v.boolean(),
     idempotencyKey: v.optional(v.string()),
   }).index("by_business_and_active", ["businessId", "active"]).index("by_business_and_idempotency", ["businessId", "idempotencyKey"]),
@@ -136,6 +138,7 @@ export default defineSchema({
     createdAt: v.number(),
   })
     .index("by_business_and_date", ["businessId", "occurredOn"])
+    .index("by_business_and_partner_and_date", ["businessId", "partnerId", "occurredOn"])
     .index("by_business_and_idempotency", ["businessId", "idempotencyKey"]),
   savingsHoldings: defineTable({
     businessId: v.id("businesses"),

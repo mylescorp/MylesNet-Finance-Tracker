@@ -18,6 +18,7 @@ function businessDate(timezone: string) {
 
 export function OperationsWorkspace({ screen, currency, scale, locale, timezone, dateFormat }: { screen: Screen; currency: string; scale: number; locale: string; timezone: string; dateFormat: "DD/MM/YYYY" | "MM/DD/YYYY" | "YYYY-MM-DD" }) {
   const data = useQuery(api.operations.overview, {});
+  const partnerStatement = useQuery(api.operations.partnerStatement, screen === "Partners" ? {} : "skip");
   const createMovement = useMutation(api.operations.createMovement);
   const createSavingsHolding = useMutation(api.operations.createSavingsHolding);
   const recordSavingsFlow = useMutation(api.operations.recordSavingsFlow);
@@ -62,7 +63,15 @@ export function OperationsWorkspace({ screen, currency, scale, locale, timezone,
 
   if (!data) return <div className="empty-state" role="status"><strong>Loading workspace records…</strong><span>These views use live, authorized Convex data.</span></div>;
   if (data.access === "pending") return <div className="notice-banner notice-warning" role="status">Workspace access is pending. Ask an owner to invite this account.</div>;
-  if (data.access === "restricted") return <div className="notice-banner notice-info" role="status">This financial workflow is restricted to owners and cashiers. Partner-specific access will be added with partner statements.</div>;
+  if (data.access === "restricted" && screen === "Partners") {
+    if (!partnerStatement) return <div className="empty-state" role="status"><strong>Loading partner statement…</strong><span>Only your linked partner account can read this statement.</span></div>;
+    if (partnerStatement.access !== "ready") return <div className="notice-banner notice-info" role="status">This partner login is not linked to an active partner record. Ask the workspace owner to link it in Settings → Access.</div>;
+    return <div className="board-grid">
+      <Card className="board-feature-card"><div className="card-heading"><div><h2 className="card-title">Your partner statement</h2><p className="card-subtitle">This view contains only the partner record linked to your sign-in.</p></div></div><div className="settings-facts"><div><span>Partner</span><strong>{partnerStatement.partner}</strong></div><div><span>Ownership</span><strong>{(partnerStatement.ownershipBps / 100).toFixed(2)}%</strong></div><div><span>Attributed capital contributions</span><strong>{partnerStatement.capitalTotalComplete ? fmt(partnerStatement.capitalContributedUgx) : `At least ${fmt(partnerStatement.capitalContributedUgx)}`}</strong></div></div>{!partnerStatement.capitalTotalComplete && <p className="notice-banner notice-warning">This partner has more than 5,000 historical movements. The displayed capital total is incomplete and needs owner reconciliation.</p>}<p className="muted-note">This statement shows recorded capital contributions. Profit distributions and payouts are not enabled, and this figure is not a payout balance.</p></Card>
+      <Card className="board-section-card"><div className="card-heading"><div><h2 className="card-title">Your capital contribution history</h2><p className="card-subtitle">Latest 100 contributions attributed to your partner record.</p></div></div>{partnerStatement.contributions.length ? <div className="table-scroll"><table className="data-table"><thead><tr><th>Date</th><th>Received by</th><th>Amount</th><th>Description</th></tr></thead><tbody>{partnerStatement.contributions.map(row => <tr key={row._id}><td>{formatBusinessDay(row.occurredOn, dateFormat)}</td><td>{accountName(row.account)}</td><td>{fmt(row.amountUgx)}</td><td>{row.note || "—"}</td></tr>)}</tbody></table></div> : <Empty message="No capital contributions recorded." detail="Your attributed contributions will appear here after the workspace records them." />}</Card>
+    </div>;
+  }
+  if (data.access === "restricted") return <div className="notice-banner notice-info" role="status">This financial workflow is restricted to owners and cashiers. Use the Partners page for your linked partner statement.</div>;
   const records = data;
   const sharedMessages = <>
     {warning && <div className="notice-banner notice-warning" role="alert"><strong>Balance warning</strong><p>{warning.message}</p><button className="button button-accent" type="button" disabled={busy} onClick={() => void warning.retry()}>Review and continue</button></div>}

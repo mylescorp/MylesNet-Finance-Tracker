@@ -38,6 +38,14 @@ async function accountBalance(ctx: MutationCtx, businessId: Id<"businesses">, ac
   return await ctx.db.query("accountBalances").withIndex("by_business_and_account", q => q.eq("businessId", businessId).eq("account", account)).unique();
 }
 
+async function historicalPartnerCapital(ctx: Ctx, businessId: Id<"businesses">, partnerId: Id<"partners">) {
+  const rows = await ctx.db.query("movements")
+    .withIndex("by_business_and_partner_and_date", q => q.eq("businessId", businessId).eq("partnerId", partnerId))
+    .take(5000);
+  const total = rows.reduce((sum, row) => row.kind === "capital_contribution" && row.state === "posted" ? safeAdd(sum, row.amountUgx, "Partner capital contributions") : sum, 0);
+  return { total, complete: rows.length < 5000 };
+}
+
 async function checkOutflow(ctx: MutationCtx, businessId: Id<"businesses">, account: Account, delta: number, confirmed: boolean) {
   const current = await accountBalance(ctx, businessId, account);
   if ((current?.balanceUgx ?? 0) + delta >= 0 || confirmed) return;
@@ -138,6 +146,34 @@ export const overview = query({
   },
 });
 
+// Partner accounts receive only their own identity, ownership percentage, and
+// attributed capital contributions. Business-wide ledger totals stay private.
+export const partnerStatement = query({
+  args: {},
+  handler: async (ctx) => {
+    const current = await workspace(ctx);
+    if (!current || current.membership.role !== "partner" || !current.membership.partnerId) return { access: "restricted" as const };
+    const partner = await ctx.db.get("partners", current.membership.partnerId);
+    if (!partner || partner.businessId !== current.business._id || !partner.active) return { access: "restricted" as const };
+    const contributions = await ctx.db.query("movements")
+      .withIndex("by_business_and_partner_and_date", q => q.eq("businessId", current.business._id).eq("partnerId", partner._id))
+      .order("desc").take(100);
+    const legacyCapital = partner.capitalContributedUgx === undefined
+      ? await historicalPartnerCapital(ctx, current.business._id, partner._id)
+      : { total: partner.capitalContributedUgx, complete: true };
+    return {
+      access: "ready" as const,
+      partner: partner.name,
+      ownershipBps: partner.ownershipBps,
+      capitalContributedUgx: legacyCapital.total,
+      capitalTotalComplete: legacyCapital.complete,
+      contributions: contributions.filter(row => row.kind === "capital_contribution" && row.state === "posted").map(row => ({
+        _id: row._id, occurredOn: row.occurredOn, amountUgx: row.amountUgx, account: row.toAccount ?? "cash", note: row.note,
+      })),
+    };
+  },
+});
+
 export const createMovement = mutation({
   args: {
     kind: v.union(v.literal("transfer"), v.literal("withdrawal"), v.literal("deposit"), v.literal("capital_contribution")),
@@ -178,6 +214,17 @@ export const createMovement = mutation({
       await applyAccountDelta(ctx, current.business._id, fromAccount!, outflow);
     }
     await applyAccountDelta(ctx, current.business._id, toAccount!, args.amountUgx);
+    if (args.kind === "capital_contribution" && args.partnerId) {
+      const partner = await ctx.db.get("partners", args.partnerId);
+      if (!partner) throw new Error("Partner is no longer available.");
+      let previousCapital = partner.capitalContributedUgx;
+      if (previousCapital === undefined) {
+        const legacyCapital = await historicalPartnerCapital(ctx, current.business._id, partner._id);
+        if (!legacyCapital.complete) throw new Error("This partner has more than 5,000 historical movements. Ask the owner to reconcile partner capital before recording another contribution.");
+        previousCapital = legacyCapital.total;
+      }
+      await ctx.db.patch("partners", partner._id, { capitalContributedUgx: safeAdd(previousCapital, args.amountUgx, "Partner capital contributions") });
+    }
     const now = Date.now();
     const movementId = await ctx.db.insert("movements", { businessId: current.business._id, kind: args.kind, amountUgx: args.amountUgx, feeUgx: feeUgx || undefined, fromAccount, toAccount, partnerId: args.kind === "capital_contribution" ? args.partnerId : undefined, occurredOn: args.occurredOn, note: args.note.trim(), idempotencyKey: args.idempotencyKey, state: "posted", createdBy: current.userId, createdAt: now });
     if (args.kind === "withdrawal" && feeUgx > 0) await postExpense(ctx, { businessId: current.business._id, userId: current.userId, amountUgx: feeUgx, occurredOn: args.occurredOn, account: "mobile_money", category: "Mobile money withdrawal fee", note: args.note.trim() || "Fee for cash withdrawal", idempotencyKey: `movement-fee:${args.idempotencyKey}`, action: "movement.fee_recorded" });
@@ -395,7 +442,7 @@ export const createPartner = mutation({
     const partners = await ctx.db.query("partners").withIndex("by_business_and_active", q => q.eq("businessId", current.business._id).eq("active", true)).take(100);
     if (partners.some(row => row.name.toLowerCase() === name.toLowerCase())) throw new Error("A partner with this name already exists.");
     if (partners.reduce((sum, row) => safeAdd(sum, row.ownershipBps, "Ownership"), args.ownershipBps) > 10_000) throw new Error("Active partner ownership cannot exceed 100%.");
-    const partnerId = await ctx.db.insert("partners", { businessId: current.business._id, name, ownershipBps: args.ownershipBps, active: true, idempotencyKey: args.idempotencyKey });
+    const partnerId = await ctx.db.insert("partners", { businessId: current.business._id, name, ownershipBps: args.ownershipBps, capitalContributedUgx: 0, active: true, idempotencyKey: args.idempotencyKey });
     await audit(ctx, current, "partner.created", "partner", partnerId, `${name} added with ${args.ownershipBps / 100}% ownership.`);
     return partnerId;
   },

@@ -26,5 +26,5 @@ Negative-balance rules use the workspace warning setting and require a separate 
 - The existing external webhook was not changed. Its caller, payload, authentication, retry contract, and staging parity remain unknown and must be documented before any cutover.
 - Savings balances represent recorded contributions less withdrawals; they are not valuations and do not include investment gains.
 - Loan payments are entered with principal and interest portions supplied by the user. The displayed schedule is a planning estimate, not an authoritative lender schedule.
-- Ownership records can be entered and partner contributions can be attributed, but partner login linkage, partner-only statements, ownership history, and payouts are not implemented here.
+- Ownership records can be entered and partner contributions can be attributed. Owner-issued invitations bind a partner login to exactly one active partner record; the partner can see only their ownership and attributed capital contribution history. Profit distributions, payout balances, and ownership history are not implemented.
 - Correction screens for operational records, off-platform backups, restore, period locking, and provider delivery remain separate production work.
