@@ -38,12 +38,12 @@ function queueGoogleFormSubmission_(event) {
     if (!queue) throw new Error('Google Form queue is missing. Run the bridge setup first.');
     const existing = queue.createTextFinder(sourceKey).matchEntireCell(true).findNext();
     if (existing) return;
-    const payload = normalizeGoogleFormSubmission_(sourceKey, event.namedValues);
+    const payload = normalizeGoogleFormSubmission_(sourceKey, event.namedValues, sheet, event.range.getRow());
     queue.appendRow([sourceKey, JSON.stringify(payload), 'pending', 0, new Date(), '']);
   } finally { lock.releaseLock(); }
 }
 
-function normalizeGoogleFormSubmission_(sourceKey, namedValues) {
+function normalizeGoogleFormSubmission_(sourceKey, namedValues, responseSheet, responseRow) {
   const fields = {};
   Object.keys(namedValues).forEach(key => {
     if (String(key).toLowerCase() === 'email address') return;
@@ -60,16 +60,26 @@ function normalizeGoogleFormSubmission_(sourceKey, namedValues) {
     : kind === 'movement' ? 'Movement date' : kind === 'savings' ? 'Investment date' : 'Due date';
   const emailValue = namedValues['Email address'];
   const submittedByEmail = Array.isArray(emailValue) ? String(emailValue[0] || '').trim() : String(emailValue || '').trim();
-  return { sourceKey, kind, occurredOn: googleFormDay_(fields[dateField]), submittedByEmail, fields };
+  return { sourceKey, kind, occurredOn: googleFormSheetDay_(responseSheet, responseRow, dateField, fields[dateField]), submittedByEmail, fields };
 }
 
-function googleFormDay_(value) {
+function googleFormSheetDay_(sheet, rowNumber, dateField, fallbackValue) {
+  const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getDisplayValues()[0];
+  const fieldIndex = headers.findIndex(header => String(header).trim() === dateField);
+  const raw = fieldIndex >= 0 ? sheet.getRange(rowNumber, fieldIndex + 1).getValue() : fallbackValue;
+  if (raw instanceof Date && !isNaN(raw.getTime())) {
+    return Utilities.formatDate(raw, sheet.getParent().getSpreadsheetTimeZone(), 'yyyy-MM-dd');
+  }
+  return googleFormDay_(raw, sheet.getParent().getSpreadsheetLocale());
+}
+
+function googleFormDay_(value, spreadsheetLocale) {
   if (!value) return '';
   const text = String(value).trim();
   if (/^\d{4}-\d{2}-\d{2}$/.test(text)) return text;
   const parts = text.match(/^(\d{1,2})[/.\-](\d{1,2})[/.\-](\d{4})$/);
   if (parts) {
-    const locale = Session.getActiveUserLocale().toLowerCase();
+    const locale = String(spreadsheetLocale || '').toLowerCase();
     const first = Number(parts[1]);
     const second = Number(parts[2]);
     const month = locale.startsWith('en_us') ? first : second;

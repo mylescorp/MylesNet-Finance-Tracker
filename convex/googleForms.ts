@@ -122,7 +122,7 @@ export const receive = internalMutation({
     const member = submitter ? await ctx.db.query("memberships").withIndex("by_business_and_user", q => q.eq("businessId", business._id).eq("userId", submitter._id)).first() : null;
     const authorizedSubmitter = submitter && member?.active && (member.role === "owner" || member.role === "cashier") ? submitter : null;
     const prefs = await ctx.db.query("workspacePreferences").withIndex("by_business", q => q.eq("businessId", business._id)).unique();
-    const digits = (() => { try { return new Intl.NumberFormat("en", { style: "currency", currency: business.currency }).resolvedOptions().maximumFractionDigits ?? 0; } catch { return 0; } })();
+    const digits = 0; // The legacy Google Form labels its finance amounts in UGX.
     const now = Date.now();
     const date = input.occurredOn;
     const fields = input.fields;
@@ -165,6 +165,40 @@ export const receive = internalMutation({
         changes.push({ kind: "expense", amountUgx: amount, category, account, note: [fieldValue(fields, "Paid to / description"), fieldValue(fields, "Expense note (optional)")].filter(Boolean).join(" · ").slice(0, 300) });
         summary = "Expense posted from Google Form.";
       } else summary = "Expense needs review: check the date, amount, configured category, and payment account.";
+    }
+    if (status === "posted" && business.currency !== "UGX") {
+      status = "needs_review";
+      summary = `Form amounts are in UGX, but this workspace uses ${business.currency}. Confirm the currency before posting.`;
+    }
+    if (status === "posted" && prefs?.requireEntryNote && changes.some(entry => !entry.note.trim())) {
+      status = "needs_review";
+      summary = "Workspace rules require a note for each entry; add a note before posting this Form submission.";
+    }
+    if (status === "posted" && prefs?.negativeBalanceWarning !== false) {
+      const outflows = new Map<string, number>();
+      for (const entry of changes) if (entry.kind === "expense") outflows.set(entry.account, (outflows.get(entry.account) ?? 0) + entry.amountUgx);
+      for (const [account, amount] of outflows) {
+        const balance = await ctx.db.query("accountBalances").withIndex("by_business_and_account", q => q.eq("businessId", business._id).eq("account", account as "cash" | "mobile_money")).unique();
+        if ((balance?.balanceUgx ?? 0) - amount < 0) {
+          status = "needs_review";
+          summary = `This expense would put ${account === "cash" ? "cash" : "mobile money"} below zero. Review the balance before posting.`;
+          break;
+        }
+      }
+    }
+    if (status === "posted" && (prefs?.duplicateWindowDays ?? 1) > 0) {
+      const days = prefs?.duplicateWindowDays ?? 1;
+      const from = new Date(`${date}T00:00:00.000Z`); from.setUTCDate(from.getUTCDate() - days);
+      const to = new Date(`${date}T00:00:00.000Z`); to.setUTCDate(to.getUTCDate() + days);
+      for (const entry of changes) {
+        const possible = await ctx.db.query("entries").withIndex("by_business_and_kind_and_date", q => q.eq("businessId", business._id).eq("kind", entry.kind).gte("occurredOn", from.toISOString().slice(0, 10)).lte("occurredOn", to.toISOString().slice(0, 10))).take(100);
+        const duplicate = possible.find(row => row.state === "posted" && row.account === entry.account && row.amountUgx === entry.amountUgx && row.category === entry.category);
+        if (duplicate) {
+          status = "needs_review";
+          summary = `A similar ${entry.kind} already exists near ${duplicate.occurredOn}. Review it before posting.`;
+          break;
+        }
+      }
     }
     if (status === "posted") {
       for (const [index, entry] of changes.entries()) {
