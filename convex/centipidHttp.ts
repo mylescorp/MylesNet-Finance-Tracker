@@ -1,8 +1,8 @@
 import { httpAction } from "./_generated/server";
 import { internal } from "./_generated/api";
+import { isIgnoredCentipidEvent } from "./centipidUtils";
 
 type Payload = Record<string, unknown>;
-const wordsNeverBooked = ["fail", "refund", "cancel", "expire", "reverse", "declin", "pending"];
 
 function isRecord(value: unknown): value is Payload { return !!value && typeof value === "object" && !Array.isArray(value); }
 function asText(value: unknown) {
@@ -54,6 +54,7 @@ export const webhook = httpAction(async (ctx, request) => {
     }
   } catch { return json({ status: "error", message: "Invalid payload" }); }
   const query = new URL(request.url).searchParams;
+  if (Array.isArray(payload)) payload = payload[0] ?? {};
   if (!isRecord(payload) && query.size > 0) {
     const fromQuery: Payload = {};
     query.forEach((value, key) => { if (key !== "token") fromQuery[key] = value; });
@@ -63,7 +64,7 @@ export const webhook = httpAction(async (ctx, request) => {
   if (!isRecord(payload)) return json({ status: "error", message: "No payload found" });
   const body = isRecord(payload.data) ? payload.data : isRecord(payload.payload) ? payload.payload : payload;
   const event = String(payload.event || payload.event_type || payload.topic || body.event || body.event_type || "payment.received").toLowerCase().trim().slice(0, 120);
-  const ignored = wordsNeverBooked.some(word => event.includes(word));
+  const ignored = isIgnoredCentipidEvent(event);
   let kind: "payment" | "voucher" | "expense" | "ignored" = "ignored";
   if (!ignored && event.includes("expense")) kind = "expense";
   else if (!ignored && event.includes("voucher") && event.includes("redeem")) kind = "voucher";
@@ -72,7 +73,8 @@ export const webhook = httpAction(async (ctx, request) => {
   const transactionIdRaw = asText(pick(body, payload, ["transaction_id", "transaction", "reference", "ref", "receipt", "receipt_number", "payment_id", "id"])).slice(0, 120);
   const transactionId = maskPII(transactionIdRaw);
   const rawHash = await hash(raw || JSON.stringify(payload));
-  const eventKey = await hash(transactionIdRaw ? `${event}:${transactionIdRaw}` : rawHash);
+  const eventGroup = kind === "expense" ? "expense" : "sale";
+  const eventKey = await hash(transactionIdRaw ? `${eventGroup}:${transactionIdRaw}` : rawHash);
   const paymentMethod = maskPII(asText(pick(body, payload, ["gateway", "payment_method", "method", "provider"]) || (kind === "voucher" ? "Voucher Redemption" : "Centipid System")).slice(0, 120));
   let description = maskPII(asText(pick(body, payload, ["description", "note"])).slice(0, 240));
   if (kind === "voucher") description = `Voucher Redeemed: ${maskPII(asText(pick(body, payload, ["code", "voucher_code", "serial", "voucher"]))) || "Hotspot Voucher"}`;

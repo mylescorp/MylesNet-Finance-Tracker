@@ -31,7 +31,8 @@ function safeAdd(a: number, b: number, label: string) {
 
 export const importRows = mutation({
   args: {
-    sourceHash: v.string(),
+    batchId: v.id("importBatches"),
+    startRow: v.number(),
     rows: v.array(v.object({
       rowNumber: v.number(), kind: v.union(v.literal("sale"), v.literal("expense")),
       amountUgx: v.number(), occurredOn: v.string(), account,
@@ -41,19 +42,23 @@ export const importRows = mutation({
   returns: v.object({ imported: v.number(), skipped: v.number() }),
   handler: async (ctx, args) => {
     const { userId, business } = await ownerContext(ctx);
-    if (!/^[a-f0-9]{64}$/.test(args.sourceHash) || args.rows.length < 1 || args.rows.length > 25) {
+    const batch = await ctx.db.get("importBatches", args.batchId);
+    if (!batch || batch.businessId !== business._id || batch.status !== "in_progress" || args.startRow !== batch.progressRows || args.rows.length < 1 || args.rows.length > 25 || batch.progressRows + args.rows.length > batch.totalRows) {
       throw new ConvexError("Import batch is invalid. Use batches of 1 to 25 rows.");
     }
+    if (batch.importType === "centipid_analytics" && business.currency !== "UGX") throw new ConvexError("Centipid analytics totals are UGX; the workspace must use UGX.");
     let imported = 0;
     let skipped = 0;
     for (const row of args.rows) {
       if (!Number.isSafeInteger(row.rowNumber) || row.rowNumber < 1 || !Number.isSafeInteger(row.amountUgx) || row.amountUgx <= 0 || !validDay(row.occurredOn)) {
         throw new ConvexError(`Row ${row.rowNumber} has an invalid date or amount.`);
       }
+      if (batch.importType === "centipid_analytics" && (row.kind !== "sale" || row.account !== "unallocated")) throw new ConvexError("Centipid daily totals must be unallocated sales.");
+      if (batch.importType === "cashbook" && row.account === "unallocated") throw new ConvexError("Cashbook rows need an explicit account mapping.");
       const category = row.category.trim();
       const note = row.note.trim();
       if (category.length < 1 || category.length > 80 || note.length > 300) throw new ConvexError(`Row ${row.rowNumber} has an invalid category or note.`);
-      const idempotencyKey = `csv:${args.sourceHash}:${row.rowNumber}`;
+      const idempotencyKey = `csv:${batch.sourceHash}:${row.rowNumber}`;
       const existing = await ctx.db.query("entries").withIndex("by_business_and_idempotency", q => q.eq("businessId", business._id).eq("idempotencyKey", idempotencyKey)).unique();
       if (existing) { skipped++; continue; }
 
@@ -79,36 +84,58 @@ export const importRows = mutation({
       await ctx.db.insert("auditEvents", { businessId: business._id, actorId: userId, action: "entry.imported", entityType: "entry", entityId: entryId, occurredAt: Date.now(), summary: `${row.kind} imported · ${row.occurredOn} · ${category}` });
       imported++;
     }
+    await ctx.db.patch("importBatches", batch._id, {
+      importedCount: batch.importedCount + imported,
+      skippedCount: batch.skippedCount + skipped,
+      progressRows: batch.progressRows + args.rows.length,
+    });
     return { imported, skipped };
   },
 });
 
-export const recordBatch = mutation({
+export const beginBatch = mutation({
   args: {
-    sourceHash: v.string(), fileName: v.string(), importType,
-    importedCount: v.number(), skippedCount: v.number(), reportSummary: v.optional(v.string()),
+    sourceHash: v.string(), fileName: v.string(), importType, totalRows: v.number(), reportSummary: v.optional(v.string()),
   },
-  returns: v.id("importBatches"),
+  returns: v.object({ batchId: v.id("importBatches"), status: v.union(v.literal("in_progress"), v.literal("completed")), progressRows: v.number(), importedCount: v.number(), skippedCount: v.number() }),
   handler: async (ctx, args) => {
     const { userId, business } = await ownerContext(ctx);
-    if (!/^[a-f0-9]{64}$/.test(args.sourceHash) || args.fileName.trim().length < 1 || args.fileName.length > 180 || !Number.isSafeInteger(args.importedCount) || args.importedCount < 0 || !Number.isSafeInteger(args.skippedCount) || args.skippedCount < 0 || (args.reportSummary?.length ?? 0) > 64_000) throw new ConvexError("Import summary is invalid.");
-    const existing = await ctx.db.query("importBatches").withIndex("by_business_and_created", q => q.eq("businessId", business._id)).order("desc").take(100);
-    const duplicate = existing.find(batch => batch.sourceHash === args.sourceHash && batch.importType === args.importType);
-    if (duplicate) return duplicate._id;
+    if (!/^[a-f0-9]{64}$/.test(args.sourceHash) || args.fileName.trim().length < 1 || args.fileName.length > 180 || !Number.isSafeInteger(args.totalRows) || args.totalRows < 0 || args.totalRows > 10_000 || (args.reportSummary?.length ?? 0) > 64_000) throw new ConvexError("Import summary is invalid.");
+    if (args.importType === "centipid_analytics" && business.currency !== "UGX") throw new ConvexError("Centipid analytics reports are denominated in UGX. Set the workspace currency to UGX first.");
+    const duplicate = await ctx.db.query("importBatches").withIndex("by_business_and_source", q => q.eq("businessId", business._id).eq("sourceHash", args.sourceHash)).unique();
+    if (duplicate) {
+      if (duplicate.importType !== args.importType || duplicate.totalRows !== args.totalRows) throw new ConvexError("This file hash is already associated with a different import shape.");
+      return { batchId: duplicate._id, status: duplicate.status, progressRows: duplicate.progressRows, importedCount: duplicate.importedCount, skippedCount: duplicate.skippedCount };
+    }
     const { reportSummary, ...batchArgs } = args;
-    const id = await ctx.db.insert("importBatches", { ...batchArgs, fileName: args.fileName.trim(), businessId: business._id, createdBy: userId, createdAt: Date.now() });
-    if (reportSummary) await ctx.db.insert("importReportDetails", { businessId: business._id, batchId: id, reportSummary });
-    await ctx.db.insert("auditEvents", { businessId: business._id, actorId: userId, action: "import.completed", entityType: "import", entityId: id, occurredAt: Date.now(), summary: `Imported ${args.importedCount} rows from ${args.fileName.trim()}; ${args.skippedCount} duplicates skipped.` });
-    return id;
+    const now = Date.now();
+    const batchId = await ctx.db.insert("importBatches", { ...batchArgs, fileName: args.fileName.trim(), businessId: business._id, createdBy: userId, createdAt: now, importedCount: 0, skippedCount: 0, progressRows: 0, status: "in_progress" });
+    if (reportSummary) await ctx.db.insert("importReportDetails", { businessId: business._id, batchId, reportSummary });
+    await ctx.db.insert("auditEvents", { businessId: business._id, actorId: userId, action: "import.started", entityType: "import", entityId: batchId, occurredAt: now, summary: `Started ${args.importType} import: ${args.fileName.trim()} (${args.totalRows} rows).` });
+    return { batchId, status: "in_progress" as const, progressRows: 0, importedCount: 0, skippedCount: 0 };
+  },
+});
+
+export const completeBatch = mutation({
+  args: { batchId: v.id("importBatches") }, returns: v.null(),
+  handler: async (ctx, args) => {
+    const { userId, business } = await ownerContext(ctx);
+    const batch = await ctx.db.get("importBatches", args.batchId);
+    if (!batch || batch.businessId !== business._id) throw new ConvexError("Import batch not found.");
+    if (batch.status === "completed") return null;
+    if (batch.progressRows !== batch.totalRows) throw new ConvexError("Import still has rows to process.");
+    await ctx.db.patch("importBatches", batch._id, { status: "completed" });
+    await ctx.db.insert("auditEvents", { businessId: business._id, actorId: userId, action: "import.completed", entityType: "import", entityId: batch._id, occurredAt: Date.now(), summary: `Imported ${batch.importedCount} rows from ${batch.fileName}; ${batch.skippedCount} duplicates skipped.` });
+    return null;
   },
 });
 
 export const history = query({
   args: {},
-  returns: v.array(v.object({ _id: v.id("importBatches"), fileName: v.string(), importType, importedCount: v.number(), skippedCount: v.number(), createdAt: v.number() })),
+  returns: v.array(v.object({ _id: v.id("importBatches"), fileName: v.string(), importType, totalRows: v.number(), importedCount: v.number(), skippedCount: v.number(), progressRows: v.number(), status: v.union(v.literal("in_progress"), v.literal("completed")), createdAt: v.number() })),
   handler: async (ctx) => {
     const { business } = await ownerContext(ctx);
-    return (await ctx.db.query("importBatches").withIndex("by_business_and_created", q => q.eq("businessId", business._id)).order("desc").take(20)).map(({ _id, fileName, importType, importedCount, skippedCount, createdAt }) => ({ _id, fileName, importType, importedCount, skippedCount, createdAt }));
+    return (await ctx.db.query("importBatches").withIndex("by_business_and_created", q => q.eq("businessId", business._id)).order("desc").take(20)).map(({ _id, fileName, importType, totalRows, importedCount, skippedCount, progressRows, status, createdAt }) => ({ _id, fileName, importType, totalRows, importedCount, skippedCount, progressRows, status, createdAt }));
   },
 });
 

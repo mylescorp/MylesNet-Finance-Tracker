@@ -41,7 +41,11 @@ export function parseCentipid(rows: CsvRow[]): CentipidReport | null {
   const routerAt = sectionIndex(rows, "Router breakdown");
   if ([summaryAt, paymentAt, revenueAt, usageAt, routerAt].some(i => i < 0)) throw new Error("Centipid report is missing one of the expected report sections.");
   const summary: Record<string, string | number> = {};
-  for (const item of rows.slice(summaryAt + 1, paymentAt).filter(r => r.length >= 2)) summary[item[0].replaceAll('"', "").trim()] = Number.isFinite(Number(item[1])) ? Number(item[1]) : item[1].trim();
+  for (const item of rows.slice(summaryAt + 1, paymentAt).filter(r => r.length >= 2)) {
+    const key = item[0].replaceAll('"', "").trim();
+    const raw = item[1].trim();
+    summary[key] = raw === "" ? "" : Number.isFinite(Number(raw)) ? Number(raw) : raw;
+  }
   if (rows[paymentAt + 1]?.map(x => x.toLowerCase()).join(",") !== "method,amount,count") throw new Error("Payment methods section has an unexpected header.");
   const paymentMethods = rows.slice(paymentAt + 2, revenueAt).filter(r => r.length >= 3).map(r => ({ method: r[0].trim(), amount: amount(r[1]), count: amount(r[2]) }));
   if (rows[revenueAt + 1]?.map(x => x.toLowerCase()).join(",") !== "date,amount") throw new Error("Daily revenue section has an unexpected header.");
@@ -61,9 +65,10 @@ export function parseCentipid(rows: CsvRow[]): CentipidReport | null {
   if (rows[routerAt + 1]?.map(x => x.toLowerCase()).join(",") !== "router,online,revenue,sessions,bytes,subscribers") throw new Error("Router breakdown section has an unexpected header.");
   const routers = rows.slice(routerAt + 2).filter(r => r.length >= 6).map(r => ({ router: r[0].trim(), online: r[1].trim(), revenue: amount(r[2]), sessions: amount(r[3]), bytes: amount(r[4]), subscribers: amount(r[5]) }));
   const revenueTotal = reportRows.reduce((sum, r) => sum + r.amountUgx, 0);
-  const summaryRevenue = Number(summary.Revenue);
+  if (summary.Revenue === undefined || String(summary.Revenue).trim() === "") throw new Error("The report summary is missing Revenue.");
+  const summaryRevenue = amount(String(summary.Revenue));
   const methodRevenue = paymentMethods.reduce((sum, method) => sum + method.amount, 0);
-  if (Number.isFinite(summaryRevenue) && summaryRevenue !== revenueTotal) throw new Error(`Daily revenue total (${revenueTotal.toLocaleString()}) does not match the report summary (${summaryRevenue.toLocaleString()}).`);
+  if (summaryRevenue !== revenueTotal) throw new Error(`Daily revenue total (${revenueTotal.toLocaleString()}) does not match the report summary (${summaryRevenue.toLocaleString()}).`);
   if (methodRevenue !== revenueTotal) throw new Error(`Payment-method total (${methodRevenue.toLocaleString()}) does not match daily revenue (${revenueTotal.toLocaleString()}).`);
   return { summary, paymentMethods, dailyRevenue, dailyUsage, routers, usageBytes, revenueTotal, rows: reportRows };
 }

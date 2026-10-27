@@ -2,6 +2,7 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import { ConvexError, v } from "convex/values";
 import { internalMutation, mutation, query } from "./_generated/server";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
+import { isIgnoredCentipidEvent } from "./centipidUtils";
 
 async function owner(ctx: MutationCtx | QueryCtx) {
   const userId = await getAuthUserId(ctx);
@@ -70,8 +71,7 @@ export const processWebhook = internalMutation({
     if (prior) return { status: "duplicate" as const };
 
     const prefs = await ctx.db.query("workspacePreferences").withIndex("by_business", q => q.eq("businessId", business._id)).unique();
-    const ignoredWords = ["fail", "refund", "cancel", "expire", "reverse", "declin", "pending"];
-    const ignoredEvent = ignoredWords.some(word => args.event.includes(word));
+    const ignoredEvent = isIgnoredCentipidEvent(args.event);
     const kind = ignoredEvent ? "ignored" : args.kind;
     const amount = Math.abs(args.amount);
     if (kind === "ignored" || !Number.isFinite(amount) || amount <= 0) {
@@ -86,8 +86,10 @@ export const processWebhook = internalMutation({
     if (kind === "expense") {
       const categories = prefs?.expenseCategories ?? [];
       category = findCategory(categories, args.category) ?? categories.find(value => /other|misc/i.test(value)) ?? categories.at(-1) ?? "Other";
-      const sourceAccount = `${args.account} ${args.paymentMethod}`.toLowerCase();
-      account = /mobile|momo|centipid|mpesa|airtel/.test(sourceAccount) ? "mobile_money" : "cash";
+      const explicitAccount = args.account.toLowerCase();
+      const accountHint = /cash/.test(explicitAccount) ? "cash" : /mobile|momo|centipid|mpesa|airtel/.test(explicitAccount) ? "mobile_money" : "";
+      const methodHint = /cash|voucher/.test(args.paymentMethod.toLowerCase()) ? "cash" : /mobile|momo|mpesa|airtel/.test(args.paymentMethod.toLowerCase()) ? "mobile_money" : "cash";
+      account = accountHint || methodHint;
       note = `${args.paidTo || args.description || "Centipid expense"}${args.transactionId ? ` · ref ${args.transactionId}` : ""}`.slice(0, 300);
     } else {
       const categories = prefs?.incomeCategories ?? [];
