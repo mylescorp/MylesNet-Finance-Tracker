@@ -96,6 +96,7 @@ export const claimFirstOwner = mutation({
       name,
       currency: "UGX",
       timezone: "Africa/Kampala",
+      weekStartsOn: "monday",
       createdBy: userId,
       createdAt: now,
     });
@@ -139,6 +140,99 @@ export const currentAccess = query({
       businessName: current.business.name,
       role: current.membership.role,
     };
+  },
+});
+
+export const businessSettings = query({
+  args: {},
+  returns: v.union(
+    v.object({ access: v.literal("setup") }),
+    v.object({ access: v.literal("pending") }),
+    v.object({
+      access: v.literal("ready"),
+      businessName: v.string(),
+      currency: v.literal("UGX"),
+      timezone: v.string(),
+      weekStartsOn: v.union(v.literal("monday"), v.literal("sunday")),
+      role: v.union(v.literal("owner"), v.literal("partner"), v.literal("cashier")),
+    }),
+  ),
+  handler: async (ctx) => {
+    const current = await getMembership(ctx);
+    if (!current) {
+      const businesses = await ctx.db.query("businesses").take(1);
+      return { access: businesses.length === 0 ? "setup" as const : "pending" as const };
+    }
+    return {
+      access: "ready" as const,
+      businessName: current.business.name,
+      currency: current.business.currency,
+      timezone: current.business.timezone,
+      weekStartsOn: current.business.weekStartsOn ?? "monday",
+      role: current.membership.role,
+    };
+  },
+});
+
+export const updateBusinessSettings = mutation({
+  args: {
+    businessName: v.string(),
+    timezone: v.string(),
+    weekStartsOn: v.union(v.literal("monday"), v.literal("sunday")),
+  },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const current = await getMembership(ctx);
+    if (!current || current.membership.role !== "owner") {
+      throw new Error("Only a workspace owner can change general settings.");
+    }
+    const businessName = args.businessName.trim();
+    const timezone = args.timezone.trim();
+    if (businessName.length < 2 || businessName.length > 100) {
+      throw new Error("Workspace name must be between 2 and 100 characters.");
+    }
+    if (timezone.length < 3 || timezone.length > 100) {
+      throw new Error("Enter a valid IANA timezone, such as Africa/Kampala.");
+    }
+    try {
+      new Intl.DateTimeFormat("en-US", { timeZone: timezone }).format(new Date());
+    } catch {
+      throw new Error("Enter a valid IANA timezone, such as Africa/Kampala.");
+    }
+
+    const changed: string[] = [];
+    const details: Record<string, { before: string; after: string }> = {};
+    if (businessName !== current.business.name) {
+      changed.push("workspace name");
+      details.businessName = { before: current.business.name, after: businessName };
+    }
+    if (timezone !== current.business.timezone) {
+      changed.push("reporting timezone");
+      details.timezone = { before: current.business.timezone, after: timezone };
+    }
+    const weekStartsOn = current.business.weekStartsOn ?? "monday";
+    if (args.weekStartsOn !== weekStartsOn) {
+      changed.push("week start");
+      details.weekStartsOn = { before: weekStartsOn, after: args.weekStartsOn };
+    }
+    if (changed.length === 0) return null;
+
+    await ctx.db.patch("businesses", current.business._id, {
+      name: businessName,
+      timezone,
+      weekStartsOn: args.weekStartsOn,
+    });
+    await ctx.db.insert("auditEvents", {
+      businessId: current.business._id,
+      actorId: current.userId,
+      action: "business.settings.updated",
+      entityType: "business",
+      entityId: current.business._id,
+      occurredAt: Date.now(),
+      summary: `Updated ${changed.join(", ")}.`,
+      details: JSON.stringify(details),
+    });
+    return null;
   },
 });
 

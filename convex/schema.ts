@@ -14,6 +14,7 @@ export default defineSchema({
     name: v.string(),
     currency: v.literal("UGX"),
     timezone: v.string(),
+    weekStartsOn: v.optional(v.union(v.literal("monday"), v.literal("sunday"))),
     createdBy: v.id("users"),
     createdAt: v.number(),
   }),
@@ -86,5 +87,6 @@ export default defineSchema({
     entityId: v.string(),
     occurredAt: v.number(),
     summary: v.string(),
+    details: v.optional(v.string()),
   }).index("by_business_and_time", ["businessId", "occurredAt"]),
 });

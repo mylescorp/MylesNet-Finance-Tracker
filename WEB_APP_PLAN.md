@@ -41,6 +41,8 @@ Create these routes, using the 18 boards as the source of layout and content:
 | Reconcile | `12-Reconcile` |
 | Settings — General, Finance, Rules, Data, Access, Releases | `13`–`18-Settings-*` |
 
+Business-specific operating choices must be editable by an authorized owner from the Settings area rather than hardcoded or scattered across screens. General settings should own locale/timezone and period display; Finance settings should own currency, accounts, categories, opening balances, and cashbook treatment options; Rules should own validation and review thresholds. Use the original workbook's `Africa/Kampala` and `UGX` as initial defaults, and audit changes that can affect reports or balances. Keep provider secrets and live webhook credentials out of user-editable settings.
+
 Implement each page as a responsive screen using the board’s hierarchy, copy, cards, table columns, and visual tokens. Use the actual charts, filters, responsive tables, dialogs, and forms that a browser supports. Do not reproduce spreadsheet-only mechanics such as merged cells, cell notes, protected ranges, hidden calculation tabs, or formula-driven navigation.
 
 ## 4. Recommended application architecture
@@ -128,7 +130,7 @@ Carry the source brief’s known issues forward as explicit migration/reconcilia
 1. Set up the app shell, responsive navigation, design tokens, typography, shared card/table/form/status components, and the existing logo/banner usage.
 2. Create separate Convex development, staging, and production deployments and matching Vercel environments, each connected to the right Google OAuth credentials and data. Configure Vercel’s build to deploy Convex functions and the Next.js app together; keep production deploy credentials scoped to production. Use isolated Convex preview deployments for preview builds, with a documented OAuth callback strategy.
 3. Prototype Convex Auth Google OAuth on the chosen Next.js/Vercel setup. Verify invitation-only onboarding, session lifecycle, protected reads/writes, route behavior, and provider callback configuration before continuing.
-4. Implement business membership/roles, server-side authorization, audit events, business settings, accounts, and period selection.
+4. Implement business membership/roles, server-side authorization, audit events, business settings, accounts, and period selection. Make supported business-specific rules configurable in the appropriate Settings section, with owner-only validation and an audit event for changes that affect finance results.
 5. Build data import preview and validation in staging, including deduplication, source-to-target reconciliation, and a webhook compatibility/shadow test harness.
 
 ### Phase 2 — Core finance workflows
@@ -241,8 +243,8 @@ Recheck these docs when implementation starts because platform releases and inte
 
 These are the highest-impact decisions that the current plan still leaves open:
 
-1. **Canonical ledger and accounting semantics — model chosen.** Use an auditable cashbook, not a full double-entry ledger. Still define how each event changes account balances and profit: sales, expenses, transfers, cash/mobile-money movement, withdrawal fees, partner capital, payouts, loans, refunds, equipment purchases, and bill accruals. Transfers must not accidentally count as income or expense. Define opening balances and how corrections/reversals work before finalizing the schema and reconciliation formulas.
-2. **Calendar and period rules.** Declare the business timezone as `Africa/Kampala` (the spreadsheet brief’s timezone), currency `UGX`, week start, inclusive/exclusive date-range rules, and how timestamps are converted into a business day. Store timestamps consistently and render/report using the business timezone.
+1. **Canonical ledger and accounting semantics — model chosen.** Use an auditable cashbook, not a full double-entry ledger. Still define how each event changes account balances and profit: sales, expenses, transfers, cash/mobile-money movement, withdrawal fees, partner capital, payouts, loans, refunds, equipment purchases, and bill accruals. Transfers must not accidentally count as income or expense. Define opening balances and how corrections/reversals work before finalizing the schema and reconciliation formulas; expose supported business choices in Settings and audit changes that affect finance results.
+2. **Calendar and period rules.** The `Africa/Kampala` timezone and `UGX` currency are initial defaults, not hardcoded business policy. Expose the business timezone, currency (only from supported currencies), week start, inclusive/exclusive date-range rules, and business-day conversion behavior in Settings. Store timestamps consistently and render/report using the selected business timezone.
 3. **Webhook facts and cutover owner.** The plan protects compatibility, but the actual endpoint, callers, request examples, authentication method, expected latency, retry behavior, and business owner are not present in this package. Capture these before implementation. Decide who can approve cutover and who can execute rollback.
 4. **Convex Auth production readiness.** The required compatibility prototype is a gate, but no fallback decision or acceptance owner is named. Decide required account recovery, MFA/step-up authentication for payouts and period close, session expiry/revocation, invitation expiry, and what to do if Convex Auth does not meet the requirements.
 5. **Release and data migration authority.** Name who approves import totals, which source wins when the Sheet and app disagree, the exact cutover date/process, how the old entry form is handled, and how long the Sheet remains read-only/available. Define rollback for data written after cutover.
@@ -257,6 +259,7 @@ Recommended order: define items 1–6 and capture the webhook facts before produ
 ## 16. Decisions confirmed in this questionnaire
 
 - **Accounting model:** Auditable cashbook. Track transaction effects on accounts and profit with an audit trail, without requiring a full general ledger.
+- **Business settings direction:** Make supported business-specific rules and locale choices configurable in Settings. Use `Africa/Kampala` and `UGX` as initial defaults; preserve validation and audit changes that affect finance results.
 
 ## 17. Implementation status — initial foundation
 
@@ -264,7 +267,7 @@ Recommended order: define items 1–6 and capture the webhook facts before produ
 - The complete reference package is copied into `design-reference/`; the approved logo, banner, and CSS tokens are also copied into their app locations. These copies were checked byte-for-byte against the source package.
 - The selected stack is Next.js App Router, Convex, Convex Auth with Google OAuth, and Vercel. The production Convex URLs from the dashboard screenshot are recorded in `DEPLOYMENTS.md`; local development is reserved for a separate development deployment.
 - The first implementation contains protected routes, business membership checks, first-owner setup guarded by a 32-character one-time code, UGX sales/expense entry mutations, per-account balances, period totals, idempotency keys, and append-only audit events for entry creation and voiding.
-- Dashboard, Sales, and Expenses are connected to Convex. The other board routes currently display scoped implementation placeholders mapped to their original board specifications.
+- Dashboard, Sales, and Expenses are connected to Convex. General Settings now has owner-only controls for workspace name, reporting timezone, and week start, with audit events; the dashboard and new-entry date use the configured timezone/week start. Currency remains UGX-only until currency-aware ledger support is implemented. Finance, Rules, Data, Access, and Releases settings and the other board routes remain placeholders.
 - Partner accounts currently receive no business-wide transaction details or totals. Partner-specific statement access must be implemented before enabling those routes.
-- `Africa/Kampala` remains a provisional timezone default; week start, opening-balance import, full transfer/refund/capital/payout/loan semantics, and period closing still need agreement.
+- `Africa/Kampala` and Monday are the current General Settings defaults and can be changed by an owner. UGX remains the only supported currency. Opening-balance import, full transfer/refund/capital/payout/loan semantics, and period closing still need agreement; Finance, Rules, Data, Access, and Releases settings remain placeholders.
 - No production deploy, schema push, or webhook cutover has been performed. The webhook source and contract were not included; its existing service has not been changed.
