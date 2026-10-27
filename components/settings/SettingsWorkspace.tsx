@@ -1,0 +1,130 @@
+"use client";
+
+import { useMutation, useQuery } from "convex/react";
+import { useMemo, useState, type FormEvent } from "react";
+import countries from "world-countries";
+import timezoneData from "countries-and-timezones";
+import { api } from "@/convex/_generated/api";
+
+type Tab = "general" | "finance" | "rules" | "data" | "access" | "releases";
+const localeOptions = ["en-UG", "sw-UG", "en-KE", "sw-KE", "en-TZ", "sw-TZ", "en-GB", "en-US", "fr-FR", "ar-SA", "hi-IN", "zh-CN", "pt-BR", "es-ES"];
+const monthNames = Array.from({ length: 12 }, (_, i) => new Intl.DateTimeFormat("en", { month: "long", timeZone: "UTC" }).format(new Date(Date.UTC(2024, i, 1))));
+
+export function SettingsWorkspace({ tab }: { tab: Tab }) {
+  const overview = useQuery(api.settings.overview, {});
+  if (overview === undefined) return <p className="muted-note" role="status">Loading workspace settings…</p>;
+  if (overview.access !== "ready") return <p className="muted-note">Your account needs workspace access before settings can be loaded.</p>;
+  if (tab === "data") return <DataSettings />;
+  if (tab === "access") return <AccessSettings />;
+  if (tab === "releases") return <ReleaseSettings />;
+  if (tab === "rules") return <><EditableSettings tab={tab} settings={overview} /><RulesReview /></>;
+  return <EditableSettings tab={tab} settings={overview} />;
+}
+
+function EditableSettings({ tab, settings }: { tab: "general" | "finance" | "rules"; settings: SettingsOverview }) {
+  const save = useMutation(api.settings.update);
+  const isOwner = settings.role === "owner";
+  const [form, setForm] = useState({
+    businessName: settings.businessName, countryCode: settings.countryCode, currency: settings.currency,
+    timezone: settings.timezone, weekStartsOn: settings.weekStartsOn, locale: settings.locale,
+    dateFormat: settings.dateFormat, fiscalYearStartMonth: settings.fiscalYearStartMonth,
+    incomeCategories: settings.incomeCategories, expenseCategories: settings.expenseCategories,
+    highExpenseReviewUgx: settings.highExpenseReviewUgx, weakDaySalesUgx: settings.weakDaySalesUgx,
+    monthlySalesTargetUgx: settings.monthlySalesTargetUgx, monthlyExpenseWarningUgx: settings.monthlyExpenseWarningUgx,
+    cashOpeningBalance: settings.cashOpeningBalance, mobileOpeningBalance: settings.mobileOpeningBalance,
+    duplicateWindowDays: settings.duplicateWindowDays, requireEntryNote: settings.requireEntryNote,
+    negativeBalanceWarning: settings.negativeBalanceWarning,
+  });
+  const [busy, setBusy] = useState(false);
+  const [feedback, setFeedback] = useState<{ message: string; error: boolean } | null>(null);
+  const countryList = useMemo(() => [...countries].sort((a, b) => a.name.common.localeCompare(b.name.common)), []);
+  const currencyCodes = useMemo(() => [...new Set(countryList.flatMap(c => Object.keys(c.currencies ?? {})))].sort(), [countryList]);
+  const countryTimezones = useMemo<string[]>(() => timezoneData.getTimezonesForCountry(form.countryCode)?.map(t => t.name) ?? [], [form.countryCode]);
+  const allTimezones = useMemo<string[]>(() => Object.keys(timezoneData.getAllTimezones()).sort(), []);
+  const update = <K extends keyof typeof form>(key: K, value: (typeof form)[K]) => setForm(old => ({ ...old, [key]: value }));
+  const thisTab = tab === "general" ? "General" : tab === "finance" ? "Finance" : "Rules";
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault(); setBusy(true); setFeedback(null);
+    try { await save(form); setFeedback({ message: `${thisTab} settings saved and added to the audit trail.`, error: false }); }
+    catch (error) { setFeedback({ message: error instanceof Error ? error.message : "Could not save settings.", error: true }); }
+    finally { setBusy(false); }
+  }
+
+  return <form className="settings-stack" onSubmit={e => void submit(e)}>
+    {tab === "general" && <>
+      <section className="card settings-card"><div className="card-heading"><div><h2 className="card-title">Workspace identity and region</h2><p className="card-subtitle">Regional defaults are used for business dates, reports, and new cashbook entries.</p></div></div>
+        <div className="form-layout">
+          <Field label="Business or workspace name"><input value={form.businessName} onChange={e => update("businessName", e.target.value)} minLength={2} maxLength={100} disabled={!isOwner} required /></Field>
+          <Field label="Country or territory"><select value={form.countryCode} disabled={!isOwner} onChange={e => { const c = countryList.find(x => x.cca2 === e.target.value); update("countryCode", e.target.value); const code = Object.keys(c?.currencies ?? {})[0]; if (code && !settings.currencyLocked) update("currency", code); const zones = timezoneData.getTimezonesForCountry(e.target.value); if (zones?.[0]) update("timezone", zones[0].name); const language = Object.keys(c?.languages ?? {})[0]; const locale = language ? `${language}-${e.target.value}` : ""; if (localeOptions.includes(locale)) update("locale", locale); }}><option value="">Choose a country</option>{countryList.map(c => <option key={c.cca2} value={c.cca2}>{c.flag} {c.name.common}</option>)}</select></Field>
+          <Field label="Business timezone"><select value={form.timezone} disabled={!isOwner} onChange={e => update("timezone", e.target.value)}>{(countryTimezones.includes(form.timezone) ? countryTimezones : [...countryTimezones, form.timezone]).map(zone => <option key={zone} value={zone}>{zone.replaceAll("_", " ")} · {offsetLabel(zone)}</option>)}<optgroup label="All global timezones">{allTimezones.filter(z => !countryTimezones.includes(z)).map(zone => <option key={zone} value={zone}>{zone.replaceAll("_", " ")} · {offsetLabel(zone)}</option>)}</optgroup></select><span className="muted-note">Time zones observe daylight saving changes when applicable.</span></Field>
+          <Field label="Cashbook currency"><select value={form.currency} disabled={!isOwner || settings.currencyLocked} onChange={e => update("currency", e.target.value)}>{currencyCodes.map(code => <option key={code} value={code}>{code} · {currencyName(code, form.locale)}</option>)}</select><span className="muted-note">{settings.currencyLocked ? "Currency is locked after an opening balance or transaction so saved amounts and totals are never relabelled. A reviewed migration is required to change it." : "Currency can be changed until an opening balance or first transaction is recorded."}</span></Field>
+          <Field label="Display language and number format"><select value={form.locale} disabled={!isOwner} onChange={e => update("locale", e.target.value)}>{localeOptions.map(locale => <option key={locale}>{locale}</option>)}</select></Field>
+          <Field label="Date format"><select value={form.dateFormat} disabled={!isOwner} onChange={e => update("dateFormat", e.target.value as typeof form.dateFormat)}><option>DD/MM/YYYY</option><option>MM/DD/YYYY</option><option>YYYY-MM-DD</option></select></Field>
+          <Field label="Week starts on"><select value={form.weekStartsOn} disabled={!isOwner} onChange={e => update("weekStartsOn", e.target.value as "monday" | "sunday")}><option value="monday">Monday</option><option value="sunday">Sunday</option></select></Field>
+          <Field label="Financial year starts in"><select value={form.fiscalYearStartMonth} disabled={!isOwner} onChange={e => update("fiscalYearStartMonth", Number(e.target.value))}>{monthNames.map((month, i) => <option key={month} value={i + 1}>{month}</option>)}</select></Field>
+        </div>
+      </section>
+      <section className="card settings-card"><div className="card-heading"><div><h2 className="card-title">Regional preview</h2><p className="card-subtitle">A quick check of the settings that affect saved records.</p></div></div><div className="settings-facts"><div><span>Business date</span><strong>{new Intl.DateTimeFormat(form.locale, { dateStyle: "full", timeZone: form.timezone }).format(new Date())}</strong></div><div><span>Time zone</span><strong>{form.timezone} · {offsetLabel(form.timezone)}</strong></div><div><span>Currency preview</span><strong>{moneyPreview(form.currency, form.locale)}</strong></div><div><span>Financial year</span><strong>{monthNames[form.fiscalYearStartMonth - 1]}–{monthNames[(form.fiscalYearStartMonth + 10) % 12]}</strong></div></div></section>
+    </>}
+    {tab === "finance" && <>
+      <section className="card settings-card"><div className="card-heading"><div><h2 className="card-title">Cashbook categories</h2><p className="card-subtitle">One category per line. Categories are available to everyone who can record entries.</p></div></div><div className="form-layout"><Field label="Income categories"><textarea rows={7} value={form.incomeCategories.join("\n")} disabled={!isOwner} onChange={e => update("incomeCategories", e.target.value.split("\n"))} /></Field><Field label="Expense categories"><textarea rows={7} value={form.expenseCategories.join("\n")} disabled={!isOwner} onChange={e => update("expenseCategories", e.target.value.split("\n"))} /></Field></div></section>
+      <section className="card settings-card"><div className="card-heading"><div><h2 className="card-title">Accounts and opening balances</h2><p className="card-subtitle">Set the starting cash and mobile money amounts before recording transactions.</p></div></div><div className="form-layout"><NumberField label="Opening cash balance" value={form.cashOpeningBalance} currency={settings.currency} scale={10 ** (settings.currencyMinorDigits ?? 0)} disabled={!isOwner || settings.currencyLocked} onChange={v => update("cashOpeningBalance", v)} /><NumberField label="Opening mobile money balance" value={form.mobileOpeningBalance} currency={settings.currency} scale={10 ** (settings.currencyMinorDigits ?? 0)} disabled={!isOwner || settings.currencyLocked} onChange={v => update("mobileOpeningBalance", v)} /></div>{settings.currencyLocked && <p className="muted-note">Opening balances are locked after an opening amount or transaction has been recorded. Correct later differences with an auditable adjustment.</p>}</section>
+      <section className="card settings-card"><div className="card-heading"><div><h2 className="card-title">Operating targets</h2><p className="card-subtitle">Targets help reports highlight exceptions. They do not create or change ledger entries.</p></div></div><div className="form-layout"><NumberField label="Monthly sales target" value={form.monthlySalesTargetUgx} currency={settings.currency} scale={10 ** (settings.currencyMinorDigits ?? 0)} disabled={!isOwner} onChange={v => update("monthlySalesTargetUgx", v)} /><NumberField label="Monthly expense warning" value={form.monthlyExpenseWarningUgx} currency={settings.currency} scale={10 ** (settings.currencyMinorDigits ?? 0)} disabled={!isOwner} onChange={v => update("monthlyExpenseWarningUgx", v)} /></div></section>
+    </>}
+    {tab === "rules" && <>
+      <section className="card settings-card"><div className="card-heading"><div><h2 className="card-title">Review and quality rules</h2><p className="card-subtitle">Rules flag records for review. They never silently post, reject, or remove a transaction.</p></div></div><div className="form-layout"><NumberField label="Flag expenses at or above" value={form.highExpenseReviewUgx} currency={settings.currency} scale={10 ** (settings.currencyMinorDigits ?? 0)} disabled={!isOwner} onChange={v => update("highExpenseReviewUgx", v)} /><NumberField label="Flag days with sales below" value={form.weakDaySalesUgx} currency={settings.currency} scale={10 ** (settings.currencyMinorDigits ?? 0)} disabled={!isOwner} onChange={v => update("weakDaySalesUgx", v)} /><Field label="Duplicate review window (days)"><input type="number" min="0" max="30" step="1" value={form.duplicateWindowDays} disabled={!isOwner} onChange={e => update("duplicateWindowDays", Number(e.target.value))} /></Field><label className="settings-toggle"><input type="checkbox" checked={form.requireEntryNote} disabled={!isOwner} onChange={e => update("requireEntryNote", e.target.checked)} /><span><strong>Require a note on every entry</strong><small>Entries without a note are blocked by the server.</small></span></label><label className="settings-toggle"><input type="checkbox" checked={form.negativeBalanceWarning} disabled={!isOwner} onChange={e => update("negativeBalanceWarning", e.target.checked)} /><span><strong>Warn when a balance goes below zero</strong><small>Warnings do not block a correction or withdrawal.</small></span></label></div></section>
+    </>}
+    {isOwner && <div className="form-actions"><button className="button button-accent" disabled={busy}>{busy ? "Saving…" : `Save ${thisTab.toLowerCase()} settings`}</button>{feedback && <span className={`form-feedback ${feedback.error ? "form-error" : "form-success"}`} role="status">{feedback.message}</span>}</div>}
+    {!isOwner && <p className="muted-note settings-readonly-note">Only a workspace owner can change these settings.</p>}
+  </form>;
+}
+
+type SettingsOverview = Extract<NonNullable<ReturnType<typeof useQuery<typeof api.settings.overview>>>, { access: "ready" }>;
+function Field({ label, children }: { label: string; children: React.ReactNode }) { return <div className="field"><label>{label}</label>{children}</div>; }
+function NumberField({ label, value, currency, scale = 1, disabled, onChange }: { label: string; value: number; currency: string; scale?: number; disabled: boolean; onChange: (value: number) => void }) { return <Field label={`${label} (${currency})`}><input type="number" step={1 / scale} value={value} disabled={disabled} onChange={e => onChange(Number(e.target.value))} /></Field>; }
+function offsetLabel(zone: string) { try { return new Intl.DateTimeFormat("en", { timeZone: zone, timeZoneName: "shortOffset" }).formatToParts(new Date()).find(p => p.type === "timeZoneName")?.value ?? "UTC"; } catch { return "UTC"; } }
+function currencyName(code: string, locale: string) { try { return new Intl.DisplayNames([locale], { type: "currency" }).of(code) ?? code; } catch { return code; } }
+function moneyPreview(code: string, locale: string) { try { return new Intl.NumberFormat(locale, { style: "currency", currency: code }).format(123456.78); } catch { return `123,456.78 ${code}`; } }
+
+function DataSettings() {
+  const data = useQuery(api.settings.exportEntries, {});
+  const [notice, setNotice] = useState("");
+  function download() {
+    if (!data || data.access !== "ready") return;
+    const columns = ["date", "kind", "category", "account", "amount", "currency", "note", "source", "status", "created_at"] as const;
+    const quote = (value: string | number) => `"${String(value).replaceAll('"', '""')}"`;
+    const csv = [columns.join(","), ...data.rows.map(r => [r.occurredOn, r.kind, r.category, r.account, r.amount.toFixed(data.currencyMinorDigits), r.currency, r.note, r.source, r.state, new Date(r.createdAt).toISOString()].map(quote).join(","))].join("\r\n");
+    const url = URL.createObjectURL(new Blob(["\uFEFF", csv], { type: "text/csv;charset=utf-8" }));
+    const anchor = document.createElement("a"); anchor.href = url; anchor.download = `mylesnet-cashbook-${new Date().toISOString().slice(0, 10)}.csv`; anchor.click(); URL.revokeObjectURL(url);
+    setNotice(`Exported ${data.rows.length} entries${data.rows.length === 5000 ? " (maximum export size reached; contact support for a full archive)" : ""}.`);
+  }
+  return <div className="settings-stack"><section className="card settings-card"><div className="card-heading"><div><h2 className="card-title">Export cashbook data</h2><p className="card-subtitle">Download up to 5,000 records as UTF-8 CSV for audit, backup, or analysis.</p></div></div><p className="muted-note">Exports include transaction date, category, account, amount, currency, note, source, state, and creation time. Voided records remain included for audit history.</p><div className="form-actions"><button className="button button-accent" type="button" onClick={download} disabled={!data || data.access !== "ready"}>Download CSV</button>{data?.access === "ready" && <span className="muted-note">{data.rows.length} records ready · {data.currency}</span>}</div>{notice && <p className="form-feedback form-success" role="status">{notice}</p>}</section><section className="card settings-card"><div className="card-heading"><div><h2 className="card-title">Imports, backups, and connected services</h2><p className="card-subtitle">The legacy webhook is preserved as-is.</p></div></div><ul className="settings-bullet-list"><li><strong>Webhook:</strong> existing deployed endpoint and payload contract are unchanged.</li><li><strong>Spreadsheet import:</strong> use a reviewed CSV mapping before importing historical data; duplicate checks and reconciliation are required.</li><li><strong>Backups:</strong> Convex manages deployment storage. An off-platform archive and one-click restore have not been configured.</li><li><strong>Privacy:</strong> this export is available to owners and is generated from authorized workspace records.</li></ul></section></div>;
+}
+
+function RulesReview() {
+  const review = useQuery(api.settings.ruleReview, {});
+  if (!review || review.access !== "ready") return null;
+  return <section className="card settings-card"><div className="card-heading"><div><h2 className="card-title">Recent rule flags</h2><p className="card-subtitle">Recent posted expenses and sales days matched against the configured thresholds.</p></div></div>{review.highExpenses.length === 0 && review.weakDays.length === 0 ? <p className="muted-note">No recent records crossed these review thresholds.</p> : <ul className="settings-bullet-list">{review.highExpenses.map(e => <li key={e.id}><strong>Expense review · {e.date} · {e.amount.toLocaleString()} {review.currency} · {e.category}</strong>{e.note ? ` — ${e.note}` : " — no note"}</li>)}{review.weakDays.map(d => <li key={d.day}><strong>Low-sales day · {d.day} · {d.sales.toLocaleString()} {review.currency}</strong></li>)}</ul>}<p className="muted-note">These flags prompt a human review; they do not change or reject entries.</p></section>;
+}
+
+function AccessSettings() {
+  const state = useQuery(api.settings.accessOverview, {});
+  const makeInvite = useMutation(api.settings.invite);
+  const revoke = useMutation(api.settings.revokeInvite);
+  const updateMember = useMutation(api.settings.updateMember);
+  const [email, setEmail] = useState(""); const [role, setRole] = useState<"partner" | "cashier">("cashier");
+  const [inviteUrl, setInviteUrl] = useState(""); const [feedback, setFeedback] = useState(""); const [busy, setBusy] = useState(false);
+  async function submit(e: FormEvent) { e.preventDefault(); setBusy(true); setFeedback(""); try { const token = await makeInvite({ email, role }); const url = new URL(`/invite?token=${encodeURIComponent(token)}`, window.location.origin).toString(); setInviteUrl(url); setFeedback("Invitation created. Copy and send this link to the invited email address; no email has been sent automatically."); setEmail(""); } catch (error) { setFeedback(error instanceof Error ? error.message : "Could not create invitation."); } finally { setBusy(false); } }
+  if (!state || state.access !== "ready") return <p className="muted-note">Access management is available to workspace owners.</p>;
+  return <div className="settings-stack"><section className="card settings-card"><div className="card-heading"><div><h2 className="card-title">Invite a teammate</h2><p className="card-subtitle">Invitations expire after seven days and can only be accepted by the invited Google account.</p></div></div><form className="form-layout" onSubmit={e => void submit(e)}><Field label="Google account email"><input type="email" value={email} onChange={e => setEmail(e.target.value)} required /></Field><Field label="Role"><select value={role} onChange={e => setRole(e.target.value as typeof role)}><option value="cashier">Cashier · record entries</option><option value="partner">Partner · scoped read access</option></select></Field><div className="form-actions"><button className="button button-accent" disabled={busy}>{busy ? "Creating…" : "Create invitation link"}</button></div></form>{inviteUrl && <div className="field field-full"><label htmlFor="invite-link">Private invitation link</label><div className="copy-row"><input id="invite-link" readOnly value={inviteUrl} onFocus={e => e.target.select()} /><button className="button" type="button" onClick={() => void navigator.clipboard.writeText(inviteUrl)}>Copy link</button></div></div>}{feedback && <p className="muted-note" role="status">{feedback}</p>}</section>
+    <section className="card settings-card"><div className="card-heading"><div><h2 className="card-title">Workspace members</h2><p className="card-subtitle">Roles are enforced by Convex on every business-data request. Owner access changes require a verified handoff.</p></div></div><div className="table-scroll"><table className="data-table"><thead><tr><th>Account</th><th>Role</th><th>Status</th><th>Since</th><th>Access control</th></tr></thead><tbody>{state.members.map(m => <tr key={m.id}><td>{m.email}</td><td>{m.role}</td><td>{m.active ? "Active" : "Inactive"}</td><td>{new Date(m.createdAt).toLocaleDateString()}</td><td>{m.role === "owner" ? "Owner" : <div className="member-controls"><select aria-label={`Role for ${m.email}`} value={m.role} onChange={e => void updateMember({ membershipId: m.id, role: e.target.value as "partner" | "cashier", active: m.active })}><option value="partner">Partner</option><option value="cashier">Cashier</option></select><button className="button" type="button" onClick={() => void updateMember({ membershipId: m.id, role: m.role as "partner" | "cashier", active: !m.active })}>{m.active ? "Deactivate" : "Reactivate"}</button></div>}</td></tr>)}</tbody></table></div></section>
+    <section className="card settings-card"><div className="card-heading"><div><h2 className="card-title">Pending invitations</h2><p className="card-subtitle">Invite links are shown only once when created. Revoke and issue a fresh link if it is lost.</p></div></div>{state.invitations.length ? <div className="table-scroll"><table className="data-table"><thead><tr><th>Email</th><th>Role</th><th>Expires</th><th></th></tr></thead><tbody>{state.invitations.map(i => <tr key={i.id}><td>{i.email}</td><td>{i.role}</td><td>{new Date(i.expiresAt).toLocaleString()}</td><td><button type="button" className="button" onClick={() => void revoke({ invitationId: i.id })}>Revoke</button></td></tr>)}</tbody></table></div> : <p className="muted-note">No pending invitations.</p>}</section>
+    <section className="card settings-card"><div className="card-heading"><div><h2 className="card-title">Recent access audit</h2><p className="card-subtitle">Latest role, invitation, and settings changes.</p></div></div>{state.audit.length ? <ul className="settings-audit-list">{state.audit.map(a => <li key={a.id}><time>{new Date(a.occurredAt).toLocaleString()}</time><strong>{a.summary}</strong><span>{a.action}</span></li>)}</ul> : <p className="muted-note">No audit events yet.</p>}</section></div>;
+}
+
+function ReleaseSettings() {
+  const version = process.env.NEXT_PUBLIC_APP_VERSION ?? "0.1.0";
+  const commit = process.env.NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA?.slice(0, 7);
+  return <div className="settings-stack"><section className="card settings-card"><div className="card-heading"><div><h2 className="card-title">Current application release</h2><p className="card-subtitle">Deployment status is read from the environment where this app is running.</p></div></div><div className="settings-facts"><div><span>Application version</span><strong>{version}</strong></div><div><span>Build commit</span><strong>{commit ?? "Local or unavailable"}</strong></div><div><span>Release channel</span><strong>{process.env.NODE_ENV === "production" ? "Production" : "Preview / development"}</strong></div><div><span>Deployment management</span><strong>Vercel project dashboard</strong></div></div></section><section className="card settings-card"><div className="card-heading"><div><h2 className="card-title">Release notes</h2><p className="card-subtitle">Changes in this release train.</p></div></div><ul className="settings-bullet-list"><li><strong>Workspace settings:</strong> regional defaults, full timezone picker, country and currency selection, audit-backed business rules.</li><li><strong>Finance controls:</strong> configurable income and expense categories with sales and expense targets.</li><li><strong>Data:</strong> owner-only cashbook CSV export with audit history preserved.</li><li><strong>Access:</strong> expiring email-bound invite links, role-aware membership, and access audit history.</li></ul></section><section className="card settings-card"><div className="card-heading"><div><h2 className="card-title">Production change controls</h2><p className="card-subtitle">A reviewed release is deployed through the connected Vercel project.</p></div></div><p className="muted-note">This screen is read-only by design. Rollback, database restore, feature flags, and automated backup verification require release infrastructure and recovery credentials; no in-app action will claim to perform them until configured.</p></section></div>;
+}

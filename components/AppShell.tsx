@@ -4,13 +4,15 @@ import { useAuthActions } from "@convex-dev/auth/react";
 import { useQuery } from "convex/react";
 import {
   Activity, ArrowDownUp, BarChart3, Bell, ChevronDown, FileBarChart,
-  HandCoins, LayoutDashboard, LogOut, Menu, Receipt, Search, Settings,
+  HandCoins, LayoutDashboard, LogOut, Menu, Receipt, Settings,
   Wallet, X,
 } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { ReactNode, useState } from "react";
+import { ThemeControl } from "@/components/ThemeControl";
+import { GlobalSearch } from "@/components/workspace/GlobalSearch";
 import { api } from "@/convex/_generated/api";
 
 const nav = [
@@ -33,6 +35,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const { signOut } = useAuthActions();
   const access = useQuery(api.workspace.currentAccess, {});
+  const preferences = useQuery(api.settings.overview, {});
   const [mobileOpen, setMobileOpen] = useState(false);
   const accountLabel = access?.access === "ready" ? access.businessName : "My account";
 
@@ -46,11 +49,8 @@ export function AppShell({ children }: { children: ReactNode }) {
           {mobileOpen ? <X size={19} /> : <Menu size={19} />}
         </button>
         <div className="header-actions">
-          <div className="search-box" role="search">
-            <Search size={16} aria-hidden="true" />
-            <input aria-label="Search" placeholder="Search entries, partners and bills" disabled />
-            <kbd>/</kbd>
-          </div>
+          <GlobalSearch />
+          <ThemeControl />
           <Link className="utility-link" href="/issues" aria-label="Needs attention"><Bell size={17} /><span>Needs attention</span></Link>
           <button className="user-menu" type="button" aria-label="Sign out" title={`Sign out of ${accountLabel}`} onClick={() => void signOut()}>
             <span className="avatar">MN</span>
@@ -74,7 +74,7 @@ export function AppShell({ children }: { children: ReactNode }) {
       </nav>
       {access?.access === "pending" && <div className="access-pending" role="status"><strong>Access awaiting invitation</strong><span>This Google account is signed in but is not yet linked to a MylesNet workspace.</span></div>}
       <main className="page-content">{children}</main>
-      <footer className="app-footer"><span>MylesNet Finance Tracker · UGX</span><span>Workspace data is protected by your assigned role.</span></footer>
+      <footer className="app-footer"><span>MylesNet Finance Tracker · {preferences?.access === "ready" ? preferences.currency : "UGX"}</span><span>Workspace data is protected by your assigned role.</span></footer>
     </div>
   );
 }

@@ -1,7 +1,7 @@
 "use client";
 
 import { useMutation, useQuery } from "convex/react";
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useRef, useState, type FormEvent } from "react";
 import { api } from "@/convex/_generated/api";
 
 type EntryKind = "sale" | "expense";
@@ -13,25 +13,29 @@ export function EntryForm({ kind }: { kind: EntryKind }) {
   const createEntry = useMutation(api.workspace.createEntry);
   const access = useQuery(api.workspace.currentAccess, {});
   const settings = useQuery(api.workspace.businessSettings, {});
+  const preferences = useQuery(api.settings.overview, {});
+  const timezone = settings?.access === "ready" ? settings.timezone : "Africa/Kampala";
+  const currency = settings?.access === "ready" ? settings.currency : "UGX";
+  const currencyScale = 10 ** (preferences?.access === "ready" ? (preferences.currencyMinorDigits ?? 0) : 0);
+  const categories = preferences?.access === "ready" ? (kind === "sale" ? preferences.incomeCategories : preferences.expenseCategories) : [kind === "sale" ? "Product sales" : "Other expense"];
   const [account, setAccount] = useState<"cash" | "mobile_money">("cash");
-  const [occurredOn, setOccurredOn] = useState("");
+  const [occurredOn, setOccurredOn] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [feedback, setFeedback] = useState<{ message: string; error: boolean } | null>(null);
+  const [ruleConfirmation, setRuleConfirmation] = useState<{ kind: "duplicate" | "negative"; message: string } | null>(null);
   const idempotencyKey = useRef<string | null>(null);
+  const formRef = useRef<HTMLFormElement>(null);
+  const confirmDuplicate = useRef(false);
+  const confirmNegative = useRef(false);
   const title = kind === "sale" ? "Record a sale" : "Record an expense";
-  useEffect(() => {
-    if (settings?.access === "ready") {
-      setOccurredOn((current) => current || businessDate(settings.timezone));
-    }
-  }, [settings]);
-
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = event.currentTarget;
     const values = new FormData(form);
     const amount = Number(values.get("amount"));
-    if (!Number.isSafeInteger(amount) || amount <= 0) {
-      setFeedback({ message: "Enter a positive whole amount in UGX.", error: true });
+    const amountMinor = Math.round(amount * currencyScale);
+    if (!Number.isFinite(amount) || amount <= 0 || !Number.isSafeInteger(amountMinor) || Math.abs(amount * currencyScale - amountMinor) > 1e-7) {
+      setFeedback({ message: `Enter a positive amount using the supported decimal places for ${currency}.`, error: true });
       return;
     }
     setBusy(true); setFeedback(null);
@@ -40,31 +44,39 @@ export function EntryForm({ kind }: { kind: EntryKind }) {
       idempotencyKey.current = requestKey;
       await createEntry({
         kind,
-        amountUgx: amount,
+        amountUgx: amountMinor,
         occurredOn: String(values.get("occurredOn")),
         account,
         category: String(values.get("category")).trim(),
         note: String(values.get("note") ?? "").trim(),
         idempotencyKey: requestKey,
+        confirmPossibleDuplicate: confirmDuplicate.current,
+        confirmNegativeBalance: confirmNegative.current,
       });
       idempotencyKey.current = null;
+      confirmDuplicate.current = false;
+      confirmNegative.current = false;
+      setRuleConfirmation(null);
       form.reset();
-      setOccurredOn(businessDate(timezone));
+      setOccurredOn(null);
       setFeedback({ message: `${title.replace("Record a ", "")} saved to the cashbook.`, error: false });
     } catch (error) {
-      setFeedback({ message: error instanceof Error ? error.message : "Could not save this entry. Try again.", error: true });
+      const message = error instanceof Error ? error.message : "Could not save this entry. Try again.";
+      if (message.startsWith("CONFIRM_DUPLICATE:")) setRuleConfirmation({ kind: "duplicate", message: message.slice("CONFIRM_DUPLICATE:".length) });
+      else if (message.startsWith("CONFIRM_NEGATIVE:")) setRuleConfirmation({ kind: "negative", message: message.slice("CONFIRM_NEGATIVE:".length) });
+      else setFeedback({ message, error: true });
     } finally { setBusy(false); }
   }
-  const timezone = settings?.access === "ready" ? settings.timezone : "Africa/Kampala";
   if (access?.access === "ready" && access.role === "partner") {
     return <div className="empty-state" role="status"><strong>Partner accounts can’t add ledger entries.</strong><span>Your scoped partner statement will be available here after partner reporting is connected.</span></div>;
   }
-  return <form className="form-layout" onSubmit={submit}>
-    <div className="field"><label htmlFor="entry-amount">Amount (UGX)</label><input id="entry-amount" name="amount" inputMode="numeric" type="number" min="1" step="1" placeholder="e.g. 25,000" required /></div>
-    <div className="field"><label htmlFor="entry-date">Date</label><input id="entry-date" name="occurredOn" type="date" value={occurredOn} onChange={(event) => setOccurredOn(event.target.value)} required /></div>
-    <div className="field"><label htmlFor="entry-category">Category</label><input id="entry-category" name="category" maxLength={80} placeholder={kind === "sale" ? "e.g. Product sales" : "e.g. Transport"} required /></div>
+  return <form ref={formRef} className="form-layout" onSubmit={submit}>
+    <div className="field"><label htmlFor="entry-amount">Amount ({currency})</label><input id="entry-amount" name="amount" inputMode="decimal" type="number" min={1 / currencyScale} step={1 / currencyScale} placeholder={currencyScale === 1 ? "e.g. 25,000" : "e.g. 25.00"} required /></div>
+    <div className="field"><label htmlFor="entry-date">Date</label><input id="entry-date" name="occurredOn" type="date" value={occurredOn ?? businessDate(timezone)} onChange={(event) => setOccurredOn(event.target.value)} required /></div>
+    <div className="field"><label htmlFor="entry-category">Category</label><select id="entry-category" name="category" required>{categories.map(category => <option key={category} value={category}>{category}</option>)}</select></div>
     <div className="field"><label>Account</label><div className="segment-control" role="group" aria-label="Account"><button type="button" aria-pressed={account === "cash"} onClick={() => setAccount("cash")}>Cash</button><button type="button" aria-pressed={account === "mobile_money"} onClick={() => setAccount("mobile_money")}>Mobile money</button></div></div>
     <div className="field field-full"><label htmlFor="entry-note">Description <span className="muted-note">(optional)</span></label><textarea id="entry-note" name="note" rows={3} maxLength={300} placeholder="Add context for this transaction" /></div>
+    {ruleConfirmation && <div className="field field-full"><div className="notice-banner notice-warning" role="alert"><strong>Review this cashbook warning</strong><p>{ruleConfirmation.message}</p><div className="form-actions"><button className="button button-accent" type="button" disabled={busy} onClick={() => { if (ruleConfirmation.kind === "duplicate") confirmDuplicate.current = true; else confirmNegative.current = true; setRuleConfirmation(null); formRef.current?.requestSubmit(); }}>Review and continue</button><button className="button" type="button" disabled={busy} onClick={() => { setRuleConfirmation(null); idempotencyKey.current = null; confirmDuplicate.current = false; confirmNegative.current = false; }}>Cancel</button></div></div></div>}
     <div className="form-actions"><button className="button button-accent" type="submit" disabled={busy}>{busy ? "Saving…" : title}</button>{feedback && <span className={`form-feedback ${feedback.error ? "form-error" : "form-success"}`} role="status">{feedback.message}</span>}</div>
   </form>;
 }

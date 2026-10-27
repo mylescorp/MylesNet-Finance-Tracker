@@ -13,6 +13,12 @@ function addSafeInteger(left: number, right: number, label: string) {
   return result;
 }
 
+function formatAmount(amountMinor: number, currency: string) {
+  let digits = 0;
+  try { digits = new Intl.NumberFormat("en", { style: "currency", currency }).resolvedOptions().maximumFractionDigits ?? 0; } catch { /* unsupported currency is rejected before it is stored */ }
+  return `${new Intl.NumberFormat("en", { minimumFractionDigits: digits, maximumFractionDigits: digits }).format(amountMinor / 10 ** digits)} ${currency}`;
+}
+
 const accessResult = v.union(
   v.object({ access: v.literal("setup") }),
   v.object({ access: v.literal("pending") }),
@@ -95,6 +101,7 @@ export const claimFirstOwner = mutation({
     const businessId = await ctx.db.insert("businesses", {
       name,
       currency: "UGX",
+      countryCode: "UG",
       timezone: "Africa/Kampala",
       weekStartsOn: "monday",
       createdBy: userId,
@@ -151,7 +158,8 @@ export const businessSettings = query({
     v.object({
       access: v.literal("ready"),
       businessName: v.string(),
-      currency: v.literal("UGX"),
+      countryCode: v.string(),
+      currency: v.string(),
       timezone: v.string(),
       weekStartsOn: v.union(v.literal("monday"), v.literal("sunday")),
       role: v.union(v.literal("owner"), v.literal("partner"), v.literal("cashier")),
@@ -166,6 +174,7 @@ export const businessSettings = query({
     return {
       access: "ready" as const,
       businessName: current.business.name,
+      countryCode: current.business.countryCode ?? "UG",
       currency: current.business.currency,
       timezone: current.business.timezone,
       weekStartsOn: current.business.weekStartsOn ?? "monday",
@@ -364,6 +373,33 @@ export const recentEntries = query({
   },
 });
 
+export const searchEntries = query({
+  args: { term: v.string(), limit: v.optional(v.number()) },
+  returns: v.array(v.object({
+    _id: v.id("entries"),
+    kind: v.union(v.literal("sale"), v.literal("expense")),
+    amountUgx: v.number(),
+    occurredOn: v.string(),
+    category: v.string(),
+    note: v.string(),
+  })),
+  handler: async (ctx, args) => {
+    const current = await getMembership(ctx);
+    const term = args.term.trim();
+    if (!current || current.membership.role === "partner" || term.length < 2 || term.length > 80) return [];
+    const limit = Math.max(1, Math.min(Math.floor(args.limit ?? 8), 12));
+    const [notes, categories] = await Promise.all([
+      ctx.db.query("entries").withSearchIndex("search_note", (q) => q.search("note", term).eq("businessId", current.business._id)).take(limit),
+      ctx.db.query("entries").withSearchIndex("search_category", (q) => q.search("category", term).eq("businessId", current.business._id)).take(limit),
+    ]);
+    const unique = new Map([...notes, ...categories].map((entry) => [entry._id, entry]));
+    return [...unique.values()]
+      .sort((a, b) => b.occurredOn.localeCompare(a.occurredOn) || b.createdAt - a.createdAt)
+      .slice(0, limit)
+      .map(({ _id, kind, amountUgx, occurredOn, category, note }) => ({ _id, kind, amountUgx, occurredOn, category, note }));
+  },
+});
+
 export const createEntry = mutation({
   args: {
     kind: v.union(v.literal("sale"), v.literal("expense")),
@@ -373,6 +409,8 @@ export const createEntry = mutation({
     category: v.string(),
     note: v.string(),
     idempotencyKey: v.string(),
+    confirmPossibleDuplicate: v.optional(v.boolean()),
+    confirmNegativeBalance: v.optional(v.boolean()),
   },
   returns: v.id("entries"),
   handler: async (ctx, args) => {
@@ -382,13 +420,15 @@ export const createEntry = mutation({
       throw new Error("Partner accounts cannot add ledger entries.");
     }
     if (!Number.isSafeInteger(args.amountUgx) || args.amountUgx <= 0) {
-      throw new Error("Amount must be a positive whole number of UGX.");
+      throw new Error(`Amount must be a positive valid amount in ${current.business.currency}.`);
     }
     if (!isIsoDay(args.occurredOn)) throw new Error("Choose a valid date.");
     if (args.category.trim().length < 1 || args.category.length > 80) {
       throw new Error("Enter a category using 1 to 80 characters.");
     }
     if (args.note.length > 300) throw new Error("Notes can be up to 300 characters.");
+    const preferences = await ctx.db.query("workspacePreferences").withIndex("by_business", q => q.eq("businessId", current.business._id)).unique();
+    if (preferences?.requireEntryNote && !args.note.trim()) throw new Error("Add a note before saving. This workspace requires a note on each entry.");
     if (args.idempotencyKey.length < 16 || args.idempotencyKey.length > 120) {
       throw new Error("Entry request is invalid. Please try again.");
     }
@@ -413,9 +453,26 @@ export const createEntry = mutation({
       return duplicate._id;
     }
 
+    const duplicateWindowDays = preferences?.duplicateWindowDays ?? 1;
+    if (duplicateWindowDays > 0 && !args.confirmPossibleDuplicate) {
+      const date = new Date(`${args.occurredOn}T00:00:00.000Z`);
+      const from = new Date(date); from.setUTCDate(from.getUTCDate() - duplicateWindowDays);
+      const to = new Date(date); to.setUTCDate(to.getUTCDate() + duplicateWindowDays);
+      const possibleDuplicates = await ctx.db.query("entries").withIndex("by_business_and_kind_and_date", q =>
+        q.eq("businessId", current.business._id).eq("kind", args.kind)
+          .gte("occurredOn", from.toISOString().slice(0, 10)).lte("occurredOn", to.toISOString().slice(0, 10)),
+      ).take(100);
+      const match = possibleDuplicates.find(entry => entry.state === "posted" && entry.account === args.account && entry.amountUgx === args.amountUgx && entry.category === args.category.trim());
+      if (match) throw new Error(`CONFIRM_DUPLICATE:Similar ${args.kind} from ${match.occurredOn} was recorded for ${args.category.trim()}. Review it before continuing.`);
+    }
+
+    const currentAccount = await ctx.db.query("accountBalances").withIndex("by_business_and_account", q => q.eq("businessId", current.business._id).eq("account", args.account)).unique();
+    const accountDelta = args.kind === "sale" ? args.amountUgx : -args.amountUgx;
+    if (preferences?.negativeBalanceWarning !== false && !args.confirmNegativeBalance && (currentAccount?.balanceUgx ?? 0) + accountDelta < 0) {
+      throw new Error(`CONFIRM_NEGATIVE:This entry will put ${args.account === "cash" ? "cash" : "mobile money"} below zero. Review the balance before continuing.`);
+    }
+
     const now = Date.now();
-    const accountDelta =
-      (args.kind === "sale" ? args.amountUgx : -args.amountUgx);
     await applyAccountEffect(ctx, current.business._id, args.account, accountDelta);
     const entryId = await ctx.db.insert("entries", {
       businessId: current.business._id,
@@ -477,8 +534,12 @@ export const createEntry = mutation({
       entityType: "entry",
       entityId: entryId,
       occurredAt: now,
-      summary: `${args.kind} · ${args.amountUgx} UGX · ${args.occurredOn}`,
+      summary: `${args.kind} · ${formatAmount(args.amountUgx, current.business.currency)} · ${args.occurredOn}`,
     });
+    if (args.confirmPossibleDuplicate || args.confirmNegativeBalance) {
+      const confirmed = [args.confirmPossibleDuplicate && "possible duplicate", args.confirmNegativeBalance && "negative balance"].filter(Boolean).join(" and ");
+      await ctx.db.insert("auditEvents", { businessId: current.business._id, actorId: current.userId, action: "entry.rule_override", entityType: "entry", entityId: entryId, occurredAt: now, summary: `Confirmed ${confirmed} warning before posting.` });
+    }
     return entryId;
   },
 });

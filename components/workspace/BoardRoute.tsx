@@ -1,0 +1,368 @@
+"use client";
+
+import { useQuery } from "convex/react";
+import { ArrowDownRight, ArrowUpRight, Download, Printer, Share2 } from "lucide-react";
+import Link from "next/link";
+import { useMemo, useState } from "react";
+import { api } from "@/convex/_generated/api";
+import { Card, WorkspaceTitle } from "@/components/AppShell";
+import { SettingsNav } from "@/components/settings/SettingsNav";
+import { EntryForm } from "@/components/workspace/EntryForm";
+import { formatBusinessDay } from "@/lib/format";
+
+type BoardSpec = {
+  title: string;
+  eyebrow: string;
+  description: string;
+  source: string;
+  metrics: string[];
+  sections: { title: string; detail: string; kind?: "table" | "chart" | "workflow" }[];
+  settings?: boolean;
+  entryKind?: "sale" | "expense";
+};
+
+const specs: Record<string, BoardSpec> = {
+  sales: {
+    title: "Sales", eyebrow: "Cashbook", description: "Record and review income from approved sources.", source: "03 · Sales", entryKind: "sale",
+    metrics: ["Sales today", "Sales", "Best day", "Days recorded", "Entry basis"],
+    sections: [
+      { title: "Daily sales · last 14 days", detail: "Recorded entries by date, account, and amount. Estimated split is shown only when an imported estimate exists.", kind: "table" },
+      { title: "Sales by income type", detail: "Category breakdown uses saved entries; no mock amounts are loaded.", kind: "chart" },
+      { title: "Best days and weekday pattern", detail: "Strongest sales days are calculated from the selected period.", kind: "chart" },
+      { title: "Imports and data checks", detail: "Import history will be available after a source mapping and staging import are approved.", kind: "table" },
+      { title: "Weak-day diary and split corrections", detail: "Record the reason for an unusual day and correct estimated account splits with an audit trail.", kind: "workflow" },
+      { title: "Voucher batches and mobile entry", detail: "Voucher stock and mobile entry layouts are not populated until those record types are configured." },
+    ],
+  },
+  expenses: {
+    title: "Expenses", eyebrow: "Cashbook", description: "Record and review operating costs and equipment purchases.", source: "04 · Expenses", entryKind: "expense",
+    metrics: ["Expenses", "Year to date", "Expense ratio", "Average per day", "Approval queue"],
+    sections: [
+      { title: "Expenses by category", detail: "Category mix is calculated from saved expenses and distinguishes operating costs from equipment.", kind: "table" },
+      { title: "Add an expense", detail: "Attach the date, category, account, and business context to each cashbook entry.", kind: "workflow" },
+      { title: "Operating vs equipment", detail: "Expense classification comes from Finance settings.", kind: "chart" },
+      { title: "Alerts, budgets, and recurring costs", detail: "Configure category budgets and recurring bills before enabling alerts." },
+      { title: "Receipts and suppliers", detail: "Receipt files and supplier histories require storage and supplier records to be configured." },
+      { title: "Recurring expense review", detail: "Potential patterns are suggestions only; no bill is created without confirmation." },
+    ],
+  },
+  analytics: {
+    title: "Analytics", eyebrow: "Reports", description: "Compare recorded performance, pace, and data quality.", source: "02 · Analytics",
+    metrics: ["Sales", "Average per day", "Best day", "Days recorded", "Expense ratio", "Projected sales", "Average daily expenses", "Net margin", "Strongest weekday", "Equipment invested"],
+    sections: [
+      { title: "Period comparison", detail: "Sales, average per day, best day, weakest day, and recorded days compared with the previous equal-length period." },
+      { title: "Projected sales", detail: "Month-to-date run rate, days remaining, required daily sales, and the assumptions behind this estimate.", kind: "chart" },
+      { title: "Monthly target and scenarios", detail: "Track the target from Finance settings and compare current pace with recent pace. Scenarios are run-rates, not forecasts." },
+      { title: "Month pace and equipment payback", detail: "Cumulative monthly sales and operating-profit recovery. Historical comparisons appear when source data is available.", kind: "chart" },
+      { title: "Sales and expenses · 14 days", detail: "Recorded daily totals with average line and selected-day detail.", kind: "chart" },
+      { title: "Sales by weekday", detail: "All seven weekdays, strongest day highlighted; switch between total and average." , kind: "chart"},
+      { title: "Daily heatmap and anomaly flags", detail: "Missing days and unusually weak days are distinguished from days with zero sales." , kind: "table"},
+      { title: "Income type and spending category", detail: "Breakdowns use saved categories and show estimated split provenance where applicable." , kind: "chart"},
+      { title: "Daily data and weekday summary", detail: "Last 14 days and a complete Monday-to-Sunday comparison." , kind: "table"},
+      { title: "What the data says · goals · what-if", detail: "Trend, margin, capital, payback, pattern, and watch insights with targets from Settings." },
+    ],
+  },
+  movements: {
+    title: "Movements", eyebrow: "Cashbook", description: "Track transfers between business accounts and other movement types.", source: "05 · Movements",
+    metrics: ["Movements recorded", "Cash on hand", "Mobile money", "Capital in", "Default fee"],
+    sections: [
+      { title: "Money map", detail: "Follow recorded sales, mobile money, cash, partner flows, withdrawals, and payouts." },
+      { title: "Movement ledger", detail: "Transfers do not count as income or expense. Each movement must have a date, source, destination, type, and amount.", kind: "table" },
+      { title: "Record a movement", detail: "Add a transfer, withdrawal, capital contribution, or payout with the configured fee rule.", kind: "workflow" },
+      { title: "Withdrawal planner and cash count", detail: "Estimate the fee and net cash received, then compare a denomination count with the book balance." },
+      { title: "Money flow and unexplained balance", detail: "Compare account balances with sales, expenses, and recorded movements." },
+    ],
+  },
+  savings: {
+    title: "Savings", eyebrow: "Cashbook", description: "Track savings holdings, contributions, goals, and returns.", source: "06 · Savings",
+    metrics: ["Current value", "Contributions", "Gain or loss", "Cash buffer", "Could set aside"],
+    sections: [
+      { title: "Holdings", detail: "No holdings are recorded yet. Add a holding to track its value and contributions.", kind: "table" },
+      { title: "Add a holding", detail: "Record the holding, account, initial value, date, and note.", kind: "workflow" },
+      { title: "Savings goals and reserve target", detail: "Set a reserve target from monthly operating costs and review progress toward selected goals." },
+      { title: "Set-aside planner", detail: "Compare 10%, 20%, and 30% of recorded monthly operating profit." },
+      { title: "Allocation and returns", detail: "View the allocation when holdings exist and compare expected returns with equipment payback.", kind: "chart" },
+    ],
+  },
+  loans: {
+    title: "Loans", eyebrow: "Cashbook", description: "Track borrowing, repayments, interest assumptions, and affordability.", source: "07 · Loans",
+    metrics: ["Active loans", "Monthly payments", "Outstanding", "Debt capacity", "Equipment financing"],
+    sections: [
+      { title: "Loans", detail: "No loans are recorded. Add a loan to start a repayment schedule.", kind: "table" },
+      { title: "Add a loan", detail: "Record principal, annual rate, term, start date, and purpose.", kind: "workflow" },
+      { title: "Loan planner and affordability", detail: "Calculate monthly payment, total repayment, interest, and compare with recorded operating profit." },
+      { title: "Repayment schedule", detail: "Scheduled principal and interest are estimates until actual payments are recorded.", kind: "table" },
+      { title: "Early repayment and equipment impact", detail: "Compare interest saved and revised equipment payback from entered assumptions." },
+    ],
+  },
+  "daily-report": {
+    title: "Daily Report", eyebrow: "Reports", description: "Review recorded activity for a business day.", source: "08 · Daily Report",
+    metrics: ["Sales today", "Cash on hand", "Delivery time", "Recipients", "Open checks"],
+    sections: [
+      { title: "Report preview", detail: "Daily summary from recorded sales, expenses, balances, and open checks." },
+      { title: "Last 7 days", detail: "Recorded and missing days are clearly distinguished.", kind: "table" },
+      { title: "Delivery settings and recipients", detail: "Report delivery is unavailable until a provider and recipient consent are configured.", kind: "workflow" },
+      { title: "Weekly digest", detail: "Monday digest preview with sales, change, strongest and weakest days, balances, and open flags." },
+      { title: "Delivery status and mobile view", detail: "Delivery receipts and WhatsApp replies appear only after an integration is configured." },
+    ],
+  },
+  "monthly-pnl": {
+    title: "Monthly P&L", eyebrow: "Reports", description: "Review revenue, operating costs, and net result from recorded entries.", source: "09 · Monthly P&L",
+    metrics: ["Sales YTD", "Operating costs", "Operating profit", "Equipment", "Net profit"],
+    sections: [
+      { title: "Profit and loss by month", detail: "Monthly totals use saved cashbook entries. Missing source history is not filled with sample values.", kind: "table" },
+      { title: "Year-to-date statement", detail: "Sales, operating costs, operating profit, margin, equipment, and net result.", kind: "table" },
+      { title: "Operating margin and equipment", detail: "Compare recorded operating costs and equipment spend by period.", kind: "chart" },
+      { title: "Budget versus actual", detail: "Budgets are read from Finance settings when configured." },
+      { title: "Month-end close and shareable statement", detail: "Close controls and share links require permissions and configured export delivery." },
+    ],
+  },
+  partners: {
+    title: "Partners", eyebrow: "Workspace", description: "Manage ownership, capital, and partner-scoped statements.", source: "10 · Partners",
+    metrics: ["Net profit YTD", "Payouts taken", "Ownership allocated", "Capital balance", "Break-even"],
+    sections: [
+      { title: "Partner statements", detail: "Partner-specific access is enforced separately from business-wide totals.", kind: "table" },
+      { title: "Capital accounts and profit distribution", detail: "Ownership shares must total 100% before a distribution can be approved.", kind: "chart" },
+      { title: "Payout planner and approvals", detail: "Payout eligibility, minimums, and second sign-off are required before payment." },
+      { title: "Capital and payout ledger", detail: "Partner contributions and payouts are tracked as movements, not income or expenses.", kind: "table" },
+      { title: "Ownership history and partner portal", detail: "Changes are auditable; partners only see their own statement." },
+    ],
+  },
+  bills: {
+    title: "Bills", eyebrow: "Cashbook", description: "Track recurring costs, due dates, and payment status.", source: "11 · Bills",
+    metrics: ["Bills tracked", "Due soon", "Next bill", "Monthly equivalent", "Paid YTD"],
+    sections: [
+      { title: "Bills and next 90 days", detail: "No recurring bills are configured. Add the next due date and recurrence to see upcoming obligations.", kind: "table" },
+      { title: "Add a bill", detail: "Record the supplier, amount, recurrence, category, and next due date.", kind: "workflow" },
+      { title: "Margin impact and reminders", detail: "Accruals affect profit only when recorded as expenses; reminders do not book entries automatically." },
+      { title: "Supplier price history", detail: "Payment history appears after supplier-linked expenses exist.", kind: "chart" },
+      { title: "Calendar sync and accrual automation", detail: "Calendar delivery requires a configured provider. Bill payments must be confirmed before creating an expense." },
+    ],
+  },
+  reconcile: {
+    title: "Reconcile", eyebrow: "Controls", description: "Compare counted balances with the cashbook and resolve discrepancies.", source: "12 · Reconcile",
+    metrics: ["Accounts", "Open issues", "Balance difference", "Tolerance", "Locked through"],
+    sections: [
+      { title: "Account reconciliation", detail: "Enter a counted balance for each account and inspect the variance.", kind: "table" },
+      { title: "Close checklist", detail: "Count cash, confirm mobile money, resolve checks, then request sign-off." },
+      { title: "Checks and variance explanations", detail: "Every difference links to its source and must be resolved or explained.", kind: "table" },
+      { title: "Centipid CSV auto-match", detail: "CSV import matching becomes available after the source format is documented.", kind: "workflow" },
+      { title: "Closing certificate", detail: "A printable record will include counted accounts, open issues, signer, and date." },
+    ],
+  },
+  issues: {
+    title: "Needs attention", eyebrow: "Controls", description: "Review unresolved data quality and reconciliation items.", source: "Issues",
+    metrics: ["Open issues", "Fix first", "Review", "Warnings"],
+    sections: [
+      { title: "Issue inbox", detail: "Issues are generated from saved records and configured thresholds. No mock issues are shown as live.", kind: "table" },
+      { title: "Data quality rules", detail: "Missing days, weak days, estimated splits, and reconciliation differences are reviewed here." },
+    ],
+  },
+  "settings/finance": {
+    title: "Finance settings", eyebrow: "Settings", description: "Configure accounts, income types, categories, and cashbook behavior.", source: "14 · Settings · Finance", settings: true,
+    metrics: ["Accounts", "Income types", "Expense categories", "Movement types", "Currency"],
+    sections: [
+      { title: "Accounts and opening balances", detail: "Configure cash, mobile money, and any additional account. Opening balances must be reconciled." , kind: "workflow"},
+      { title: "Income types and default account", detail: "Mark estimated mobile-money and cash splits as estimated until corrected.", kind: "table" },
+      { title: "Expense categories", detail: "Classify operating costs separately from equipment purchases.", kind: "table" },
+      { title: "Movement types and category budgets", detail: "Movement ordering is fixed for reports; budgets include warning thresholds.", kind: "workflow" },
+      { title: "Bills setup", detail: "Recurring bill configuration is managed on the Bills screen." },
+    ],
+  },
+  "settings/rules": {
+    title: "Rules", eyebrow: "Settings", description: "Set finance thresholds, approvals, and reporting targets.", source: "15 · Settings · Rules", settings: true,
+    metrics: ["Partners", "Payout day", "Approval limit", "Weak-day threshold", "Monthly target"],
+    sections: [
+      { title: "Partners and profit shares", detail: "Ownership must total 100% before payouts can be approved.", kind: "table" },
+      { title: "Period locking and approvals", detail: "Configure approval limits, fee handling, and locked-period behavior.", kind: "workflow" },
+      { title: "Targets and equipment", detail: "Set monthly sales, expense warning, payback, and weak-day targets.", kind: "workflow" },
+      { title: "Alerts and reminders", detail: "Low-cash, bill, missing-day, and daily-report reminders require validated settings." },
+    ],
+  },
+  "settings/data": {
+    title: "Data", eyebrow: "Settings", description: "Review data quality, imports, backups, and exports.", source: "16 · Settings · Data", settings: true,
+    metrics: ["Rows imported", "Duplicates", "Last backup", "Exports", "Restore points"],
+    sections: [
+      { title: "Data quality rules", detail: "Review duplicate detection, required fields, date windows, and safe amount validation." },
+      { title: "Integrations and imports", detail: "The source workbook and webhook contract must be inventoried before import or cutover.", kind: "workflow" },
+      { title: "Import history", detail: "Each import needs a source, batch identifier, row counts, and reconciliation results.", kind: "table" },
+      { title: "Backup and export", detail: "Automated backup and restore are not enabled until an off-platform location and retention policy are configured." },
+      { title: "Sandbox mode", detail: "Use a non-production dataset for trial changes. No production copy is made here." },
+    ],
+  },
+  "settings/access": {
+    title: "Access", eyebrow: "Settings", description: "Manage users, roles, and workspace permissions.", source: "17 · Settings · Access", settings: true,
+    metrics: ["Users", "Invitations", "Role templates", "Features", "Recent changes"],
+    sections: [
+      { title: "Users and roles", detail: "Only active members can view business records. Role changes are audited.", kind: "table" },
+      { title: "Role templates and feature permissions", detail: "Owner, partner, and cashier access is enforced by Convex functions." },
+      { title: "Recent settings changes", detail: "Review the actor, affected setting, previous value, and new value.", kind: "table" },
+      { title: "Audit log detail", detail: "Audit events are append-only and scoped to this workspace." },
+    ],
+  },
+  "settings/releases": {
+    title: "Releases", eyebrow: "Settings", description: "Review application version, update channel, and release notes.", source: "18 · Settings · Releases", settings: true,
+    metrics: ["Current version", "Channel", "Latest release", "Readiness", "Preview features"],
+    sections: [
+      { title: "Releases and upgrades", detail: "Production updates are deployed through reviewed releases. The app will not overwrite finance data automatically." },
+      { title: "Upgrade readiness", detail: "Check data migration, backup, environment variables, and rollback readiness before release." },
+      { title: "Preview features", detail: "Preview controls stay off until the feature is available and acceptance criteria pass." },
+      { title: "Release notes and history", detail: "Only verified application releases appear here.", kind: "table" },
+    ],
+  },
+};
+
+const periods = ["Today", "Week", "Month", "Year"] as const;
+
+function businessDate(timezone: string) {
+  return new Intl.DateTimeFormat("en-CA", { timeZone: timezone, year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
+}
+
+function rangeFor(period: string, today: string, weekStart: "monday" | "sunday", fiscalStartMonth: number) {
+  const date = new Date(`${today}T00:00:00.000Z`);
+  const from = new Date(date);
+  if (period === "Week") {
+    const offset = weekStart === "sunday" ? date.getUTCDay() : (date.getUTCDay() + 6) % 7;
+    from.setUTCDate(date.getUTCDate() - offset);
+  } else if (period === "Month") from.setUTCDate(1);
+  else if (period === "Year") {
+    const year = date.getUTCMonth() + 1 < fiscalStartMonth ? date.getUTCFullYear() - 1 : date.getUTCFullYear();
+    from.setUTCFullYear(year, fiscalStartMonth - 1, 1);
+  }
+  const to = new Date(date.getTime() + 86_400_000);
+  return { from: from.toISOString().slice(0, 10), toExclusive: to.toISOString().slice(0, 10) };
+}
+
+function formatMoney(value: number | undefined, currency = "UGX", scale = 1, locale = "en-UG") {
+  if (value === undefined) return "—";
+  const digits = Math.round(Math.log10(scale));
+  return `${new Intl.NumberFormat(locale, { minimumFractionDigits: digits, maximumFractionDigits: digits }).format(value / scale)} ${currency}`;
+}
+
+export function BoardRoute({ route }: { route: string }) {
+  const screen = specs[route];
+  const [period, setPeriod] = useState<(typeof periods)[number]>("Month");
+  const [shareFeedback, setShareFeedback] = useState("");
+  const settings = useQuery(api.workspace.businessSettings, {});
+  const preferences = useQuery(api.settings.overview, {});
+  const timezone = settings?.access === "ready" ? settings.timezone : "Africa/Kampala";
+  const weekStartsOn = settings?.access === "ready" ? settings.weekStartsOn : "monday";
+  const currency = preferences?.access === "ready" ? preferences.currency : "UGX";
+  const currencyScale = 10 ** (preferences?.access === "ready" ? (preferences.currencyMinorDigits ?? 0) : 0);
+  const locale = preferences?.access === "ready" ? preferences.locale : "en-UG";
+  const fmt = (value: number | undefined) => formatMoney(value, currency, currencyScale, locale);
+  const dateFormat = preferences?.access === "ready" ? preferences.dateFormat : "DD/MM/YYYY";
+  const fmtDate = (value: string) => formatBusinessDay(value, dateFormat);
+  const today = businessDate(timezone);
+  const fiscalStartMonth = preferences?.access === "ready" ? preferences.fiscalYearStartMonth : 1;
+  const range = useMemo(() => rangeFor(period, today, weekStartsOn, fiscalStartMonth), [period, today, weekStartsOn, fiscalStartMonth]);
+  const rangeLastDay = new Date(`${range.toExclusive}T00:00:00.000Z`); rangeLastDay.setUTCDate(rangeLastDay.getUTCDate() - 1);
+  const summary = useQuery(api.workspace.dashboardSummary, range);
+  const entries = useQuery(api.workspace.recentEntries, { limit: 50 });
+
+  if (!screen) return <WorkspaceTitle eyebrow="MylesNet" title="Page not found" description="Choose a section from the navigation." />;
+
+  const stats = summary?.access === "ready" ? summary : null;
+  const metricValues: Record<string, string> = {
+    Sales: fmt(stats?.salesUgx),
+    "Best day": stats ? fmt(Math.max(0, ...stats.days.map((day) => day.salesUgx))) : "—",
+    "Days recorded": stats ? `${stats.days.filter((day) => day.salesUgx + day.expensesUgx > 0).length}` : "—",
+    "Expense ratio": stats ? `${stats.salesUgx ? Math.round(stats.expensesUgx / stats.salesUgx * 100) : 0}%` : "—",
+    "Average daily expenses": stats ? fmt(Math.round(stats.expensesUgx / Math.max(1, stats.days.length))) : "—",
+    "Net margin": stats ? `${stats.salesUgx ? Math.round((stats.salesUgx - stats.expensesUgx) / stats.salesUgx * 100) : 0}%` : "—",
+    "Cash on hand": fmt(stats?.cashBalanceUgx),
+    "Mobile money": fmt(stats?.mobileMoneyBalanceUgx),
+    "Sales today": stats ? fmt(stats.days.find((day) => day.day === today)?.salesUgx ?? 0) : "—",
+    "Expenses": fmt(stats?.expensesUgx),
+    "Average per day": stats ? fmt(Math.round(stats.salesUgx / Math.max(1, stats.days.length))) : "—",
+    "Entry basis": "Recorded",
+    "Approval queue": "—",
+    "Sales YTD": fmt(stats?.salesUgx),
+    "Operating costs": fmt(stats?.expensesUgx),
+    "Operating profit": stats ? fmt(stats.salesUgx - stats.expensesUgx) : "—",
+    // A net profit figure is withheld until equipment and other adjustments are modeled.
+    "Balance difference": stats ? fmt(0) : "—",
+    Currency: currency,
+  };
+  const entryKind = screen.title === "Sales" ? "sale" : screen.title === "Expenses" ? "expense" : undefined;
+  const selectedEntries = entries?.filter((entry) =>
+    entry.state === "posted" && entry.occurredOn >= range.from && entry.occurredOn < range.toExclusive && (!entryKind || entry.kind === entryKind),
+  );
+  const hasRecordData = selectedEntries && selectedEntries.length > 0;
+
+  async function shareReport() {
+    try {
+      await navigator.clipboard.writeText(window.location.href);
+      setShareFeedback("Page link copied.");
+      window.setTimeout(() => setShareFeedback(""), 3000);
+    } catch {
+      setShareFeedback("Copy this page URL to share the report.");
+    }
+  }
+
+  return <>
+    <WorkspaceTitle
+      eyebrow={`${screen.eyebrow} · ${screen.source}`}
+      title={screen.title}
+      description={screen.description}
+      action={<div className="period-control"><span>Period</span><select value={period} onChange={(event) => setPeriod(event.target.value as (typeof periods)[number])} aria-label={`${screen.title} period`}>{periods.map((item) => <option key={item}>{item}</option>)}</select></div>}
+    />
+    {screen.settings && <SettingsNav current={`/${route}`} />}
+    <div className="board-toolbar no-print">
+      <span className="status-chip status-live">Live · Convex data</span>
+      <span className="toolbar-range">{fmtDate(range.from)} — {fmtDate(rangeLastDay.toISOString().slice(0, 10))}</span>
+      <button className="button" type="button" onClick={() => window.print()}><Printer size={14} />Print</button>
+      <button className="button" type="button" onClick={() => window.print()}><Download size={14} />Export PDF</button>
+      <button className="button button-dark" type="button" onClick={() => void shareReport()}><Share2 size={14} />Share report</button>
+      {shareFeedback && <span className="form-feedback" role="status">{shareFeedback}</span>}
+    </div>
+    {summary?.access === "restricted" && <div className="notice-banner notice-info" role="status">Partner-specific reporting is being prepared. Business-wide totals are hidden from partner accounts.</div>}
+    {summary?.access === "pending" && <div className="notice-banner notice-warning" role="status">Workspace access is pending. Ask an owner to invite this Google account.</div>}
+    <div className="metric-grid board-metric-grid">
+      {screen.metrics.map((label, index) => <Card className="metric-card board-metric-card" key={label}>
+        <div className="card-heading"><span className="eyebrow">{label}</span><span className="entry-icon">{index % 2 === 0 ? <ArrowUpRight size={15} /> : <ArrowDownRight size={15} />}</span></div>
+        <div className="metric-value">{metricValues[label] ?? "—"}</div>
+        <div className="metric-note">{metricValues[label] === undefined ? "Available when this record type is configured" : "Based on saved workspace records"}</div>
+      </Card>)}
+    </div>
+    <div className="board-grid">
+      {screen.entryKind && <Card className="board-feature-card">
+        <div className="card-heading"><div><h2 className="card-title">{screen.entryKind === "sale" ? "Add a sale" : "Add an expense"}</h2><p className="card-subtitle">Saved values update the cashbook and account balance.</p></div></div>
+        <EntryForm kind={screen.entryKind} />
+      </Card>}
+      {screen.sections.map((section) => <Card className="board-section-card" key={section.title}>
+        <div className="card-heading"><div><h2 className="card-title">{section.title}</h2><p className="card-subtitle">{section.detail}</p></div></div>
+        {section.kind === "table" && screen.title === "Sales" || section.kind === "table" && screen.title === "Expenses" ? (
+          hasRecordData ? <div className="table-scroll"><table className="data-table"><thead><tr><th>Date</th><th>Type</th><th>Category</th><th>Account</th><th>Amount</th><th>Status</th></tr></thead><tbody>{selectedEntries.map((entry) => <tr key={entry._id}><td>{fmtDate(entry.occurredOn)}</td><td>{entry.kind}</td><td>{entry.category}</td><td>{entry.account === "cash" ? "Cash" : "Mobile money"}</td><td>{fmt(entry.amountUgx)}</td><td><span className={`status-chip ${entry.state === "posted" ? "status-ok" : "status-warning"}`}>{entry.state}</span></td></tr>)}</tbody></table></div> : <EmptyPanel message="No entries yet." next="Add an entry to populate this view. The design preview figures are examples, not live business data." />
+        ) : section.kind === "chart" ? <ChartPanel summary={stats} message={section.detail} currency={currency} scale={currencyScale} locale={locale} dateFormat={dateFormat} />
+          : section.kind === "workflow" ? <WorkflowPanel screen={screen} section={section.title} />
+            : <EmptyPanel message={hasRecordData ? "Live records are available for the selected period." : "No records yet."} next={section.detail} />}
+      </Card>)}
+      {screen.title === "Sales" || screen.title === "Expenses" ? <Card className="board-section-card">
+        <div className="card-heading"><div><h2 className="card-title">Recent cashbook entries</h2><p className="card-subtitle">Latest saved records in this workspace.</p></div></div>
+        {hasRecordData ? <div className="entry-list">{selectedEntries.map((entry) => <div className="entry-row" key={entry._id}><div className="entry-main"><span className="entry-icon">{entry.kind === "sale" ? <ArrowUpRight size={15} /> : <ArrowDownRight size={15} />}</span><div><div className="entry-description">{entry.note || entry.category}</div><div className="entry-meta">{fmtDate(entry.occurredOn)} · {entry.category} · {entry.account === "cash" ? "Cash" : "Mobile money"}</div></div></div><span className={`entry-amount ${entry.kind === "sale" ? "amount-positive" : "amount-negative"}`}>{entry.kind === "sale" ? "+" : "−"}{fmt(entry.amountUgx)}</span></div>)}</div> : <EmptyPanel message="No entries have been recorded." next="Use the form to save the first entry." />}
+      </Card> : null}
+    </div>
+    <div className="board-source-note">{screen.source} · Values shown here come from authorized Convex records. Sample values from the design references are not loaded into the workspace.</div>
+  </>;
+}
+
+function EmptyPanel({ message, next }: { message: string; next: string }) {
+  return <div className="empty-state compact-empty"><strong>{message}</strong><span>{next}</span></div>;
+}
+
+function ChartPanel({ summary, message, currency, scale, locale, dateFormat }: { summary: { days: { day: string; salesUgx: number; expensesUgx: number }[] } | null; message: string; currency: string; scale: number; locale: string; dateFormat: "DD/MM/YYYY" | "MM/DD/YYYY" | "YYYY-MM-DD" }) {
+  const days = summary?.days.slice(-14) ?? [];
+  const max = Math.max(1, ...days.map((day) => Math.max(day.salesUgx, day.expensesUgx)));
+  if (days.length === 0 || !days.some((day) => day.salesUgx || day.expensesUgx)) return <EmptyPanel message="No chart data yet." next="Recorded activity will appear here. Mock chart values are not treated as real." />;
+  return <>
+    <div className="board-bars" role="img" aria-label={message}>{days.map((day) => <div className="board-bar-day" key={day.day} title={`${formatBusinessDay(day.day, dateFormat)}: sales ${formatMoney(day.salesUgx, currency, scale, locale)}; expenses ${formatMoney(day.expensesUgx, currency, scale, locale)}`}><div className="board-bar-pair"><span className="board-bar-sales" style={{ height: `${Math.max(2, day.salesUgx / max * 100)}%` }} /><span className="board-bar-expenses" style={{ height: `${Math.max(2, day.expensesUgx / max * 100)}%` }} /></div><span>{day.day.slice(8)}</span></div>)}</div>
+    <div className="chart-legend"><span><i className="legend-sales" /> Sales</span><span><i className="legend-expenses" /> Expenses</span></div>
+  </>;
+}
+
+function WorkflowPanel({ screen, section }: { screen: BoardSpec; section: string }) {
+  if (section === "Add an expense" || section === "Add a sale") return <div className="empty-state compact-empty"><strong>Entry capture is available above.</strong><span>Use the saved cashbook form so the balance and audit trail update together.</span></div>;
+  const target = screen.title === "Bills" ? "/settings/finance" : screen.title === "Reconcile" ? "/settings/rules" : screen.settings ? "/settings/general" : "/sales";
+  return <div className="workflow-callout"><span className="workflow-indicator" /><div><strong>{section} is ready for workspace configuration</strong><p className="muted-note">Configure the required account, record type, role, or provider before using this workflow.</p><Link href={target} className="text-link">Open related settings →</Link></div></div>;
+}
