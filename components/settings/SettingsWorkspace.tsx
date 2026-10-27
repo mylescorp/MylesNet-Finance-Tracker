@@ -144,6 +144,15 @@ type BalanceAdjustmentRow = {
   state: "posted" | "void";
   voidReason?: string;
 };
+function parseBalanceMinorUnits(value: string, decimalPlaces: number): number | null {
+  const match = /^(\d+)(?:\.(\d*))?$/.exec(value.trim());
+  if (!match || match[1].length > 16) return null;
+  const fraction = match[2] ?? "";
+  if (fraction.length > decimalPlaces && /[1-9]/.test(fraction.slice(decimalPlaces))) return null;
+  const fractionalMinor = fraction.slice(0, decimalPlaces).padEnd(decimalPlaces, "0");
+  const amount = Number(`${match[1]}${fractionalMinor}`);
+  return Number.isSafeInteger(amount) ? amount : null;
+}
 function BalanceAdjustmentManager({ settings }: { settings: SettingsOverview }) {
   const { results: adjustmentRows, status: adjustmentStatus, loadMore } = usePaginatedQuery(api.workspace.balanceAdjustments, {}, { initialNumItems: 30 });
   const create = useMutation(api.workspace.createBalanceAdjustment);
@@ -170,9 +179,8 @@ function BalanceAdjustmentManager({ settings }: { settings: SettingsOverview }) 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault(); setBusy(true); setFeedback(null);
     try {
-      const scaled = Number(countedBalance) * scale;
-      const amount = Math.round(scaled);
-      if (!Number.isSafeInteger(amount) || amount < 0 || Math.abs(scaled - amount) > 1e-7) throw new Error(`Enter a non-negative balance using ${settings.currency}'s supported decimal places.`);
+      const amount = parseBalanceMinorUnits(countedBalance, settings.currencyMinorDigits ?? 0);
+      if (amount === null) throw new Error(`Enter a non-negative balance using ${settings.currency}'s supported decimal places.`);
       if (editing) await updateAdjustment({ adjustmentId: editing._id, account, countedBalanceUgx: amount, occurredOn, note });
       else await create({ account, countedBalanceUgx: amount, occurredOn, note });
       resetForm(); setFeedback({ message: editing ? "Balance record updated; the difference was applied to the live account balance." : "Balance recorded; the live account balance has been adjusted.", error: false });
