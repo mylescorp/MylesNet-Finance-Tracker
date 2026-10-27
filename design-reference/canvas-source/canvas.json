@@ -1,0 +1,181 @@
+{
+  "v": 3,
+  "attachments": {},
+  "boards": {
+    "Main.dc.html": {
+      "x": 0,
+      "y": 0,
+      "w": 1400,
+      "h": 5206,
+      "title": "Dashboard",
+      "expand": "fill"
+    },
+    "Analytics.dc.html": {
+      "x": 1500,
+      "y": 0,
+      "w": 1400,
+      "h": 6154,
+      "title": "Analytics",
+      "expand": "fill"
+    },
+    "Settings.dc.html": {
+      "x": 0,
+      "y": 11533,
+      "w": 1400,
+      "h": 1828,
+      "title": "Settings \u00b7 General",
+      "expand": "fill"
+    },
+    "Partners.dc.html": {
+      "x": 3000,
+      "y": 0,
+      "w": 1400,
+      "h": 3404,
+      "title": "Partners",
+      "expand": "fill"
+    },
+    "Sales.dc.html": {
+      "x": 4500,
+      "y": 0,
+      "w": 1400,
+      "h": 2869,
+      "title": "Sales",
+      "expand": "fill"
+    },
+    "Expenses.dc.html": {
+      "x": 6000,
+      "y": 0,
+      "w": 1400,
+      "h": 2443,
+      "title": "Expenses",
+      "expand": "fill"
+    },
+    "Movements.dc.html": {
+      "x": 0,
+      "y": 6494,
+      "w": 1400,
+      "h": 2303,
+      "title": "Movements",
+      "expand": "fill"
+    },
+    "Savings.dc.html": {
+      "x": 1500,
+      "y": 6494,
+      "w": 1400,
+      "h": 1613,
+      "title": "Savings",
+      "expand": "fill"
+    },
+    "Loans.dc.html": {
+      "x": 3000,
+      "y": 6494,
+      "w": 1400,
+      "h": 1577,
+      "title": "Loans",
+      "expand": "fill"
+    },
+    "DailyReport.dc.html": {
+      "x": 4500,
+      "y": 6494,
+      "w": 1400,
+      "h": 2169,
+      "title": "Daily Report",
+      "expand": "fill"
+    },
+    "MonthlyPnL.dc.html": {
+      "x": 6000,
+      "y": 6494,
+      "w": 1400,
+      "h": 1919,
+      "title": "Monthly P&L",
+      "expand": "fill"
+    },
+    "Bills.dc.html": {
+      "x": 0,
+      "y": 9137,
+      "w": 1400,
+      "h": 1737,
+      "title": "Bills",
+      "expand": "fill"
+    },
+    "Reconcile.dc.html": {
+      "x": 1500,
+      "y": 9137,
+      "w": 1400,
+      "h": 2056,
+      "title": "Reconcile",
+      "expand": "fill"
+    },
+    "SettingsFinance.dc.html": {
+      "x": 1500,
+      "y": 11533,
+      "w": 1400,
+      "h": 2244,
+      "title": "Settings \u00b7 Finance",
+      "expand": "fill"
+    },
+    "SettingsRules.dc.html": {
+      "x": 3000,
+      "y": 11533,
+      "w": 1400,
+      "h": 2059,
+      "title": "Settings \u00b7 Rules",
+      "expand": "fill"
+    },
+    "SettingsData.dc.html": {
+      "x": 4500,
+      "y": 11533,
+      "w": 1400,
+      "h": 1848,
+      "title": "Settings \u00b7 Data",
+      "expand": "fill"
+    },
+    "SettingsAccess.dc.html": {
+      "x": 6000,
+      "y": 11533,
+      "w": 1400,
+      "h": 1973,
+      "title": "Settings \u00b7 Access",
+      "expand": "fill"
+    },
+    "SettingsReleases.dc.html": {
+      "x": 7500,
+      "y": 11533,
+      "w": 1400,
+      "h": 2050,
+      "title": "Settings \u00b7 Releases",
+      "expand": "fill"
+    }
+  },
+  "createdOnFiles": {
+    "at": "2026-10-25T12:00:00Z",
+    "v": 1
+  },
+  "designSystems": [],
+  "launch": {
+    "view": "canvas"
+  },
+  "notes": {},
+  "order": [
+    "Main.dc.html",
+    "Analytics.dc.html",
+    "Partners.dc.html",
+    "Sales.dc.html",
+    "Expenses.dc.html",
+    "Movements.dc.html",
+    "Savings.dc.html",
+    "Loans.dc.html",
+    "DailyReport.dc.html",
+    "MonthlyPnL.dc.html",
+    "Bills.dc.html",
+    "Reconcile.dc.html",
+    "Settings.dc.html",
+    "SettingsFinance.dc.html",
+    "SettingsRules.dc.html",
+    "SettingsData.dc.html",
+    "SettingsAccess.dc.html",
+    "SettingsReleases.dc.html"
+  ],
+  "pages": [],
+  "title": "MylesNet Finance Tracker: all tabs"
+}
