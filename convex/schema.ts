@@ -154,6 +154,7 @@ export default defineSchema({
   })
     .index("by_business_and_distribution", ["businessId", "distributionId"])
     .index("by_business_and_item", ["businessId", "distributionItemId"])
+    .index("by_business_and_partner_and_paidOn", ["businessId", "partnerId", "paidOn"])
     .index("by_business_and_idempotency", ["businessId", "idempotencyKey"]),
   entries: defineTable({
     businessId: v.id("businesses"),

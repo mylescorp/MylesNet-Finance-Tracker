@@ -189,9 +189,6 @@ export const partnerStatement = query({
     const distributions = await Promise.all(distributionItems.slice(0, 500).map(async item => {
       const distribution = await ctx.db.get("partnerDistributions", item.distributionId);
       if (!distribution || distribution.businessId !== current.business._id || distribution.periodFrom >= args.toExclusive || distribution.periodToExclusive <= args.from) return null;
-      const payouts = await ctx.db.query("partnerPayouts")
-        .withIndex("by_business_and_item", q => q.eq("businessId", current.business._id).eq("distributionItemId", item._id))
-        .order("desc").take(100);
       return {
         id: distribution._id,
         periodFrom: distribution.periodFrom,
@@ -200,8 +197,15 @@ export const partnerStatement = query({
         allocatedUgx: item.amountUgx,
         paidUgx: item.paidUgx,
         unpaidUgx: item.amountUgx - item.paidUgx,
-        payouts: payouts.map(payout => ({ id: payout._id, amountUgx: payout.amountUgx, account: payout.account, paidOn: payout.paidOn, state: payout.state, reversedAt: payout.reversedAt, reversalReason: payout.reversalReason })),
       };
+    }));
+    const payoutRows = await ctx.db.query("partnerPayouts")
+      .withIndex("by_business_and_partner_and_paidOn", q => q.eq("businessId", current.business._id).eq("partnerId", partner._id).gte("paidOn", args.from).lt("paidOn", args.toExclusive))
+      .order("desc").take(501);
+    const payouts = await Promise.all(payoutRows.slice(0, 500).map(async payout => {
+      const [item, distribution] = await Promise.all([ctx.db.get("partnerDistributionItems", payout.distributionItemId), ctx.db.get("partnerDistributions", payout.distributionId)]);
+      if (!item || item.businessId !== current.business._id || !distribution || distribution.businessId !== current.business._id) return null;
+      return { id: payout._id, partnerName: item.partnerName, periodFrom: distribution.periodFrom, amountUgx: payout.amountUgx, account: payout.account, paidOn: payout.paidOn, state: payout.state, reversedAt: payout.reversedAt, reversalReason: payout.reversalReason };
     }));
     const preferences = await ctx.db.query("workspacePreferences").withIndex("by_business", q => q.eq("businessId", current.business._id)).unique();
     const currencyMinorDigits = new Intl.NumberFormat("en", { style: "currency", currency: current.business.currency }).resolvedOptions().maximumFractionDigits;
@@ -217,6 +221,8 @@ export const partnerStatement = query({
       capitalTotalComplete: legacyCapital.complete,
       distributions: distributions.filter((row): row is NonNullable<typeof row> => row !== null && ["approved", "partially_paid", "paid"].includes(row.status)),
       distributionsComplete: distributionItems.length < 501,
+      payouts: payouts.filter((row): row is NonNullable<typeof row> => row !== null),
+      payoutsComplete: payoutRows.length < 501,
       contributions: contributions.filter(row => row.kind === "capital_contribution" && row.state === "posted").map(row => ({
         _id: row._id, occurredOn: row.occurredOn, amountUgx: row.amountUgx, account: row.toAccount ?? "cash", note: row.note,
       })),

@@ -6,7 +6,7 @@ import type { MutationCtx, QueryCtx } from "./_generated/server";
 import type { Id } from "./_generated/dataModel";
 
 type Ctx = QueryCtx | MutationCtx;
-type ActiveWorkspace = { userId: Id<"users">; membership: { role: "owner" | "partner" | "cashier" | "finance_approver"; businessId: Id<"businesses"> }; business: { _id: Id<"businesses">; currency: string; timezone: string } };
+type ActiveWorkspace = { userId: Id<"users">; membership: { role: "owner" | "partner" | "cashier" | "finance_approver"; businessId: Id<"businesses"> }; business: { _id: Id<"businesses">; currency: string; timezone: string; createdAt: number } };
 
 function safeAdd(a: number, b: number, label: string) {
   const result = a + b;
@@ -107,7 +107,11 @@ export const setOwnership = mutation({
     for (const partner of partners) {
       const history = await ctx.db.query("partnerOwnershipHistory").withIndex("by_business_and_partner_and_effectiveOn", q => q.eq("businessId", current.business._id).eq("partnerId", partner._id)).first();
       if (!history) {
-        await ctx.db.insert("partnerOwnershipHistory", { businessId: current.business._id, partnerId: partner._id, ownershipBps: partner.ownershipBps, effectiveOn: businessDay(current.business.timezone), createdBy: current.userId, createdAt: now, idempotencyKey: `${args.idempotencyKey}:baseline:${partner._id}` });
+        // Existing partner rows predate ownership history. Anchor their current
+        // legacy share to workspace creation so snapshots before the first
+        // explicit ownership change keep seeing the partner and their share.
+        const legacyStart = dayAt(current.business.createdAt, current.business.timezone);
+        await ctx.db.insert("partnerOwnershipHistory", { businessId: current.business._id, partnerId: partner._id, ownershipBps: partner.ownershipBps, effectiveOn: legacyStart, createdBy: current.userId, createdAt: now, idempotencyKey: `${args.idempotencyKey}:baseline:${partner._id}` });
       }
       const ownershipBps = byId.get(partner._id)!;
       await ctx.db.insert("partnerOwnershipHistory", { businessId: current.business._id, partnerId: partner._id, ownershipBps, effectiveOn: args.effectiveOn, createdBy: current.userId, createdAt: now, idempotencyKey: `${args.idempotencyKey}:${partner._id}` });
@@ -176,6 +180,15 @@ export const decide = mutation({
     if (row.createdBy === current.userId) throw new Error("The person who prepared a distribution cannot approve or reject it.");
     const now = Date.now();
     if (args.decision === "approve") {
+      const daily = await ctx.db.query("dailyTotals")
+        .withIndex("by_business_and_day", q => q.eq("businessId", current.business._id).gte("day", row.periodFrom).lt("day", row.periodToExclusive))
+        .take(370);
+      const currentProfit = safeAdd(
+        daily.reduce((sum, item) => safeAdd(sum, item.salesUgx, "Period sales"), 0),
+        -daily.reduce((sum, item) => safeAdd(sum, item.expensesUgx, "Period expenses"), 0),
+        "Current cashbook net",
+      );
+      if (currentProfit <= 0 || row.distributionUgx > currentProfit) throw new Error("Recorded cashbook net has changed and no longer supports this request. Cancel it and prepare a new distribution from the corrected period.");
       const balances = await ctx.db.query("accountBalances").withIndex("by_business_and_account", q => q.eq("businessId", current.business._id)).take(2);
       const liquid = balances.reduce((sum, item) => safeAdd(sum, item.balanceUgx, "Account balances"), 0);
       if (liquid - row.reserveUgx < row.distributionUgx) throw new Error("Current balances no longer support this distribution and its reserve. Cancel it and prepare a smaller amount.");
