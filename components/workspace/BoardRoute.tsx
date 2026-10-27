@@ -351,7 +351,7 @@ export function BoardRoute({ route }: { route: string }) {
         ) : section.kind === "table" && screen.title === "Daily Report" ? <DailyHistoryTable days={weekDays} today={today} loading={trailingSevenSummary === undefined} formatDay={fmtDate} formatMoney={fmt} />
           : section.kind === "table" && screen.title === "Monthly P&L" ? <MonthlyPnlTable days={yearDays} loading={yearSummary === undefined} locale={locale} formatMoney={fmt} />
           : section.kind === "chart" ? <ChartPanel summary={stats} title={section.title} message={section.detail} currency={currency} scale={currencyScale} locale={locale} />
-          : section.kind === "workflow" ? <WorkflowPanel screen={screen} section={section.title} currency={currency} scale={currencyScale} />
+          : section.kind === "workflow" ? <WorkflowPanel screen={screen} section={section.title} currency={currency} scale={currencyScale} businessDay={today} />
             : <EmptyPanel message={hasRecordData ? "Live records are available for the selected period." : "No records yet."} next={section.detail} />}
       </Card>)}
       {screen.title === "Sales" || screen.title === "Expenses" ? <Card className="board-section-card">
@@ -418,10 +418,10 @@ function ChartPanel({ summary, title, message, currency, scale, locale }: { summ
   </>;
 }
 
-function WorkflowPanel({ screen, section, currency, scale }: { screen: BoardSpec; section: string; currency: string; scale: number }) {
+function WorkflowPanel({ screen, section, currency, scale, businessDay }: { screen: BoardSpec; section: string; currency: string; scale: number; businessDay: string }) {
   if (section === "Add an expense" || section === "Add a sale") return <div className="empty-state compact-empty"><strong>Entry capture is available above.</strong><span>Use the saved cashbook form so the balance and audit trail update together.</span></div>;
   const recordKind = section === "Movement tracking status" ? "movement" : section === "Holdings tracking status" ? "holding" : section === "Loan tracking status" ? "loan" : section === "Bill tracking status" ? "bill" : null;
-  if (recordKind) return <OperationalRecordForm kind={recordKind} currency={currency} scale={scale} />;
+  if (recordKind) return <OperationalRecordForm kind={recordKind} currency={currency} scale={scale} businessDay={businessDay} />;
   const settingsWorkflow = screen.settings || screen.title === "Reconcile";
   return <div className="workflow-callout"><span className="workflow-indicator" /><div><strong>{settingsWorkflow ? `${section} is not configured yet` : `${section} is not available yet`}</strong><p className="muted-note">{settingsWorkflow ? "Review the related Finance or Rules settings. This card does not create financial records." : "This workflow is a product roadmap item; it does not yet save records or change account balances."}</p>{settingsWorkflow && <Link href={screen.title === "Reconcile" ? "/settings/rules" : "/settings/finance"} className="text-link">Review related settings →</Link>}</div></div>;
 }
