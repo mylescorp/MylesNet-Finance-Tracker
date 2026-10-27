@@ -52,6 +52,7 @@ export const overview = query({
   handler: async (ctx) => {
     const current = await activeWorkspace(ctx);
     if (!current) return { access: "pending" as const };
+    if (current.membership.role === "partner") return { access: "restricted" as const, role: "partner" as const };
     const prefs = await ctx.db.query("workspacePreferences").withIndex("by_business", q => q.eq("businessId", current.business._id)).unique();
     const firstEntry = await ctx.db.query("entries").withIndex("by_business_and_date", q => q.eq("businessId", current.business._id)).first();
     const balances = await ctx.db.query("accountBalances").withIndex("by_business_and_account", q => q.eq("businessId", current.business._id)).take(2);
@@ -65,6 +66,7 @@ export const overview = query({
       countryCode: current.business.countryCode ?? "UG",
       currency: current.business.currency,
       currencyMinorDigits: digits,
+      settingsUpdatedAt: prefs?.updatedAt ?? current.business.createdAt,
       currencyLocked: Boolean(firstEntry || balances.some(b => (b.openingBalanceUgx ?? 0) !== 0)),
       cashOpeningBalance: (balances.find(b => b.account === "cash")?.openingBalanceUgx ?? 0) / scale,
       mobileOpeningBalance: (balances.find(b => b.account === "mobile_money")?.openingBalanceUgx ?? 0) / scale,
@@ -88,6 +90,7 @@ export const overview = query({
 
 export const update = mutation({
   args: {
+    expectedSettingsUpdatedAt: v.number(),
     businessName: v.string(), countryCode: v.string(), currency: v.string(), timezone: v.string(),
     weekStartsOn: v.union(v.literal("monday"), v.literal("sunday")), locale: v.string(),
     dateFormat: v.union(v.literal("DD/MM/YYYY"), v.literal("MM/DD/YYYY"), v.literal("YYYY-MM-DD")),
@@ -96,10 +99,14 @@ export const update = mutation({
     monthlyExpenseWarningUgx: v.number(), duplicateWindowDays: v.number(), requireEntryNote: v.boolean(),
     negativeBalanceWarning: v.boolean(), cashOpeningBalance: v.number(), mobileOpeningBalance: v.number(),
   },
-  returns: v.null(),
+  returns: v.number(),
   handler: async (ctx, args) => {
     const current = await activeWorkspace(ctx);
     if (!current || current.membership.role !== "owner") throw new Error("Only the workspace owner can change settings.");
+    const existing = await ctx.db.query("workspacePreferences").withIndex("by_business", q => q.eq("businessId", current.business._id)).unique();
+    if (args.expectedSettingsUpdatedAt !== (existing?.updatedAt ?? current.business.createdAt)) {
+      throw new Error("These settings changed in another session. Refresh this page before saving again.");
+    }
     const businessName = args.businessName.trim();
     if (businessName.length < 2 || businessName.length > 100) throw new Error("Workspace name must be 2 to 100 characters.");
     if (!/^[A-Z]{2}$/.test(args.countryCode) || !countries[args.countryCode as keyof typeof countries]) throw new Error("Choose a valid country.");
@@ -122,6 +129,12 @@ export const update = mutation({
     for (const [label, amount] of [["Cash opening balance", args.cashOpeningBalance], ["Mobile money opening balance", args.mobileOpeningBalance]] as const) {
       if (!isValidCurrencyAmount(amount, scale)) throw new Error(`${label} must use the selected currency's supported decimal places.`);
     }
+    const cashOpeningMinor = toMinorUnits(args.cashOpeningBalance, scale);
+    const mobileOpeningMinor = toMinorUnits(args.mobileOpeningBalance, scale);
+    const highExpenseReviewMinor = toMinorUnits(args.highExpenseReviewUgx, scale);
+    const weakDaySalesMinor = toMinorUnits(args.weakDaySalesUgx, scale);
+    const monthlySalesTargetMinor = toMinorUnits(args.monthlySalesTargetUgx, scale);
+    const monthlyExpenseWarningMinor = toMinorUnits(args.monthlyExpenseWarningUgx, scale);
     if (args.currency !== current.business.currency) {
       const firstEntry = await ctx.db.query("entries").withIndex("by_business_and_date", q => q.eq("businessId", current.business._id)).first();
       const balances = await ctx.db.query("accountBalances").withIndex("by_business_and_account", q => q.eq("businessId", current.business._id)).take(2);
@@ -136,17 +149,15 @@ export const update = mutation({
     const currentBalances = await ctx.db.query("accountBalances").withIndex("by_business_and_account", q => q.eq("businessId", current.business._id)).take(2);
     const cashDoc = currentBalances.find(b => b.account === "cash");
     const mobileDoc = currentBalances.find(b => b.account === "mobile_money");
-    if (firstEntry && (toMinorUnits(args.cashOpeningBalance, scale) !== (cashDoc?.openingBalanceUgx ?? 0) || toMinorUnits(args.mobileOpeningBalance, scale) !== (mobileDoc?.openingBalanceUgx ?? 0))) {
+    if (firstEntry && (cashOpeningMinor !== (cashDoc?.openingBalanceUgx ?? 0) || mobileOpeningMinor !== (mobileDoc?.openingBalanceUgx ?? 0))) {
       throw new Error("Opening balances are locked after the first transaction. Use an auditable adjustment entry instead.");
     }
     if (!firstEntry) {
-      const cashOpening = toMinorUnits(args.cashOpeningBalance, scale);
-      const mobileOpening = toMinorUnits(args.mobileOpeningBalance, scale);
       const now = Date.now();
-      if (cashDoc) await ctx.db.patch("accountBalances", cashDoc._id, { balanceUgx: cashOpening, openingBalanceUgx: cashOpening, updatedAt: now });
-      else if (cashOpening !== 0) await ctx.db.insert("accountBalances", { businessId: current.business._id, account: "cash", balanceUgx: cashOpening, openingBalanceUgx: cashOpening, updatedAt: now });
-      if (mobileDoc) await ctx.db.patch("accountBalances", mobileDoc._id, { balanceUgx: mobileOpening, openingBalanceUgx: mobileOpening, updatedAt: now });
-      else if (mobileOpening !== 0) await ctx.db.insert("accountBalances", { businessId: current.business._id, account: "mobile_money", balanceUgx: mobileOpening, openingBalanceUgx: mobileOpening, updatedAt: now });
+      if (cashDoc) await ctx.db.patch("accountBalances", cashDoc._id, { balanceUgx: cashOpeningMinor, openingBalanceUgx: cashOpeningMinor, updatedAt: now });
+      else if (cashOpeningMinor !== 0) await ctx.db.insert("accountBalances", { businessId: current.business._id, account: "cash", balanceUgx: cashOpeningMinor, openingBalanceUgx: cashOpeningMinor, updatedAt: now });
+      if (mobileDoc) await ctx.db.patch("accountBalances", mobileDoc._id, { balanceUgx: mobileOpeningMinor, openingBalanceUgx: mobileOpeningMinor, updatedAt: now });
+      else if (mobileOpeningMinor !== 0) await ctx.db.insert("accountBalances", { businessId: current.business._id, account: "mobile_money", balanceUgx: mobileOpeningMinor, openingBalanceUgx: mobileOpeningMinor, updatedAt: now });
     }
     const prefValues = {
       locale: args.locale,
@@ -154,15 +165,14 @@ export const update = mutation({
       fiscalYearStartMonth: args.fiscalYearStartMonth,
       incomeCategories,
       expenseCategories,
-      highExpenseReviewUgx: toMinorUnits(args.highExpenseReviewUgx, scale),
-      weakDaySalesUgx: toMinorUnits(args.weakDaySalesUgx, scale),
-      monthlySalesTargetUgx: toMinorUnits(args.monthlySalesTargetUgx, scale),
-      monthlyExpenseWarningUgx: toMinorUnits(args.monthlyExpenseWarningUgx, scale),
+      highExpenseReviewUgx: highExpenseReviewMinor,
+      weakDaySalesUgx: weakDaySalesMinor,
+      monthlySalesTargetUgx: monthlySalesTargetMinor,
+      monthlyExpenseWarningUgx: monthlyExpenseWarningMinor,
       duplicateWindowDays: args.duplicateWindowDays,
       requireEntryNote: args.requireEntryNote,
       negativeBalanceWarning: args.negativeBalanceWarning,
     };
-    const existing = await ctx.db.query("workspacePreferences").withIndex("by_business", q => q.eq("businessId", current.business._id)).unique();
     const now = Date.now();
     if (existing) await ctx.db.patch("workspacePreferences", existing._id, { ...prefValues, updatedAt: now, updatedBy: current.userId });
     else await ctx.db.insert("workspacePreferences", { businessId: current.business._id, ...prefValues, updatedAt: now, updatedBy: current.userId });
@@ -185,10 +195,10 @@ export const update = mutation({
           cashOpeningBalanceMinor: cashDoc?.openingBalanceUgx ?? 0,
           mobileOpeningBalanceMinor: mobileDoc?.openingBalanceUgx ?? 0,
         },
-        after: { ...args, incomeCategories, expenseCategories, cashOpeningBalanceMinor: toMinorUnits(args.cashOpeningBalance, scale), mobileOpeningBalanceMinor: toMinorUnits(args.mobileOpeningBalance, scale) },
+        after: { ...args, incomeCategories, expenseCategories, cashOpeningBalanceMinor: cashOpeningMinor, mobileOpeningBalanceMinor: mobileOpeningMinor },
       }),
     });
-    return null;
+    return now;
   },
 });
 

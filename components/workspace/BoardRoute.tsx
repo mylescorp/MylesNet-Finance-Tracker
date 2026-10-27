@@ -242,6 +242,7 @@ function formatMoney(value: number | undefined, currency = "UGX", scale = 1, loc
 export function BoardRoute({ route }: { route: string }) {
   const screen = specs[route];
   const [period, setPeriod] = useState<(typeof periods)[number]>("Month");
+  const [entryLimit, setEntryLimit] = useState(100);
   const [shareFeedback, setShareFeedback] = useState("");
   const settings = useQuery(api.workspace.businessSettings, {});
   const preferences = useQuery(api.settings.overview, {});
@@ -258,7 +259,8 @@ export function BoardRoute({ route }: { route: string }) {
   const range = useMemo(() => rangeFor(period, today, weekStartsOn, fiscalStartMonth), [period, today, weekStartsOn, fiscalStartMonth]);
   const rangeLastDay = new Date(`${range.toExclusive}T00:00:00.000Z`); rangeLastDay.setUTCDate(rangeLastDay.getUTCDate() - 1);
   const summary = useQuery(api.workspace.dashboardSummary, range);
-  const entries = useQuery(api.workspace.recentEntries, { limit: 50 });
+  const entryKind = screen?.title === "Sales" ? "sale" : screen?.title === "Expenses" ? "expense" : undefined;
+  const entries = useQuery(api.workspace.recentEntries, { limit: entryLimit, kind: entryKind, from: range.from, toExclusive: range.toExclusive });
 
   if (!screen) return <WorkspaceTitle eyebrow="MylesNet" title="Page not found" description="Choose a section from the navigation." />;
 
@@ -284,10 +286,7 @@ export function BoardRoute({ route }: { route: string }) {
     "Balance difference": stats ? fmt(0) : "—",
     Currency: currency,
   };
-  const entryKind = screen.title === "Sales" ? "sale" : screen.title === "Expenses" ? "expense" : undefined;
-  const selectedEntries = entries?.filter((entry) =>
-    entry.state === "posted" && entry.occurredOn >= range.from && entry.occurredOn < range.toExclusive && (!entryKind || entry.kind === entryKind),
-  );
+  const selectedEntries = entries?.filter((entry) => entry.state === "posted");
   const hasRecordData = selectedEntries && selectedEntries.length > 0;
 
   async function shareReport() {
@@ -340,6 +339,8 @@ export function BoardRoute({ route }: { route: string }) {
       </Card>)}
       {screen.title === "Sales" || screen.title === "Expenses" ? <Card className="board-section-card">
         <div className="card-heading"><div><h2 className="card-title">Recent cashbook entries</h2><p className="card-subtitle">Latest saved records in this workspace.</p></div></div>
+        {entries?.length === entryLimit && entryLimit < 500 && <button className="button" type="button" onClick={() => setEntryLimit(limit => Math.min(limit + 100, 500))}>Load more entries</button>}
+        {entries?.length === 500 && <p className="muted-note">Showing the latest 500 matching records. Narrow the date range to review older entries.</p>}
         {hasRecordData ? <div className="entry-list">{selectedEntries.map((entry) => <div className="entry-row" key={entry._id}><div className="entry-main"><span className="entry-icon">{entry.kind === "sale" ? <ArrowUpRight size={15} /> : <ArrowDownRight size={15} />}</span><div><div className="entry-description">{entry.note || entry.category}</div><div className="entry-meta">{fmtDate(entry.occurredOn)} · {entry.category} · {entry.account === "cash" ? "Cash" : "Mobile money"}</div></div></div><span className={`entry-amount ${entry.kind === "sale" ? "amount-positive" : "amount-negative"}`}>{entry.kind === "sale" ? "+" : "−"}{fmt(entry.amountUgx)}</span></div>)}</div> : <EmptyPanel message="No entries have been recorded." next="Use the form to save the first entry." />}
       </Card> : null}
     </div>

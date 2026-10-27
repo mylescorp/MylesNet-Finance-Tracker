@@ -1,7 +1,7 @@
 "use client";
 
 import { useMutation, useQuery } from "convex/react";
-import { useMemo, useState, type FormEvent } from "react";
+import { Children, cloneElement, isValidElement, useId, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { countries, getEmojiFlag } from "countries-list";
 import { currencies } from "countries-list/currencies";
 import timezoneData from "countries-and-timezones";
@@ -14,6 +14,7 @@ const monthNames = Array.from({ length: 12 }, (_, i) => new Intl.DateTimeFormat(
 export function SettingsWorkspace({ tab }: { tab: Tab }) {
   const overview = useQuery(api.settings.overview, {});
   if (overview === undefined) return <p className="muted-note" role="status">Loading workspace settings…</p>;
+  if (overview.access === "restricted") return <p className="muted-note">Workspace settings are visible to owners only. Ask an owner if you need to change these details.</p>;
   if (overview.access !== "ready") return <p className="muted-note">Your account needs workspace access before settings can be loaded.</p>;
   if (tab === "data") return <DataSettings />;
   if (tab === "access") return <AccessSettings />;
@@ -37,6 +38,7 @@ function EditableSettings({ tab, settings }: { tab: "general" | "finance" | "rul
     negativeBalanceWarning: settings.negativeBalanceWarning,
   });
   const [busy, setBusy] = useState(false);
+  const settingsVersion = useRef(settings.settingsUpdatedAt);
   const [feedback, setFeedback] = useState<{ message: string; error: boolean } | null>(null);
   const countryList = useMemo(() => Object.entries(countries).map(([code, country]) => ({ code, ...country })).sort((a, b) => a.name.localeCompare(b.name)), []);
   const currencyCodes = useMemo(() => Object.keys(currencies).filter(code => !currencies[code as keyof typeof currencies].withdrawn).sort(), []);
@@ -47,7 +49,7 @@ function EditableSettings({ tab, settings }: { tab: "general" | "finance" | "rul
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault(); setBusy(true); setFeedback(null);
-    try { await save(form); setFeedback({ message: `${thisTab} settings saved and added to the audit trail.`, error: false }); }
+    try { settingsVersion.current = await save({ ...form, expectedSettingsUpdatedAt: settingsVersion.current }); setFeedback({ message: `${thisTab} settings saved and added to the audit trail.`, error: false }); }
     catch (error) { setFeedback({ message: error instanceof Error ? error.message : "Could not save settings.", error: true }); }
     finally { setBusy(false); }
   }
@@ -82,7 +84,7 @@ function EditableSettings({ tab, settings }: { tab: "general" | "finance" | "rul
 }
 
 type SettingsOverview = Extract<NonNullable<ReturnType<typeof useQuery<typeof api.settings.overview>>>, { access: "ready" }>;
-function Field({ label, children }: { label: string; children: React.ReactNode }) { return <div className="field"><label>{label}</label>{children}</div>; }
+function Field({ label, children }: { label: string; children: ReactNode }) { const id = useId().replaceAll(":", ""); const childList = Children.toArray(children); const labelIndex = childList.findIndex(child => isValidElement(child) && typeof child.type === "string" && ["input", "select", "textarea"].includes(child.type)); return <div className="field"><label htmlFor={id}>{label}</label>{childList.map((child, index) => index === labelIndex && isValidElement(child) ? cloneElement(child as React.ReactElement<{ id?: string }>, { id }) : child)}</div>; }
 function NumberField({ label, value, currency, scale = 1, disabled, onChange }: { label: string; value: number; currency: string; scale?: number; disabled: boolean; onChange: (value: number) => void }) { return <Field label={`${label} (${currency})`}><input type="number" step={1 / scale} value={value} disabled={disabled} onChange={e => onChange(Number(e.target.value))} /></Field>; }
 function offsetLabel(zone: string) { try { return new Intl.DateTimeFormat("en", { timeZone: zone, timeZoneName: "shortOffset" }).formatToParts(new Date()).find(p => p.type === "timeZoneName")?.value ?? "UTC"; } catch { return "UTC"; } }
 function currencyName(code: string) { return currencies[code as keyof typeof currencies]?.name ?? code; }
@@ -94,7 +96,7 @@ function DataSettings() {
   function download() {
     if (!data || data.access !== "ready") return;
     const columns = ["date", "kind", "category", "account", "amount", "currency", "note", "source", "status", "created_at"] as const;
-    const quote = (value: string | number) => `"${String(value).replaceAll('"', '""')}"`;
+    const quote = (value: string | number) => { const text = String(value); const safe = "=+-@".includes(text.trimStart()[0] ?? "") ? "'" + text : text; return '"' + safe.replaceAll('"', '""') + '"'; };
     const csv = [columns.join(","), ...data.rows.map(r => [r.occurredOn, r.kind, r.category, r.account, r.amount.toFixed(data.currencyMinorDigits), r.currency, r.note, r.source, r.state, new Date(r.createdAt).toISOString()].map(quote).join(","))].join("\r\n");
     const url = URL.createObjectURL(new Blob(["\uFEFF", csv], { type: "text/csv;charset=utf-8" }));
     const anchor = document.createElement("a"); anchor.href = url; anchor.download = `mylesnet-cashbook-${new Date().toISOString().slice(0, 10)}.csv`; anchor.click(); URL.revokeObjectURL(url);

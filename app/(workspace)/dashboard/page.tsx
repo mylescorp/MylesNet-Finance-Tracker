@@ -62,15 +62,29 @@ export default function DashboardPage() {
       document.removeEventListener("visibilitychange", refreshBusinessDay);
     };
   }, [timezone]);
+  const customRangeError = useMemo(() => {
+    if (period !== "custom") return "";
+    const validDay = (value: string) => {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+      const parsed = new Date(value + "T00:00:00.000Z");
+      return Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
+    };
+    if (!validDay(customFrom) || !validDay(customTo)) return "Choose both valid dates.";
+    if (customFrom > customTo) return "The end date must be on or after the start date.";
+    if ((Date.parse(customTo + "T00:00:00.000Z") - Date.parse(customFrom + "T00:00:00.000Z")) / 86400000 + 1 > 370) return "Choose a period of 370 days or less.";
+    return "";
+  }, [period, customFrom, customTo]);
+  const customDatesValid = !customRangeError;
   const range = useMemo(() => {
     if (period === "custom") {
+      if (!customDatesValid) return periodRange("today", businessDay, weekStartsOn, fiscalStartMonth);
       const end = new Date(`${customTo}T00:00:00.000Z`);
       end.setUTCDate(end.getUTCDate() + 1);
       return { from: customFrom, toExclusive: end.toISOString().slice(0, 10) };
     }
     return periodRange(period, businessDay, weekStartsOn, fiscalStartMonth);
-  }, [period, businessDay, weekStartsOn, fiscalStartMonth, customFrom, customTo]);
-  const summary = useQuery(api.workspace.dashboardSummary, range);
+  }, [period, businessDay, weekStartsOn, fiscalStartMonth, customFrom, customTo, customDatesValid]);
+  const summary = useQuery(api.workspace.dashboardSummary, period !== "custom" || customDatesValid ? range : "skip");
   const todayRange = useMemo(() => periodRange("today", businessDay, weekStartsOn, fiscalStartMonth), [businessDay, weekStartsOn, fiscalStartMonth]);
   const todaySummary = useQuery(api.workspace.dashboardSummary, todayRange);
   const weekRange = useMemo(() => periodRange("week", businessDay, weekStartsOn, fiscalStartMonth), [businessDay, weekStartsOn, fiscalStartMonth]);
@@ -100,7 +114,7 @@ export default function DashboardPage() {
 
   return <>
     <WorkspaceTitle eyebrow="MylesNet · Finance" title="Dashboard" description="A clear view of your recorded business activity." action={<label className="period-control">Period <select value={period} onChange={(event) => setPeriod(event.target.value)} aria-label="Dashboard period"><option value="today">Today</option><option value="week">This week</option><option value="month">This month</option><option value="year">This year</option><option value="custom">Custom</option></select></label>} />
-    {period === "custom" && <div className="custom-period-row"><label>From <input type="date" value={customFrom} onChange={(event) => setCustomFrom(event.target.value)} /></label><label>To <input type="date" value={customTo} min={customFrom} onChange={(event) => setCustomTo(event.target.value)} /></label></div>}
+    {period === "custom" && <div className="custom-period-row"><label>From <input type="date" value={customFrom} onChange={(event) => setCustomFrom(event.target.value)} /></label><label>To <input type="date" value={customTo} min={customFrom || undefined} onChange={(event) => setCustomTo(event.target.value)} /></label>{customRangeError && <span className="form-feedback form-error" role="alert">{customRangeError}</span>}</div>}
     <div className="dashboard-banner"><Image src="/brand/banner.png" alt="MylesNet Finance Tracker" fill priority sizes="(max-width: 760px) 100vw, 1100px" /><div className="banner-caption">Your business, clearly in view.</div></div>
     <div className="board-toolbar no-print">
       <span className="status-chip status-live">Live · Convex data</span>

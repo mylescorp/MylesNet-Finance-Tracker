@@ -11,7 +11,11 @@ export default function SignInPage() {
   const [error, setError] = useState("");
   async function startGoogleSignIn() {
     setPending(true); setError("");
-    try { await signIn("google", { redirectTo: "/dashboard" }); }
+    try {
+      const requested = new URLSearchParams(window.location.search).get("redirectTo") ?? "/dashboard";
+      const redirectTo = requested.startsWith("/") && !requested.startsWith("//") ? requested : "/dashboard";
+      await signIn("google", { redirectTo });
+    }
     catch { setError("Google sign-in could not start. Please try again."); setPending(false); }
   }
   return <main className="signin-frame">

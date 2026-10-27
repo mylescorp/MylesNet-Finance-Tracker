@@ -335,7 +335,7 @@ export const dashboardSummary = query({
 });
 
 export const recentEntries = query({
-  args: { limit: v.optional(v.number()) },
+  args: { limit: v.optional(v.number()), kind: v.optional(v.union(v.literal("sale"), v.literal("expense"))), from: v.optional(v.string()), toExclusive: v.optional(v.string()) },
   returns: v.array(
     v.object({
       _id: v.id("entries"),
@@ -352,14 +352,19 @@ export const recentEntries = query({
     const current = await getMembership(ctx);
     if (!current) return [];
     if (current.membership.role === "partner") return [];
-    const limit = Math.max(1, Math.min(Math.floor(args.limit ?? 10), 50));
-    const rows = await ctx.db
-      .query("entries")
-      .withIndex("by_business_and_date", (q) =>
-        q.eq("businessId", current.business._id),
-      )
-      .order("desc")
-      .take(limit);
+    const limit = Math.max(1, Math.min(Math.floor(args.limit ?? 10), 500));
+    if ((args.from && !isIsoDay(args.from)) || (args.toExclusive && !isIsoDay(args.toExclusive)) || (args.from && args.toExclusive && args.from >= args.toExclusive)) throw new Error("Choose a valid entry date range.");
+    const rows = args.kind
+      ? await ctx.db.query("entries").withIndex("by_business_and_kind_and_date", q =>
+        args.from && args.toExclusive ? q.eq("businessId", current.business._id).eq("kind", args.kind!).gte("occurredOn", args.from).lt("occurredOn", args.toExclusive)
+          : args.from ? q.eq("businessId", current.business._id).eq("kind", args.kind!).gte("occurredOn", args.from)
+          : args.toExclusive ? q.eq("businessId", current.business._id).eq("kind", args.kind!).lt("occurredOn", args.toExclusive)
+          : q.eq("businessId", current.business._id).eq("kind", args.kind!)).order("desc").take(limit)
+      : await ctx.db.query("entries").withIndex("by_business_and_date", q =>
+        args.from && args.toExclusive ? q.eq("businessId", current.business._id).gte("occurredOn", args.from).lt("occurredOn", args.toExclusive)
+          : args.from ? q.eq("businessId", current.business._id).gte("occurredOn", args.from)
+          : args.toExclusive ? q.eq("businessId", current.business._id).lt("occurredOn", args.toExclusive)
+          : q.eq("businessId", current.business._id)).order("desc").take(limit);
     return rows.map(({ _id, kind, amountUgx, occurredOn, account, category, note, state }) => ({
       _id,
       kind,
