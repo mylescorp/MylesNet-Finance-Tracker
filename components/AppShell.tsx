@@ -51,6 +51,10 @@ export function AppShell({ children }: { children: ReactNode }) {
   const menuButtonRef = useRef<HTMLButtonElement>(null);
   const sidebarCloseRef = useRef<HTMLButtonElement>(null);
   const accountLabel = access?.access === "ready" ? access.businessName : "My account";
+  const financeApprover = access?.access === "ready" && access.role === "finance_approver";
+  const visibleNavGroups = financeApprover
+    ? navGroups.map(group => ({ ...group, items: group.items.filter(item => item.href === "/partners") })).filter(group => group.items.length > 0)
+    : navGroups;
   const activePage = navGroups.flatMap(group => group.items).find(item => pathname === item.href || pathname.startsWith(`${item.href}/`));
   const settingsPageLabels: Record<string, string> = {
     general: "General settings", finance: "Finance settings", rules: "Rules",
@@ -112,7 +116,7 @@ export function AppShell({ children }: { children: ReactNode }) {
           <ChevronDown className="sidebar-workspace-chevron" size={15} aria-hidden="true" />
         </div>
         <nav className="sidebar-nav" aria-label="Main navigation">
-          {navGroups.map(group => <section className="sidebar-nav-group" key={group.label} aria-label={group.label}>
+          {visibleNavGroups.map(group => <section className="sidebar-nav-group" key={group.label} aria-label={group.label}>
             <h2 className="sidebar-group-label">{group.label}</h2>
             {group.items.map(item => {
               const Icon = item.icon;
@@ -136,9 +140,9 @@ export function AppShell({ children }: { children: ReactNode }) {
         </button>
         <div className="topbar-page-context"><span>MYLESNET</span><strong>{routePageLabel}</strong></div>
         <div className="header-actions">
-          <GlobalSearch />
+          {!financeApprover && <GlobalSearch />}
           <ThemeControl />
-          <Link className="utility-link" href="/issues" aria-label="Needs attention"><Bell size={17} /><span>Needs attention</span></Link>
+          {!financeApprover && <Link className="utility-link" href="/issues" aria-label="Needs attention"><Bell size={17} /><span>Needs attention</span></Link>}
           <button className="user-menu" type="button" aria-label="Open your account" title="Manage your account" onClick={() => { setAccountReturnTo(pathname); router.push("/account"); }}>
             <ProfileAvatar imageUrl={profile?.photoUrl} name={profile?.displayName || accountLabel} />
             <span className="user-menu-label">{profile?.displayName || accountLabel}</span>
