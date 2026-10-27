@@ -50,6 +50,13 @@ async function historicalPartnerCapital(ctx: Ctx, businessId: Id<"businesses">, 
   return { total, complete: rows.length < 5000 };
 }
 
+async function ownershipAtDay(ctx: Ctx, businessId: Id<"businesses">, partner: { _id: Id<"partners">; ownershipBps: number }, day: string) {
+  const record = await ctx.db.query("partnerOwnershipHistory")
+    .withIndex("by_business_and_partner_and_effectiveOn", q => q.eq("businessId", businessId).eq("partnerId", partner._id).lte("effectiveOn", day))
+    .order("desc").first();
+  return record?.ownershipBps ?? partner.ownershipBps;
+}
+
 async function checkOutflow(ctx: MutationCtx, businessId: Id<"businesses">, account: Account, delta: number, confirmed: boolean) {
   const current = await accountBalance(ctx, businessId, account);
   if ((current?.balanceUgx ?? 0) + delta >= 0 || confirmed) return;
@@ -510,10 +517,23 @@ export const createPartner = mutation({
     const partners = await ctx.db.query("partners").withIndex("by_business_and_active", q => q.eq("businessId", current.business._id).eq("active", true)).take(101);
     if (partners.length >= 100) throw new Error("This version supports up to 100 active partner records in a workspace. Review ownership records before reaching this limit.");
     if (partners.some(row => row.name.toLowerCase() === name.toLowerCase())) throw new Error("A partner with this name already exists.");
-    if (partners.reduce((sum, row) => safeAdd(sum, row.ownershipBps, "Ownership"), args.ownershipBps) > 10_000) throw new Error("Active partner ownership cannot exceed 100%.");
+    const today = dayInZone(Date.now(), current.business.timezone);
+    const currentShares = await Promise.all(partners.map(partner => ownershipAtDay(ctx, current.business._id, partner, today)));
+    if (currentShares.reduce((sum, share) => safeAdd(sum, share, "Ownership"), args.ownershipBps) > 10_000) throw new Error("Active partner ownership cannot exceed 100% on today's effective shares.");
+    const scheduledHistory = await ctx.db.query("partnerOwnershipHistory")
+      .withIndex("by_business_and_effectiveOn", q => q.eq("businessId", current.business._id).gt("effectiveOn", today))
+      .take(5001);
+    if (scheduledHistory.length > 5000) throw new Error("There are too many scheduled ownership changes to safely add a partner. Ask an owner to review the schedule first.");
+    const scheduledDays = [...new Set(scheduledHistory.map(row => row.effectiveOn))];
+    if (scheduledDays.length > 20) throw new Error("There are too many future ownership dates to safely add a partner. Let scheduled changes take effect or ask an owner to review the schedule first.");
+    for (const day of scheduledDays) {
+      const scheduledShares = await Promise.all(partners.map(partner => ownershipAtDay(ctx, current.business._id, partner, day)));
+      const scheduledTotal = scheduledShares.reduce((sum, share) => safeAdd(sum, share, "Scheduled ownership"), args.ownershipBps);
+      if (scheduledTotal > 10_000) throw new Error(`Adding this partner would make ownership exceed 100% after the change scheduled for ${day}. Revise that snapshot before adding the partner.`);
+    }
     const now = Date.now();
     const partnerId = await ctx.db.insert("partners", { businessId: current.business._id, name, ownershipBps: args.ownershipBps, capitalContributedUgx: 0, active: true, idempotencyKey: args.idempotencyKey });
-    await ctx.db.insert("partnerOwnershipHistory", { businessId: current.business._id, partnerId, ownershipBps: args.ownershipBps, effectiveOn: dayInZone(now, current.business.timezone), createdBy: current.userId, createdAt: now, idempotencyKey: `${args.idempotencyKey}:ownership` });
+    await ctx.db.insert("partnerOwnershipHistory", { businessId: current.business._id, partnerId, ownershipBps: args.ownershipBps, effectiveOn: today, createdBy: current.userId, createdAt: now, idempotencyKey: `${args.idempotencyKey}:ownership` });
     await audit(ctx, current, "partner.created", "partner", partnerId, `${name} added with ${args.ownershipBps / 100}% ownership.`);
     return partnerId;
   },
