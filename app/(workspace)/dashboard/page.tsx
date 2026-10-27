@@ -64,14 +64,14 @@ export default function DashboardPage() {
   }, [timezone]);
   const customRangeError = useMemo(() => {
     if (period !== "custom") return "";
-    const validDay = (value: string) => {
+    const isIsoDay = (value: string) => {
       if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
-      const parsed = new Date(value + "T00:00:00.000Z");
+      const parsed = new Date(`${value}T00:00:00.000Z`);
       return Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
     };
-    if (!validDay(customFrom) || !validDay(customTo)) return "Choose both valid dates.";
+    if (!isIsoDay(customFrom) || !isIsoDay(customTo)) return "Choose both valid dates.";
     if (customFrom > customTo) return "The end date must be on or after the start date.";
-    if ((Date.parse(customTo + "T00:00:00.000Z") - Date.parse(customFrom + "T00:00:00.000Z")) / 86400000 + 1 > 370) return "Choose a period of 370 days or less.";
+    if ((Date.parse(`${customTo}T00:00:00.000Z`) - Date.parse(`${customFrom}T00:00:00.000Z`)) / 86400000 + 1 > 370) return "Choose a period of 370 days or less.";
     return "";
   }, [period, customFrom, customTo]);
   const customDatesValid = !customRangeError;
@@ -158,7 +158,7 @@ export default function DashboardPage() {
     </div>
     <div className="dashboard-insight-grid">
       <Card><div className="card-heading"><div><h2 className="card-title">Cash flow this period</h2><p className="card-subtitle">Sales, expenses, and net from saved entries.</p></div></div><FlowRow label="Sales" value={readySummary?.salesUgx ?? 0} max={Math.max(1, readySummary?.salesUgx ?? 0, readySummary?.expensesUgx ?? 0)} tone="sales" currency={currency} scale={currencyScale} locale={locale} /><FlowRow label="Expenses" value={readySummary?.expensesUgx ?? 0} max={Math.max(1, readySummary?.salesUgx ?? 0, readySummary?.expensesUgx ?? 0)} tone="expenses" currency={currency} scale={currencyScale} locale={locale} /><FlowRow label="Net" value={readySummary?.netUgx ?? 0} max={Math.max(1, readySummary?.salesUgx ?? 0, readySummary?.expensesUgx ?? 0)} tone="net" currency={currency} scale={currencyScale} locale={locale} /></Card>
-      <Card><div className="card-heading"><div><h2 className="card-title">Account balances</h2><p className="card-subtitle">Balances reflect entries recorded in this workspace.</p></div></div><div className="balance-detail"><span>Cash on hand</span><strong>{isReady ? `${formatMoney(readySummary?.cashBalanceUgx ?? 0)} {currency}` : "—"}</strong></div><div className="balance-detail"><span>Mobile money</span><strong>{isReady ? `${formatMoney(readySummary?.mobileMoneyBalanceUgx ?? 0)} {currency}` : "—"}</strong></div><p className="muted-note">Add opening balances in Finance settings before using these as a full business position.</p></Card>
+      <Card><div className="card-heading"><div><h2 className="card-title">Account balances</h2><p className="card-subtitle">Balances reflect entries recorded in this workspace.</p></div></div><div className="balance-detail"><span>Cash on hand</span><strong>{isReady ? `${formatMoney(readySummary?.cashBalanceUgx ?? 0)} ${currency}` : "—"}</strong></div><div className="balance-detail"><span>Mobile money</span><strong>{isReady ? `${formatMoney(readySummary?.mobileMoneyBalanceUgx ?? 0)} ${currency}` : "—"}</strong></div><p className="muted-note">Add opening balances in Finance settings before using these as a full business position.</p></Card>
       <Card><div className="card-heading"><div><h2 className="card-title">Data health</h2><p className="card-subtitle">Coverage follows configured finance workflows.</p></div></div><div className="health-row"><span>Sales and expenses</span><span className="status-chip status-ok">Live</span></div><div className="health-row"><span>Recurring bills</span><span className="status-chip status-warning">Setup needed</span></div><div className="health-row"><span>Opening balance</span><span className="status-chip status-warning">Review</span></div><Link className="text-link" href="/reconcile">Review reconciliation →</Link></Card>
     </div>
   </>;
