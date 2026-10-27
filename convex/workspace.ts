@@ -254,7 +254,11 @@ export const balanceAdjustments = query({
   handler: async (ctx, args) => {
     const current = await getMembership(ctx);
     if (!current || current.membership.role !== "owner") throw new Error("Only workspace owners can view balance adjustment history.");
-    return await ctx.db.query("balanceAdjustments").withIndex("by_business_and_created_at", q => q.eq("businessId", current.business._id)).order("desc").paginate(args.paginationOpts);
+    const result = await ctx.db.query("balanceAdjustments").withIndex("by_business_and_created_at", q => q.eq("businessId", current.business._id)).order("desc").paginate(args.paginationOpts);
+    return {
+      ...result,
+      page: result.page.map(({ _id, account, countedBalanceUgx, deltaUgx, occurredOn, note, state, voidReason }) => ({ _id, account, countedBalanceUgx, deltaUgx, occurredOn, note, state, voidReason })),
+    };
   },
 });
 
