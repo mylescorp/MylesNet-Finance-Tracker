@@ -28,7 +28,8 @@ export default defineSchema({
     createdAt: v.number(),
   })
     .index("by_user", ["userId"])
-    .index("by_business_and_user", ["businessId", "userId"]),
+    .index("by_business_and_user", ["businessId", "userId"])
+    .index("by_business_and_partner_and_active", ["businessId", "partnerId", "active"]),
   invitations: defineTable({
     email: v.string(),
     role,
@@ -42,6 +43,7 @@ export default defineSchema({
   })
     .index("by_email", ["email"])
     .index("by_business_and_active", ["businessId", "active"])
+    .index("by_business_and_partner_and_active", ["businessId", "partnerId", "active"])
     .index("by_token_hash", ["tokenHash"]),
   workspacePreferences: defineTable({
     businessId: v.id("businesses"),

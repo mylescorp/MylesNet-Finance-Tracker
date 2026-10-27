@@ -47,7 +47,7 @@ async function hasCurrencySensitiveData(ctx: MutationCtx, businessId: Id<"busine
   return checks.some(Boolean);
 }
 
-async function hasPostedLedgerActivity(ctx: MutationCtx, businessId: Id<"businesses">) {
+async function hasPostedLedgerActivity(ctx: QueryCtx | MutationCtx, businessId: Id<"businesses">) {
   const checks = await Promise.all([
     ctx.db.query("entries").withIndex("by_business_and_date", q => q.eq("businessId", businessId)).first(),
     ctx.db.query("operationalRecords").withIndex("by_business_and_kind_and_date", q => q.eq("businessId", businessId)).first(),
@@ -86,7 +86,9 @@ export const overview = query({
     if (current.membership.role === "partner") return { access: "restricted" as const, role: "partner" as const };
     const prefs = await ctx.db.query("workspacePreferences").withIndex("by_business", q => q.eq("businessId", current.business._id)).unique();
     const firstEntry = await ctx.db.query("entries").withIndex("by_business_and_date", q => q.eq("businessId", current.business._id)).first();
+    const firstOperationalRecord = await ctx.db.query("operationalRecords").withIndex("by_business_and_kind_and_date", q => q.eq("businessId", current.business._id)).first();
     const balances = await ctx.db.query("accountBalances").withIndex("by_business_and_account", q => q.eq("businessId", current.business._id)).take(2);
+    const openingBalancesLocked = await hasPostedLedgerActivity(ctx, current.business._id);
     const fallback = defaults();
     const digits = currencyMinorDigits(current.business.currency);
     const scale = 10 ** digits;
@@ -98,7 +100,8 @@ export const overview = query({
       currency: current.business.currency,
       currencyMinorDigits: digits,
       settingsUpdatedAt: prefs?.updatedAt ?? current.business.createdAt,
-      currencyLocked: Boolean(firstEntry || balances.some(b => (b.openingBalanceUgx ?? 0) !== 0)),
+      currencyLocked: Boolean(firstEntry || firstOperationalRecord || balances.some(b => (b.openingBalanceUgx ?? 0) !== 0)),
+      openingBalancesLocked,
       cashOpeningBalance: (balances.find(b => b.account === "cash")?.openingBalanceUgx ?? 0) / scale,
       mobileOpeningBalance: (balances.find(b => b.account === "mobile_money")?.openingBalanceUgx ?? 0) / scale,
       timezone: current.business.timezone,
@@ -318,10 +321,10 @@ export const invite = mutation({
       if (!args.partnerId) throw new Error("Choose the partner account this Google sign-in will represent.");
       const partner = await ctx.db.get("partners", args.partnerId);
       if (!partner || partner.businessId !== current.business._id || !partner.active) throw new Error("Choose an active partner from this workspace.");
-      const memberships = await ctx.db.query("memberships").withIndex("by_business_and_user", q => q.eq("businessId", current.business._id)).take(100);
-      if (memberships.some(member => member.active && member.partnerId === args.partnerId)) throw new Error("This partner already has an active login.");
-      const existingInvite = await ctx.db.query("invitations").withIndex("by_business_and_active", q => q.eq("businessId", current.business._id).eq("active", true)).take(100);
-      if (existingInvite.some(invitation => invitation.role === "partner" && invitation.partnerId === args.partnerId)) throw new Error("This partner already has a pending invitation.");
+      const linkedMember = await ctx.db.query("memberships").withIndex("by_business_and_partner_and_active", q => q.eq("businessId", current.business._id).eq("partnerId", args.partnerId).eq("active", true)).first();
+      if (linkedMember) throw new Error("This partner already has an active login.");
+      const existingInvite = await ctx.db.query("invitations").withIndex("by_business_and_partner_and_active", q => q.eq("businessId", current.business._id).eq("partnerId", args.partnerId).eq("active", true)).first();
+      if (existingInvite) throw new Error("This partner already has a pending invitation.");
     } else if (args.partnerId) throw new Error("Only partner invitations can be linked to a partner record.");
     const pending = await ctx.db.query("invitations").withIndex("by_business_and_active", q => q.eq("businessId", current.business._id).eq("active", true)).take(100);
     if (pending.some(i => i.email.toLowerCase() === email)) throw new Error("An active invitation already exists for this email.");
@@ -357,13 +360,15 @@ export const updateMember = mutation({
     if (member.role === "owner" || args.role === "owner") throw new Error("Owner access cannot be changed here. Use the verified ownership transfer process.");
     if (member.userId === current.userId && !args.active) throw new Error("You cannot deactivate your own account.");
     let partnerId: Id<"partners"> | undefined;
-    if (args.role === "partner") {
+    if (args.role === "partner" && args.active) {
       if (!args.partnerId) throw new Error("Choose the partner account this member will represent.");
       const partner = await ctx.db.get("partners", args.partnerId);
       if (!partner || partner.businessId !== current.business._id || !partner.active) throw new Error("Choose an active partner from this workspace.");
-      const memberships = await ctx.db.query("memberships").withIndex("by_business_and_user", q => q.eq("businessId", current.business._id)).take(100);
-      if (memberships.some(other => other._id !== member._id && other.active && other.partnerId === args.partnerId)) throw new Error("This partner already has an active login.");
+      const linkedMembers = await ctx.db.query("memberships").withIndex("by_business_and_partner_and_active", q => q.eq("businessId", current.business._id).eq("partnerId", args.partnerId).eq("active", true)).take(2);
+      if (linkedMembers.some(other => other._id !== member._id)) throw new Error("This partner already has an active login.");
       partnerId = args.partnerId;
+    } else if (args.role === "partner") {
+      partnerId = args.partnerId ?? member.partnerId;
     } else if (args.partnerId) throw new Error("Only partner accounts can be linked to a partner record.");
     await ctx.db.patch("memberships", args.membershipId, { role: args.role, partnerId, active: args.active });
     await ctx.db.insert("auditEvents", { businessId: current.business._id, actorId: current.userId, action: "member.access.updated", entityType: "membership", entityId: args.membershipId, occurredAt: Date.now(), summary: `Changed a member to ${args.role}${partnerId ? ` linked to ${partnerId}` : ""} (${args.active ? "active" : "inactive"}).` });
@@ -396,8 +401,8 @@ export const acceptInvite = mutation({
       throw new Error("This account already has an active workspace. Sign in with another account or ask the current workspace owner to deactivate your access first.");
     }
     if (invite.partnerId) {
-      const memberships = await ctx.db.query("memberships").withIndex("by_business_and_user", q => q.eq("businessId", invite.businessId)).take(100);
-      if (memberships.some(membership => membership.active && membership.partnerId === invite.partnerId && membership.userId !== userId)) throw new Error("This partner account is already linked. Ask the workspace owner to review access.");
+      const linkedMember = await ctx.db.query("memberships").withIndex("by_business_and_partner_and_active", q => q.eq("businessId", invite.businessId).eq("partnerId", invite.partnerId).eq("active", true)).first();
+      if (linkedMember && linkedMember.userId !== userId) throw new Error("This partner account is already linked. Ask the workspace owner to review access.");
     }
     if (existing) await ctx.db.patch("memberships", existing._id, { active: true, role: invite.role, partnerId: invite.partnerId });
     else await ctx.db.insert("memberships", { businessId: invite.businessId, userId, role: invite.role, partnerId: invite.partnerId, active: true, createdAt: Date.now() });

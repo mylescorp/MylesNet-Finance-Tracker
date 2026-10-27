@@ -164,10 +164,16 @@ export const partnerStatement = query({
     const legacyCapital = partner.capitalContributedUgx === undefined
       ? await historicalPartnerCapital(ctx, current.business._id, partner._id)
       : { total: partner.capitalContributedUgx, complete: true };
+    const preferences = await ctx.db.query("workspacePreferences").withIndex("by_business", q => q.eq("businessId", current.business._id)).unique();
+    const currencyMinorDigits = new Intl.NumberFormat("en", { style: "currency", currency: current.business.currency }).resolvedOptions().maximumFractionDigits;
     return {
       access: "ready" as const,
       partner: partner.name,
       ownershipBps: partner.ownershipBps,
+      currency: current.business.currency,
+      currencyMinorDigits,
+      locale: preferences?.locale ?? "en-UG",
+      dateFormat: preferences?.dateFormat ?? "DD/MM/YYYY",
       capitalContributedUgx: legacyCapital.total,
       capitalTotalComplete: legacyCapital.complete,
       contributions: contributions.filter(row => row.kind === "capital_contribution" && row.state === "posted").map(row => ({
