@@ -627,6 +627,9 @@ export const voidEntry = mutation({
     if (!entry || entry.businessId !== current.business._id) {
       throw new Error("Entry not found.");
     }
+    if (entry.operationSource) {
+      throw new Error("This expense was posted by a bill payment, loan repayment, or movement fee. It cannot be voided alone because its related account and schedule history would become inconsistent. A linked operational reversal workflow is required.");
+    }
     if (entry.state === "void") return null;
     const reason = args.reason.trim();
     if (reason.length < 3 || reason.length > 300) {
