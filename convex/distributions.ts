@@ -84,7 +84,7 @@ function allocation(amount: number, partners: { id: Id<"partners">; name: string
 export const setOwnership = mutation({
   args: {
     effectiveOn: v.string(),
-    changes: v.array(v.object({ partnerId: v.id("partners"), ownershipBps: v.number() })),
+    changes: v.array(v.object({ partnerId: v.id("partners"), ownershipBps: v.number(), legacyEffectiveOn: v.optional(v.string()) })),
     idempotencyKey: v.string(),
   },
   returns: v.null(),
@@ -107,14 +107,11 @@ export const setOwnership = mutation({
     for (const partner of partners) {
       const history = await ctx.db.query("partnerOwnershipHistory").withIndex("by_business_and_partner_and_effectiveOn", q => q.eq("businessId", current.business._id).eq("partnerId", partner._id)).first();
       if (!history) {
-        // Existing partner rows predate ownership history. Use their earliest
-        // recorded movement as evidence they existed; if none exists, retain
-        // the legacy share from workspace creation so historical snapshots do
-        // not make an established partner disappear before this first edit.
-        const firstRecordedMovement = await ctx.db.query("movements")
-          .withIndex("by_business_and_partner_and_date", q => q.eq("businessId", current.business._id).eq("partnerId", partner._id))
-          .order("asc").first();
-        const legacyStart = firstRecordedMovement?.occurredOn ?? dayAt(current.business.createdAt, current.business.timezone);
+        // Legacy partner rows have no creation date. The owner must attest the
+        // historical start date for the current share instead of silently
+        // inferring it from a later capital movement or workspace creation.
+        const legacyStart = args.changes.find(row => row.partnerId === partner._id)?.legacyEffectiveOn;
+        if (!legacyStart || !validDay(legacyStart) || legacyStart > today || legacyStart >= args.effectiveOn) throw new Error(`Confirm when ${partner.name}'s current ownership share began before the new share takes effect.`);
         await ctx.db.insert("partnerOwnershipHistory", { businessId: current.business._id, partnerId: partner._id, ownershipBps: partner.ownershipBps, effectiveOn: legacyStart, createdBy: current.userId, createdAt: now, idempotencyKey: `${args.idempotencyKey}:baseline:${partner._id}` });
       }
       const ownershipBps = byId.get(partner._id)!;
@@ -294,6 +291,14 @@ export const overview = query({
     if (!current || (current.membership.role !== "owner" && current.membership.role !== "finance_approver")) return { access: "restricted" as const };
     if (args.paginationOpts.numItems > 20) throw new Error("Distribution history pages are limited to 20 records.");
     const page = await ctx.db.query("partnerDistributions").withIndex("by_business_and_period_start", q => q.eq("businessId", current.business._id)).order("desc").paginate(args.paginationOpts);
+    const activePartners = await ctx.db.query("partners").withIndex("by_business_and_active", q => q.eq("businessId", current.business._id).eq("active", true)).take(101);
+    const ownershipBaselines = await Promise.all(activePartners.map(async partner => {
+      const [history, movement] = await Promise.all([
+        ctx.db.query("partnerOwnershipHistory").withIndex("by_business_and_partner_and_effectiveOn", q => q.eq("businessId", current.business._id).eq("partnerId", partner._id)).first(),
+        ctx.db.query("movements").withIndex("by_business_and_partner_and_date", q => q.eq("businessId", current.business._id).eq("partnerId", partner._id)).order("asc").first(),
+      ]);
+      return history ? null : { partnerId: partner._id, suggestedEffectiveOn: movement?.occurredOn ?? dayAt(current.business.createdAt, current.business.timezone) };
+    }));
     const distributions = await Promise.all(page.page.map(async row => {
       const [items, author] = await Promise.all([
         ctx.db.query("partnerDistributionItems").withIndex("by_business_and_distribution", q => q.eq("businessId", current.business._id).eq("distributionId", row._id)).take(101),
@@ -302,7 +307,7 @@ export const overview = query({
       return { ...row, preparedBy: author?.email ?? "Workspace owner", canDecide: row.createdBy !== current.userId && (current.membership.role === "owner" || current.membership.role === "finance_approver"), items };
     }));
     const activeApprovers = await ctx.db.query("memberships").withIndex("by_business_and_user", q => q.eq("businessId", current.business._id)).take(100);
-    return { access: "ready" as const, role: current.membership.role, distributions, continueCursor: page.continueCursor, isDone: page.isDone, hasFinanceApprover: activeApprovers.some(row => row.active && row.role === "finance_approver"), currency: current.business.currency };
+    return { access: "ready" as const, role: current.membership.role, distributions, continueCursor: page.continueCursor, isDone: page.isDone, hasFinanceApprover: activeApprovers.some(row => row.active && row.role === "finance_approver"), ownershipBaselines: ownershipBaselines.filter((row): row is NonNullable<typeof row> => row !== null), currency: current.business.currency };
   },
 });
 
