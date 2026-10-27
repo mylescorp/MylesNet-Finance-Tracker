@@ -9,7 +9,11 @@
  */
 
 import type * as auth from "../auth.js";
+import type * as centipid from "../centipid.js";
+import type * as centipidHttp from "../centipidHttp.js";
+import type * as centipidUtils from "../centipidUtils.js";
 import type * as http from "../http.js";
+import type * as imports from "../imports.js";
 import type * as operations from "../operations.js";
 import type * as settings from "../settings.js";
 import type * as users from "../users.js";
@@ -23,7 +27,11 @@ import type {
 
 declare const fullApi: ApiFromModules<{
   auth: typeof auth;
+  centipid: typeof centipid;
+  centipidHttp: typeof centipidHttp;
+  centipidUtils: typeof centipidUtils;
   http: typeof http;
+  imports: typeof imports;
   operations: typeof operations;
   settings: typeof settings;
   users: typeof users;
