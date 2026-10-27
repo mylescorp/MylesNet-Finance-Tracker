@@ -261,7 +261,7 @@ export function BoardRoute({ route }: { route: string }) {
   const range = useMemo(() => rangeFor(period, today, weekStartsOn, fiscalStartMonth), [period, today, weekStartsOn, fiscalStartMonth]);
   const rangeLastDay = new Date(`${range.toExclusive}T00:00:00.000Z`); rangeLastDay.setUTCDate(rangeLastDay.getUTCDate() - 1);
   const needsSummary = screen?.entryKind !== undefined || ["Analytics", "Daily Report", "Monthly P&L", "Movements"].includes(screen?.title ?? "");
-  const needsYearSummary = screen?.title === "Analytics" || screen?.title === "Monthly P&L";
+  const needsYearSummary = screen?.title === "Monthly P&L";
   const needsDailyHistory = screen?.title === "Daily Report";
   const summary = useQuery(api.workspace.dashboardSummary, needsSummary ? range : "skip");
   const entryKind = screen?.title === "Sales" ? "sale" : screen?.title === "Expenses" ? "expense" : undefined;
@@ -305,6 +305,7 @@ export function BoardRoute({ route }: { route: string }) {
   };
   const selectedEntries = entries?.filter((entry) => entry.state === "posted");
   const hasRecordData = selectedEntries && selectedEntries.length > 0;
+  const hasAnalyticsActivity = stats?.days.some((day) => day.salesUgx > 0 || day.expensesUgx > 0) ?? false;
 
   async function shareReport() {
     try {
@@ -354,7 +355,16 @@ export function BoardRoute({ route }: { route: string }) {
           : section.kind === "table" && screen.title === "Monthly P&L" ? <MonthlyPnlTable days={yearDays} loading={yearSummary === undefined} locale={locale} formatMoney={fmt} />
           : section.kind === "chart" ? <ChartPanel summary={stats} title={section.title} message={section.detail} currency={currency} scale={currencyScale} locale={locale} />
           : section.kind === "workflow" ? <WorkflowPanel screen={screen} section={section.title} currency={currency} scale={currencyScale} businessDay={today} />
-            : <EmptyPanel message={hasRecordData ? "Live records are available for the selected period." : "No records yet."} next={section.detail} />}
+            : <EmptyPanel
+              message={screen.title === "Analytics"
+                ? hasAnalyticsActivity
+                  ? "Recorded activity is reflected in the metrics and charts above."
+                  : "No saved activity exists in the selected period."
+                : hasRecordData
+                  ? "Live records are available for the selected period."
+                  : "No records yet."}
+              next={section.detail}
+            />}
       </Card>)}
       {screen.title === "Sales" || screen.title === "Expenses" ? <Card className="board-section-card">
         <div className="card-heading"><div><h2 className="card-title">Recent cashbook entries</h2><p className="card-subtitle">Latest saved records in this workspace.</p></div></div>
