@@ -3,7 +3,6 @@ import type { ReactNode } from "react";
 import { Geist, Geist_Mono, Instrument_Serif } from "next/font/google";
 import { ConvexAuthNextjsServerProvider } from "@convex-dev/auth/nextjs/server";
 import PwaBootstrap from "@/components/PwaBootstrap";
-import PwaAuthStateReporter from "@/components/PwaAuthStateReporter";
 import { pwaBrand } from "@/lib/pwa-brand";
 import "./globals.css";
 
@@ -31,5 +30,5 @@ export const viewport: Viewport = {
 };
 
 export default function RootLayout({ children }: Readonly<{ children: ReactNode }>) {
-  return <ConvexAuthNextjsServerProvider><html lang="en"><body className={`${geist.variable} ${geistMono.variable} ${instrument.variable}`}><PwaBootstrap brandName={pwaBrand.shortName} /><PwaAuthStateReporter />{children}</body></html></ConvexAuthNextjsServerProvider>;
+  return <ConvexAuthNextjsServerProvider><html lang="en"><body className={`${geist.variable} ${geistMono.variable} ${instrument.variable}`}><PwaBootstrap brandName={pwaBrand.shortName} />{children}</body></html></ConvexAuthNextjsServerProvider>;
 }

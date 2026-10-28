@@ -42,7 +42,8 @@ self.addEventListener("activate", (event) => {
 });
 
 self.addEventListener("message", (event) => {
-  if (event.data?.type === "PWA_AUTH_STATE" && typeof event.data.authenticated === "boolean") {
+  if (event.data?.type === "PWA_AUTH_STATE" &&
+      (typeof event.data.authenticated === "boolean" || event.data.authenticated === null)) {
     authenticatedState = event.data.authenticated;
   }
 });
@@ -72,6 +73,29 @@ function isCacheableAssetResponse(response) {
   return !/private|no-store/i.test(cacheControl);
 }
 
+async function recoverAuthenticatedState() {
+  const pageClients = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+  if (pageClients.length === 0) return null;
+
+  const reports = await Promise.all(pageClients.map((client) => new Promise((resolve) => {
+    const channel = new MessageChannel();
+    const timeout = setTimeout(() => {
+      channel.port1.close();
+      resolve(null);
+    }, 750);
+    channel.port1.onmessage = (event) => {
+      clearTimeout(timeout);
+      channel.port1.close();
+      resolve(typeof event.data?.authenticated === "boolean" ? event.data.authenticated : null);
+    };
+    client.postMessage({ type: "PWA_AUTH_STATE_REQUEST" }, [channel.port2]);
+  })));
+
+  if (reports.some((authenticated) => authenticated === true)) return true;
+  if (reports.some((authenticated) => authenticated === false)) return false;
+  return null;
+}
+
 self.addEventListener("fetch", (event) => {
   const request = event.request;
   const url = new URL(request.url);
@@ -86,7 +110,30 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  if (!isStaticAsset(url) || authenticatedState !== false) return;
+  if (!isStaticAsset(url)) return;
+
+  if (authenticatedState === null) {
+    let revalidation = Promise.resolve();
+    const responsePromise = (async () => {
+      authenticatedState = await recoverAuthenticatedState();
+      if (authenticatedState !== false) return fetch(request);
+
+      revalidation = fetch(request).then(async (response) => {
+        if (isCacheableAssetResponse(response)) {
+          const cache = await caches.open(STATIC_CACHE);
+          await cache.put(request, response.clone());
+        }
+        return response;
+      });
+      const cachedResponse = await caches.match(request, { cacheName: STATIC_CACHE });
+      return cachedResponse || revalidation;
+    })();
+    event.respondWith(responsePromise);
+    event.waitUntil(responsePromise.then(() => revalidation).then(() => undefined).catch(() => undefined));
+    return;
+  }
+
+  if (authenticatedState !== false) return;
 
   const update = fetch(request).then(async (response) => {
     if (isCacheableAssetResponse(response)) {
