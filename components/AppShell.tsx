@@ -62,7 +62,6 @@ export function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
   const access = useQuery(api.workspace.currentAccess, {});
-  const context = useQuery(api.settings.runtimeContext, {});
   const profile = useQuery(api.users.profile, {});
   const requestWorkspaceAccess = useMutation(api.settings.requestWorkspaceAccess);
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -220,7 +219,7 @@ export function AppShell({ children }: { children: ReactNode }) {
       </header>
       {access?.access === "pending" && <div className="access-pending" role="status"><strong>Access awaiting invitation</strong><span>Your account is not yet linked to a MylesNet workspace.</span></div>}
       <main className="page-content">{children}</main>
-      <footer className="app-footer"><span>MylesNet Finance Tracker · {context?.access === "ready" ? context.currency : "UGX"}</span><span>Workspace data is protected by your assigned role.</span></footer>
+      <footer className="app-footer"><span>Powered by <a href="https://mylescorptech.com" target="_blank" rel="noopener noreferrer">MylesCorp Technologies</a></span></footer>
       </div>
       {pathname === "/account" && <AccountDrawer onClose={closeAccount} />}
       {accountMenuOpen && <AccountMenu displayName={profile?.displayName || accountLabel} email={profile?.email} photoUrl={profile?.photoUrl} workspaceName={accountLabel} canManageStaff={permissions.includes("access.view") || permissions.includes("access.manage") || permissions.includes("roles.manage")} canViewAudit={permissions.includes("audit.view")} onClose={closeAccountMenu} onProfile={openProfile} />}

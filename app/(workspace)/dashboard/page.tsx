@@ -7,10 +7,31 @@ import Link from "next/link";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { api } from "@/convex/_generated/api";
 import { accountLabel } from "@/lib/finance";
-import { Card, WorkspaceTitle } from "@/components/AppShell";
+import { Card } from "@/components/AppShell";
 import { OwnerSetup } from "@/components/workspace/OwnerSetup";
 import { formatBusinessDay } from "@/lib/format";
 import { AnalyticsInsights } from "@/components/workspace/AnalyticsInsights";
+
+const dailyQuotes = [
+  "Steady progress is built one good decision at a time.",
+  "Clarity grows when you make time to review the numbers.",
+  "Small steps, recorded consistently, build stronger businesses.",
+  "A thoughtful plan turns today’s work into tomorrow’s momentum.",
+  "Consistency turns ordinary effort into lasting progress.",
+  "Good records make room for confident decisions.",
+  "Every careful entry helps tell the story of your business.",
+];
+
+function timeOfDay(timezone: string) {
+  try {
+    const hour = Number(new Intl.DateTimeFormat("en", { timeZone: timezone, hour: "numeric", hourCycle: "h23" }).format(new Date()));
+    if (hour < 12) return "morning";
+    if (hour < 17) return "afternoon";
+    return "evening";
+  } catch {
+    return "day";
+  }
+}
 
 function todayKey(timezone: string) {
   return new Intl.DateTimeFormat("en-CA", { timeZone: timezone, year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
@@ -43,6 +64,7 @@ export default function DashboardPage() {
   const [shareFeedback, setShareFeedback] = useState("");
   const settings = useQuery(api.settings.runtimeContext, {});
   const access = useQuery(api.workspace.currentAccess, {});
+  const profile = useQuery(api.users.profile, {});
   const preferences = settings;
   const timezone = settings?.access === "ready" ? settings.timezone : "Africa/Kampala";
   const weekStartsOn = settings?.access === "ready" ? settings.weekStartsOn : "monday";
@@ -53,8 +75,12 @@ export default function DashboardPage() {
   const fiscalStartMonth = preferences?.access === "ready" ? preferences.fiscalYearStartMonth : 1;
   const formatMoney = (amount: number) => money(amount, currencyScale, locale);
   const [businessDay, setBusinessDay] = useState(() => todayKey("Africa/Kampala"));
+  const [dayPeriod, setDayPeriod] = useState("day");
   useEffect(() => {
-    const refreshBusinessDay = () => setBusinessDay(todayKey(timezone));
+    const refreshBusinessDay = () => {
+      setBusinessDay(todayKey(timezone));
+      setDayPeriod(timeOfDay(timezone));
+    };
     refreshBusinessDay();
     const timer = window.setInterval(refreshBusinessDay, 30_000);
     window.addEventListener("focus", refreshBusinessDay);
@@ -127,8 +153,20 @@ export default function DashboardPage() {
     }
   }
 
+  const quote = dailyQuotes[(Number(businessDay.replaceAll("-", "")) || 0) % dailyQuotes.length];
+  const greetingName = profile?.displayName?.trim() || profile?.email?.split("@")[0] || "there";
+
   return <>
-    <WorkspaceTitle eyebrow="MylesNet · Finance" title="Dashboard" description="A clear view of your recorded business activity." action={<label className="period-control">Period <select value={period} onChange={(event) => setPeriod(event.target.value)} aria-label="Dashboard period"><option value="today">Today</option><option value="week">This week</option><option value="month">This month</option><option value="year">This year</option><option value="custom">Custom</option></select></label>} />
+    <section className="dashboard-welcome" aria-label="Daily welcome">
+      <div className="dashboard-welcome-copy">
+        <div className="eyebrow">MylesNet · Finance · {fmtDate(today)}</div>
+        <h1>Good {dayPeriod}, <span>{greetingName}.</span></h1>
+        <p className="dashboard-welcome-subtitle">Your business, clearly in view. Here’s to a focused and productive day.</p>
+        <p className="dashboard-daily-quote"><span aria-hidden="true">✦</span> {quote}</p>
+      </div>
+      <div className="dashboard-welcome-mark" aria-hidden="true"><span /><span /><span /><span /><span /><span /><span /></div>
+      <label className="period-control dashboard-welcome-period">Period <select value={period} onChange={(event) => setPeriod(event.target.value)} aria-label="Dashboard period"><option value="today">Today</option><option value="week">This week</option><option value="month">This month</option><option value="year">This year</option><option value="custom">Custom</option></select></label>
+    </section>
     {period === "custom" && <div className="custom-period-row"><label>From <input type="date" value={customFrom} onChange={(event) => setCustomFrom(event.target.value)} /></label><label>To <input type="date" value={customTo} min={customFrom || undefined} onChange={(event) => setCustomTo(event.target.value)} /></label>{customRangeError && <span className="form-feedback form-error" role="alert">{customRangeError}</span>}</div>}
     <div className="dashboard-banner"><Image src="/brand/banner.png" alt="MylesNet Finance Tracker" fill priority sizes="(max-width: 760px) 100vw, 1100px" /><div className="banner-caption">Your business, clearly in view.</div></div>
     <div className="board-toolbar no-print">
