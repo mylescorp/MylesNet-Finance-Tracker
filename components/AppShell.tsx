@@ -4,7 +4,7 @@ import { useMutation, useQuery } from "convex/react";
 import {
   Activity, ArrowDownUp, BarChart3, Bell, CalendarDays, ChevronDown,
   ChevronsLeft, ChevronsRight, FileBarChart, HandCoins, LayoutDashboard,
-  Menu, PiggyBank, Receipt, Settings2, UsersRound, Wallet, X,
+  Menu, Newspaper, PiggyBank, Receipt, Settings2, UsersRound, Wallet, X,
 } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
@@ -71,7 +71,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   };
   const routePageLabel = pathname === "/account" ? "Your account" : pathname === "/staff/access" ? "Staff & access" : pathname === "/audits" ? "Audit log" : pathname === "/add-entry" ? "Add an entry" : activePage?.label
     ?? (pathname.startsWith("/settings/") ? settingsPageLabels[pathname.split("/")[2]] ?? "Settings" : undefined)
-    ?? (pathname === "/issues" ? "Needs attention" : "Workspace");
+    ?? (pathname === "/issues" ? "Needs attention" : pathname === "/changelog" ? "What's new" : "Workspace");
   const closeAccount = useCallback(() => {
     router.replace(accountReturnTo === "/account" ? "/dashboard" : accountReturnTo);
   }, [accountReturnTo, router]);
@@ -144,6 +144,10 @@ export function AppShell({ children }: { children: ReactNode }) {
           </section>)}
         </nav>
         <div className="sidebar-bottom">
+          <Link className={`sidebar-link sidebar-changelog-link${pathname === "/changelog" ? " sidebar-link-active" : ""}`} href="/changelog" aria-current={pathname === "/changelog" ? "page" : undefined} title={collapsed ? "What's new" : undefined} onClick={() => setMobileOpen(false)}>
+            <span className="sidebar-link-icon"><Newspaper size={18} strokeWidth={1.9} aria-hidden="true" /></span><span className="sidebar-link-label">What&apos;s new</span>
+            {pathname === "/changelog" && <span className="sidebar-active-indicator" aria-hidden="true" />}
+          </Link>
           <div className="sidebar-support"><span className="sidebar-support-dot" /><span><strong>Workspace protected</strong><small>Secure finance access</small></span></div>
         </div>
       </aside>

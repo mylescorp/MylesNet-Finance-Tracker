@@ -1,5 +1,9 @@
 # MylesNet Finance Tracker
 
+## Product updates
+
+The signed-in workspace changelog is available from **What's new** at the bottom of the sidebar. Add a dated entry at the top of [`CHANGELOG.md`](./CHANGELOG.md) with each user-visible product change; the page renders the file automatically on the next deployment. Pull requests that change application code must include a changelog update.
+
 Responsive finance workspace built with Next.js App Router, Convex, Convex Auth (Google OAuth), and Vercel. The approved design package is preserved in [`design-reference/`](./design-reference/).
 
 ## Local setup
