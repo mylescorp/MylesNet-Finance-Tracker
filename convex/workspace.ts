@@ -528,17 +528,27 @@ export const recentEntries = query({
           : args.from ? q.eq("businessId", current.business._id).gte("occurredOn", args.from)
           : args.toExclusive ? q.eq("businessId", current.business._id).lt("occurredOn", args.toExclusive)
           : q.eq("businessId", current.business._id)).order("desc").take(limit);
-    return rows.map(({ _id, kind, amountUgx, occurredOn, account, category, note, state, operationSource, source, correctionOf, correctedBy }) => ({
-      _id,
-      kind,
-      amountUgx,
-      occurredOn,
-      account,
-      category,
-      note,
-      state,
-      canVoid: !operationSource,
-      canCorrect: (source === "manual" || (source === "import" && !correctionOf)) && !operationSource && !correctedBy,
+    return await Promise.all(rows.map(async ({ _id, kind, amountUgx, occurredOn, account, category, note, state, operationSource, source, correctionOf, correctedBy, idempotencyKey, businessId }) => {
+      let importedBatchReady = false;
+      if (source === "import" && !correctionOf) {
+        const match = /^csv:([a-f0-9]{64}):\d+$/.exec(idempotencyKey);
+        if (match) {
+          const batch = await ctx.db.query("importBatches").withIndex("by_business_and_source", q => q.eq("businessId", businessId).eq("sourceHash", match[1])).unique();
+          importedBatchReady = batch?.status === "completed" || batch?.status === "cancelled";
+        }
+      }
+      return {
+        _id,
+        kind,
+        amountUgx,
+        occurredOn,
+        account,
+        category,
+        note,
+        state,
+        canVoid: !operationSource,
+        canCorrect: (source === "manual" || importedBatchReady) && !operationSource && !correctedBy,
+      };
     }));
   },
 });
