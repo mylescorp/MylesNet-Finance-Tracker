@@ -35,13 +35,21 @@ export function AnalyticsInsights({ range, today, currency, scale, locale, compa
       ["Summary", "Current balances", today, "Mobile money", String(analytics.balances.mobileMoneyUgx / scale), currency],
       ...analytics.period.days.map(day => ["Daily", day.day, "", "Sales", String(day.salesUgx / scale), currency, "Expenses", String(day.expensesUgx / scale), currency, day.hasActivity ? "Activity recorded" : "No activity"]),
       ...analytics.partners.map(partner => ["Partner", range.from, range.toExclusive, partner.name, String(partner.ownershipBps / 100), "%", String(partner.shareOfNetUgx / scale), currency]),
-      ...analytics.issues.map(issue => ["Issue", range.from, range.toExclusive, issue.id, issue.title, issue.severity, String(issue.amountUgx / scale), currency, issue.detail]),
+      ...analytics.issues.map(issue => {
+        const value = issue.id === "missing-sales-days" ? String(issue.amountUgx)
+          : issue.id === "ownership-incomplete" ? String(issue.amountUgx / 100)
+            : String(issue.amountUgx / scale);
+        const unit = issue.id === "missing-sales-days" ? "days"
+          : issue.id === "ownership-incomplete" ? "%"
+            : currency;
+        return ["Issue", range.from, range.toExclusive, issue.id, value, unit, "Title", issue.title, issue.severity, issue.detail];
+      }),
     ];
     const encode = (value: string) => {
       const safe = /^[\s\uFEFF]*[=+\-@]/u.test(value) ? `'${value}` : value;
       return `"${safe.replaceAll('"', '""')}"`;
     };
-    const csv = [["Section", "From", "To", "Metric", "Value", "Unit", "Additional value", "Additional unit", "Notes"], ...rows].map(row => row.map(encode).join(",")).join("\r\n");
+    const csv = [["Section", "From", "To", "Metric", "Value", "Unit", "Additional metric", "Additional value", "Additional unit", "Notes"], ...rows].map(row => row.map(encode).join(",")).join("\r\n");
     const url = URL.createObjectURL(new Blob([`\uFEFF${csv}`], { type: "text/csv;charset=utf-8" }));
     const anchor = document.createElement("a");
     anchor.href = url;
