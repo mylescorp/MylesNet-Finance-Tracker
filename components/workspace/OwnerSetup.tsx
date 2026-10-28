@@ -23,7 +23,7 @@ export function OwnerSetup() {
   }
   return <form className="form-layout" onSubmit={submit}>
     <div className="field field-full"><label htmlFor="owner-business-name">Business or workspace name</label><input id="owner-business-name" name="businessName" minLength={2} maxLength={100} autoComplete="organization" required /></div>
-    <div className="field field-full"><label htmlFor="owner-setup-code">One-time owner setup code</label><input id="owner-setup-code" name="setupCode" type="password" minLength={32} autoComplete="off" required /><span className="muted-note">An administrator must set OWNER_SETUP_CODE in the Convex deployment environment before the first owner can claim the workspace.</span></div>
+    <div className="field field-full"><label htmlFor="owner-setup-code">One-time owner setup code</label><input id="owner-setup-code" name="setupCode" type="password" minLength={32} autoComplete="off" required /><span className="muted-note">Ask your administrator for the one-time setup code before claiming the workspace.</span></div>
     <div className="form-actions"><button className="button button-accent" type="submit" disabled={busy}>{busy ? "Setting up…" : "Set up workspace"}</button>{message && <span className={`form-feedback ${message.error ? "form-error" : "form-success"}`} role="status">{message.text}</span>}</div>
   </form>;
 }

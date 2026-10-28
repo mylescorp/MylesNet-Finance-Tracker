@@ -1,6 +1,7 @@
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { env } from "./_generated/server";
 import { ConvexError, v } from "convex/values";
+import { paginationOptsValidator, paginationResultValidator } from "convex/server";
 import { mutation, query } from "./_generated/server";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import type { Id } from "./_generated/dataModel";
@@ -109,6 +110,7 @@ export const claimFirstOwner = mutation({
       { name: "Owner", builtIn: "owner" as const, permissions: [...PERMISSIONS], description: "Full workspace control." },
       { name: "Cashier", builtIn: "cashier" as const, permissions: ["dashboard.view", "sales.view", "sales.create", "expenses.view", "expenses.create", "reports.view"], description: "Record sales and expenses and view standard reports." },
       { name: "Partner", builtIn: "partner" as const, permissions: ["dashboard.view", "partners.view"], description: "View partner area only; financial totals are not exposed." },
+      { name: "Finance Approver", builtIn: "finance_approver" as const, permissions: ["partners.view", "partners.distributions.approve"], description: "Review partner distributions without workspace-wide finance access." },
     ]) await ctx.db.insert("workspaceRoles", { businessId, ...template, active: true, createdBy: userId, createdAt: now, updatedAt: now });
     await ctx.db.insert("memberships", {
       businessId,
@@ -250,6 +252,85 @@ export const updateBusinessSettings = mutation({
   },
 });
 
+export const balanceAdjustments = query({
+  args: { paginationOpts: paginationOptsValidator },
+  returns: paginationResultValidator(v.object({
+    _id: v.id("balanceAdjustments"), account: v.union(v.literal("cash"), v.literal("mobile_money")), countedBalanceUgx: v.number(), deltaUgx: v.number(), occurredOn: v.string(), note: v.string(), state: v.union(v.literal("posted"), v.literal("void")), voidReason: v.optional(v.string()),
+  })),
+  handler: async (ctx, args) => {
+    const current = await getMembership(ctx);
+    if (!current || !(await hasPermission(ctx, current.membership, "balanceAdjustments.manage"))) throw new Error("Your role cannot view balance adjustment history.");
+    const result = await ctx.db.query("balanceAdjustments").withIndex("by_business_and_created_at", q => q.eq("businessId", current.business._id)).order("desc").paginate(args.paginationOpts);
+    return {
+      ...result,
+      page: result.page.map(({ _id, account, countedBalanceUgx, deltaUgx, occurredOn, note, state, voidReason }) => ({ _id, account, countedBalanceUgx, deltaUgx, occurredOn, note, state, voidReason })),
+    };
+  },
+});
+
+export const createBalanceAdjustment = mutation({
+  args: { account: v.union(v.literal("cash"), v.literal("mobile_money")), countedBalanceUgx: v.number(), occurredOn: v.string(), note: v.string() },
+  returns: v.id("balanceAdjustments"),
+  handler: async (ctx, args) => {
+    const current = await getMembership(ctx);
+    if (!current || !(await hasPermission(ctx, current.membership, "balanceAdjustments.manage"))) throw new Error("Your role cannot adjust account balances.");
+    if (!Number.isSafeInteger(args.countedBalanceUgx) || args.countedBalanceUgx < 0) throw new Error("Enter a valid non-negative counted balance.");
+    if (!isIsoDay(args.occurredOn)) throw new Error("Choose a valid adjustment date.");
+    const note = args.note.trim();
+    if (note.length < 3 || note.length > 300) throw new Error("Explain the balance adjustment in 3 to 300 characters.");
+    const balance = await ctx.db.query("accountBalances").withIndex("by_business_and_account", q => q.eq("businessId", current.business._id).eq("account", args.account)).unique();
+    const before = balance?.balanceUgx ?? 0;
+    const deltaUgx = addSafeInteger(args.countedBalanceUgx, -before, "Balance adjustment");
+    await applyAccountEffect(ctx, current.business._id, args.account, deltaUgx);
+    const now = Date.now();
+    const id = await ctx.db.insert("balanceAdjustments", { businessId: current.business._id, account: args.account, countedBalanceUgx: args.countedBalanceUgx, deltaUgx, occurredOn: args.occurredOn, note, state: "posted", createdBy: current.userId, createdAt: now });
+    await ctx.db.insert("auditEvents", { businessId: current.business._id, actorId: current.userId, action: "balance.adjustment_created", entityType: "balanceAdjustment", entityId: id, occurredAt: now, summary: `${args.account} balance counted as ${formatAmount(args.countedBalanceUgx, current.business.currency)} · adjustment ${formatAmount(Math.abs(deltaUgx), current.business.currency)}${deltaUgx < 0 ? " decrease" : " increase"}.`, details: JSON.stringify({ previousBalanceUgx: before, countedBalanceUgx: args.countedBalanceUgx, deltaUgx, occurredOn: args.occurredOn, note }) });
+    return id;
+  },
+});
+
+export const updateBalanceAdjustment = mutation({
+  args: { adjustmentId: v.id("balanceAdjustments"), account: v.union(v.literal("cash"), v.literal("mobile_money")), countedBalanceUgx: v.number(), occurredOn: v.string(), note: v.string() },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const current = await getMembership(ctx);
+    if (!current || !(await hasPermission(ctx, current.membership, "balanceAdjustments.manage"))) throw new Error("Your role cannot edit balance adjustments.");
+    const adjustment = await ctx.db.get("balanceAdjustments", args.adjustmentId);
+    if (!adjustment || adjustment.businessId !== current.business._id) throw new Error("Balance adjustment not found.");
+    if (adjustment.state !== "posted") throw new Error("Voided adjustments cannot be edited.");
+    if (adjustment.account !== args.account) throw new Error("The account for a saved count cannot be changed. Record a new count for another account, then remove this one with a reason.");
+    if (!Number.isSafeInteger(args.countedBalanceUgx) || args.countedBalanceUgx < 0) throw new Error("Enter a valid non-negative counted balance.");
+    if (!isIsoDay(args.occurredOn)) throw new Error("Choose a valid adjustment date.");
+    const note = args.note.trim();
+    if (note.length < 3 || note.length > 300) throw new Error("Explain the balance adjustment in 3 to 300 characters.");
+    const nextDelta = addSafeInteger(adjustment.deltaUgx, args.countedBalanceUgx - adjustment.countedBalanceUgx, "Balance adjustment");
+    await applyAccountEffect(ctx, current.business._id, args.account, addSafeInteger(nextDelta, -adjustment.deltaUgx, "Balance adjustment"));
+    const now = Date.now();
+    await ctx.db.patch("balanceAdjustments", adjustment._id, { account: args.account, countedBalanceUgx: args.countedBalanceUgx, deltaUgx: nextDelta, occurredOn: args.occurredOn, note, updatedAt: now });
+    await ctx.db.insert("auditEvents", { businessId: current.business._id, actorId: current.userId, action: "balance.adjustment_updated", entityType: "balanceAdjustment", entityId: adjustment._id, occurredAt: now, summary: `Updated ${adjustment.account} balance adjustment to ${args.account} · counted ${formatAmount(args.countedBalanceUgx, current.business.currency)}.`, details: JSON.stringify({ before: { account: adjustment.account, countedBalanceUgx: adjustment.countedBalanceUgx, deltaUgx: adjustment.deltaUgx, occurredOn: adjustment.occurredOn, note: adjustment.note }, after: { account: args.account, countedBalanceUgx: args.countedBalanceUgx, deltaUgx: nextDelta, occurredOn: args.occurredOn, note } }) });
+    return null;
+  },
+});
+
+export const voidBalanceAdjustment = mutation({
+  args: { adjustmentId: v.id("balanceAdjustments"), reason: v.string() },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const current = await getMembership(ctx);
+    if (!current || !(await hasPermission(ctx, current.membership, "balanceAdjustments.manage"))) throw new Error("Your role cannot remove balance adjustments.");
+    const adjustment = await ctx.db.get("balanceAdjustments", args.adjustmentId);
+    if (!adjustment || adjustment.businessId !== current.business._id) throw new Error("Balance adjustment not found.");
+    if (adjustment.state === "void") return null;
+    const reason = args.reason.trim();
+    if (reason.length < 3 || reason.length > 300) throw new Error("Explain why this adjustment is being removed.");
+    await applyAccountEffect(ctx, current.business._id, adjustment.account, -adjustment.deltaUgx);
+    const now = Date.now();
+    await ctx.db.patch("balanceAdjustments", adjustment._id, { state: "void", voidedAt: now, voidedBy: current.userId, voidReason: reason });
+    await ctx.db.insert("auditEvents", { businessId: current.business._id, actorId: current.userId, action: "balance.adjustment_voided", entityType: "balanceAdjustment", entityId: adjustment._id, occurredAt: now, summary: reason, details: JSON.stringify({ reversedDeltaUgx: -adjustment.deltaUgx }) });
+    return null;
+  },
+});
+
 export const dashboardSummary = query({
   args: {
     from: v.string(),
@@ -349,6 +430,61 @@ export const dashboardSummary = query({
   },
 });
 
+export const balanceOverview = query({
+  args: { day: v.string() },
+  returns: v.union(
+    v.object({ access: v.literal("setup") }),
+    v.object({ access: v.literal("pending") }),
+    v.object({ access: v.literal("restricted") }),
+    v.object({
+      access: v.literal("ready"),
+      currency: v.string(),
+      day: v.string(),
+      cashBalanceUgx: v.number(),
+      mobileMoneyBalanceUgx: v.number(),
+      salesUgx: v.number(),
+      centipidMobileUgx: v.number(),
+      centipidVoucherUgx: v.number(),
+      mobileSalesUgx: v.number(),
+      cashEstimateComplete: v.boolean(),
+      estimatedCashSalesUgx: v.number(),
+    }),
+  ),
+  handler: async (ctx, args) => {
+    if (!isIsoDay(args.day)) throw new Error("Choose a valid business date.");
+    const current = await getMembership(ctx);
+    if (!current) {
+      const businesses = await ctx.db.query("businesses").take(1);
+      return { access: businesses.length === 0 ? "setup" as const : "pending" as const };
+    }
+    const assignedRole = current.membership.roleId ? await ctx.db.get("workspaceRoles", current.membership.roleId) : null;
+    if (!(await hasPermission(ctx, current.membership, "dashboard.view")) || assignedRole?.builtIn === "partner" || (!current.membership.roleId && current.membership.role === "partner") || current.membership.role === "finance_approver") return { access: "restricted" as const };
+    const [day, balances, dailyEntries] = await Promise.all([
+      ctx.db.query("dailyTotals").withIndex("by_business_and_day", q => q.eq("businessId", current.business._id).eq("day", args.day)).unique(),
+      ctx.db.query("accountBalances").withIndex("by_business_and_account", q => q.eq("businessId", current.business._id)).take(2),
+      ctx.db.query("entries").withIndex("by_business_and_date", q => q.eq("businessId", current.business._id).eq("occurredOn", args.day)).take(1001),
+    ]);
+    const salesUgx = day?.salesUgx ?? 0;
+    const postedSales = dailyEntries.filter(entry => entry.state === "posted" && entry.kind === "sale");
+    const mobileSalesUgx = postedSales.filter(entry => entry.account === "mobile_money").reduce((total, entry) => addSafeInteger(total, entry.amountUgx, "Daily mobile sales"), 0);
+    const centipidMobileUgx = postedSales.filter(entry => entry.source === "webhook" && entry.account === "mobile_money").reduce((total, entry) => addSafeInteger(total, entry.amountUgx, "Centipid mobile total"), 0);
+    const centipidVoucherUgx = postedSales.filter(entry => entry.source === "webhook" && entry.account === "cash").reduce((total, entry) => addSafeInteger(total, entry.amountUgx, "Centipid voucher total"), 0);
+    return {
+      access: "ready" as const,
+      currency: current.business.currency,
+      day: args.day,
+      cashBalanceUgx: balances.find(balance => balance.account === "cash")?.balanceUgx ?? 0,
+      mobileMoneyBalanceUgx: balances.find(balance => balance.account === "mobile_money")?.balanceUgx ?? 0,
+      salesUgx,
+      centipidMobileUgx,
+      centipidVoucherUgx,
+      mobileSalesUgx,
+      cashEstimateComplete: dailyEntries.length <= 1000,
+      estimatedCashSalesUgx: salesUgx - mobileSalesUgx,
+    };
+  },
+});
+
 export const recentEntries = query({
   args: { limit: v.optional(v.number()), kind: v.optional(v.union(v.literal("sale"), v.literal("expense"))), from: v.optional(v.string()), toExclusive: v.optional(v.string()) },
   returns: v.array(
@@ -357,7 +493,7 @@ export const recentEntries = query({
       kind: v.union(v.literal("sale"), v.literal("expense")),
       amountUgx: v.number(),
       occurredOn: v.string(),
-      account: v.union(v.literal("cash"), v.literal("mobile_money")),
+      account: v.union(v.literal("cash"), v.literal("mobile_money"), v.literal("unallocated")),
       category: v.string(),
       note: v.string(),
       state: v.union(v.literal("posted"), v.literal("void")),
@@ -419,6 +555,72 @@ export const searchEntries = query({
       .sort((a, b) => b.occurredOn.localeCompare(a.occurredOn) || b.createdAt - a.createdAt)
       .slice(0, limit)
       .map(({ _id, kind, amountUgx, occurredOn, category, note }) => ({ _id, kind, amountUgx, occurredOn, category, note }));
+  },
+});
+
+const operationalKind = v.union(v.literal("movement"), v.literal("holding"), v.literal("loan"), v.literal("bill"));
+
+export const operationalRecords = query({
+  args: { kind: operationalKind },
+  returns: v.array(v.object({
+    _id: v.id("operationalRecords"), kind: operationalKind, title: v.string(), amountUgx: v.number(),
+    occurredOn: v.string(), account: v.optional(v.union(v.literal("cash"), v.literal("mobile_money"))),
+    destinationAccount: v.optional(v.union(v.literal("cash"), v.literal("mobile_money"))),
+    movementType: v.optional(v.union(v.literal("transfer"), v.literal("withdrawal"))),
+    cadence: v.optional(v.union(v.literal("weekly"), v.literal("monthly"), v.literal("quarterly"), v.literal("annually"))),
+    note: v.string(),
+  })),
+  handler: async (ctx, args) => {
+    const current = await getMembership(ctx);
+    if (!current || !(await hasPermission(ctx, current.membership, args.kind === "movement" ? "movements.view" : args.kind === "holding" ? "savings.view" : args.kind === "loan" ? "loans.view" : "bills.view"))) return [];
+    return (await ctx.db.query("operationalRecords").withIndex("by_business_and_kind_and_date", q => q.eq("businessId", current.business._id).eq("kind", args.kind)).order("desc").take(200))
+      .map(({ _id, kind, title, amountUgx, occurredOn, account, destinationAccount, movementType, cadence, note }) => ({ _id, kind, title, amountUgx, occurredOn, account, destinationAccount, movementType, cadence, note }));
+  },
+});
+
+export const createOperationalRecord = mutation({
+  args: {
+    kind: operationalKind, title: v.string(), amountUgx: v.number(), occurredOn: v.string(),
+    account: v.optional(v.union(v.literal("cash"), v.literal("mobile_money"))),
+    destinationAccount: v.optional(v.union(v.literal("cash"), v.literal("mobile_money"))),
+    movementType: v.optional(v.union(v.literal("transfer"), v.literal("withdrawal"))),
+    cadence: v.optional(v.union(v.literal("weekly"), v.literal("monthly"), v.literal("quarterly"), v.literal("annually"))),
+    note: v.string(), idempotencyKey: v.string(),
+  },
+  returns: v.id("operationalRecords"),
+  handler: async (ctx, args) => {
+    const current = await getMembership(ctx);
+    if (!current || !(await hasPermission(ctx, current.membership, args.kind === "movement" ? "movements.create" : args.kind === "holding" ? "savings.create" : args.kind === "loan" ? "loans.create" : "bills.create"))) throw new Error("Your role cannot create this record.");
+    if (!isIsoDay(args.occurredOn)) throw new Error("Choose a valid business date.");
+    if (!Number.isSafeInteger(args.amountUgx) || args.amountUgx <= 0) throw new Error(`Amount must be a positive whole minor-unit amount in ${current.business.currency}.`);
+    const title = args.title.trim();
+    const note = args.note.trim();
+    if (title.length < 2 || title.length > 100 || note.length > 300) throw new Error("Enter a title of 2–100 characters and a note of at most 300 characters.");
+    if (args.idempotencyKey.length < 16 || args.idempotencyKey.length > 120) throw new Error("This request could not be verified. Try again.");
+    const existing = await ctx.db.query("operationalRecords").withIndex("by_business_and_idempotency", q => q.eq("businessId", current.business._id).eq("idempotencyKey", args.idempotencyKey)).unique();
+    if (existing) {
+      const isSameRequest = existing.kind === args.kind && existing.title === title && existing.amountUgx === args.amountUgx && existing.occurredOn === args.occurredOn && existing.account === args.account && existing.destinationAccount === args.destinationAccount && existing.movementType === args.movementType && existing.cadence === args.cadence && existing.note === note;
+      if (!isSameRequest) throw new Error("This request key was already used for another record.");
+      return existing._id;
+    }
+    if (args.kind === "movement") {
+      if (!args.account || !args.movementType || (args.movementType === "transfer" && (!args.destinationAccount || args.destinationAccount === args.account))) throw new Error("Choose a source account and a different destination for transfers.");
+      const source = await ctx.db.query("accountBalances").withIndex("by_business_and_account", q => q.eq("businessId", current.business._id).eq("account", args.account!)).unique();
+      if (args.movementType === "withdrawal" && (source?.balanceUgx ?? 0) < args.amountUgx) throw new Error("The withdrawal is larger than the available account balance.");
+      if (args.movementType === "withdrawal") {
+        if (source) await ctx.db.patch("accountBalances", source._id, { balanceUgx: addSafeInteger(source.balanceUgx, -args.amountUgx, "Account balance"), updatedAt: Date.now() });
+      } else {
+        const destination = await ctx.db.query("accountBalances").withIndex("by_business_and_account", q => q.eq("businessId", current.business._id).eq("account", args.destinationAccount!)).unique();
+        if ((source?.balanceUgx ?? 0) < args.amountUgx) throw new Error("The transfer is larger than the available source balance.");
+        if (source) await ctx.db.patch("accountBalances", source._id, { balanceUgx: addSafeInteger(source.balanceUgx, -args.amountUgx, "Account balance"), updatedAt: Date.now() });
+        if (destination) await ctx.db.patch("accountBalances", destination._id, { balanceUgx: addSafeInteger(destination.balanceUgx, args.amountUgx, "Account balance"), updatedAt: Date.now() });
+        else await ctx.db.insert("accountBalances", { businessId: current.business._id, account: args.destinationAccount!, balanceUgx: args.amountUgx, updatedAt: Date.now() });
+      }
+    }
+    if (args.kind === "bill" && !args.cadence) throw new Error("Choose how often this bill recurs.");
+    const id = await ctx.db.insert("operationalRecords", { ...args, title, note, businessId: current.business._id, createdBy: current.userId, createdAt: Date.now() });
+    await ctx.db.insert("auditEvents", { businessId: current.business._id, actorId: current.userId, action: `record.${args.kind}.created`, entityType: args.kind, entityId: id, occurredAt: Date.now(), summary: `Created ${args.kind} record: ${title}.` });
+    return id;
   },
 });
 
@@ -577,7 +779,10 @@ export const voidEntry = mutation({
       throw new Error("Entry not found.");
     }
     if (!(await hasPermission(ctx, current.membership, entry.kind === "sale" ? "sales.void" : "expenses.void"))) throw new Error("Your role cannot void this kind of ledger entry.");
-    if (entry.state === "void") return null;
+
+    if (entry.operationSource) {
+      throw new Error("This expense was posted by a bill payment, loan repayment, or movement fee. It cannot be voided alone because its related account and schedule history would become inconsistent. A linked operational reversal workflow is required.");
+    }    if (entry.state === "void") return null;
     const reason = args.reason.trim();
     if (reason.length < 3 || reason.length > 300) {
       throw new Error("Give a reason between 3 and 300 characters.");
@@ -611,7 +816,7 @@ export const voidEntry = mutation({
         "Daily expense count",
       ),
     });
-    await applyAccountEffect(
+    if (entry.account !== "unallocated") await applyAccountEffect(
       ctx,
       current.business._id,
       entry.account,

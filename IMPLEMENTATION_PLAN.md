@@ -38,3 +38,9 @@ The initial accounting model remains the approved auditable cashbook. Currency c
 ## External facts still required for full integrations
 
 The repository does not include the original workbook export, webhook endpoint/call samples, messaging/calendar provider contracts, or backup/archive credentials. Preserve compatibility and make the corresponding views explain their not-configured state until those inputs are supplied. Do not invent sample figures as production data or change the webhook as a substitute for discovery.
+
+## Follow-on core workflow status
+
+The isolated `codex/core-finance-workflows` branch adds record-backed v1 flows for account movements, savings holdings and flows, loan disbursements and repayments, recurring bill schedules and confirmed payments, partner ownership records with identity-linked capital statements, and account reconciliation counts. It also changes the Daily Report to show all seven trailing business dates, including dates with no recorded entries. See [`CASHBOOK_RULES.md`](CASHBOOK_RULES.md) for the account and profit effects and known limits.
+
+This phase implements the advanced analytics and partner distribution workflows in code. The analytics are derived from saved entries and balances; what-if controls are client-side assumptions only. Distributions snapshot period-end ownership, require a second person to approve, reserve liquidity, and record payouts/reversals separately from income and expenses. It does not import spreadsheet rows or alter the existing webhook. Automatic bill accruals and period locks remain out of scope, as do the pending source-data, recovery, security, and external-provider decisions above. Production deployment and cutover still require a reviewed release and environment validation.

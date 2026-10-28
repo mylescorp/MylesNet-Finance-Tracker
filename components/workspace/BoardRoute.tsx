@@ -1,14 +1,20 @@
 "use client";
 
 import { useQuery } from "convex/react";
-import { ArrowDownRight, ArrowUpRight, Download, Printer, Share2 } from "lucide-react";
+import { ArrowDownRight, ArrowUpRight, Download, Plus, Printer, Share2, X } from "lucide-react";
 import Link from "next/link";
 import { useMemo, useState } from "react";
 import { api } from "@/convex/_generated/api";
+import { accountLabel } from "@/lib/finance";
 import { Card, WorkspaceTitle } from "@/components/AppShell";
 import { SettingsNav } from "@/components/settings/SettingsNav";
 import { EntryForm } from "@/components/workspace/EntryForm";
+import { OperationsWorkspace } from "@/components/workspace/OperationsWorkspace";
+import { ConvexLiveStatus } from "@/components/workspace/ConvexLiveStatus";
+import { OperationalRecordForm } from "@/components/workspace/OperationalRecordForm";
+import { RecordFormDisclosure } from "@/components/workspace/RecordFormDisclosure";
 import { formatBusinessDay } from "@/lib/format";
+import { AnalyticsInsights } from "@/components/workspace/AnalyticsInsights";
 
 type BoardSpec = {
   title: string;
@@ -24,11 +30,11 @@ type BoardSpec = {
 const specs: Record<string, BoardSpec> = {
   sales: {
     title: "Sales", eyebrow: "Cashbook", description: "Record and review income from approved sources.", source: "03 · Sales", entryKind: "sale",
-    metrics: ["Sales today", "Sales", "Best day", "Days recorded", "Entry basis"],
+    metrics: ["Sales today", "Sales this period", "Sales year to date", "Best day", "Entry basis"],
     sections: [
-      { title: "Daily sales · last 14 days", detail: "Recorded entries by date, account, and amount. Estimated split is shown only when an imported estimate exists.", kind: "table" },
       { title: "Sales by income type", detail: "Category breakdown uses saved entries; no mock amounts are loaded.", kind: "chart" },
       { title: "Best days and weekday pattern", detail: "Strongest sales days are calculated from the selected period.", kind: "chart" },
+      { title: "Daily sales · last 14 days", detail: "Recorded daily sales, expenses, and net cashbook activity for the latest dates in this period.", kind: "table" },
       { title: "Imports and data checks", detail: "Import history will be available after a source mapping and staging import are approved.", kind: "table" },
       { title: "Weak-day diary and split corrections", detail: "Record the reason for an unusual day and correct estimated account splits with an audit trail.", kind: "workflow" },
       { title: "Voucher batches and mobile entry", detail: "Voucher stock and mobile entry layouts are not populated until those record types are configured." },
@@ -68,7 +74,7 @@ const specs: Record<string, BoardSpec> = {
     sections: [
       { title: "Money map", detail: "Follow recorded sales, mobile money, cash, partner flows, withdrawals, and payouts." },
       { title: "Movement ledger", detail: "Transfers do not count as income or expense. Each movement must have a date, source, destination, type, and amount.", kind: "table" },
-      { title: "Record a movement", detail: "Add a transfer, withdrawal, capital contribution, or payout with the configured fee rule.", kind: "workflow" },
+      { title: "Movement tracking status", detail: "Transfer and withdrawal records are not available yet.", kind: "workflow" },
       { title: "Withdrawal planner and cash count", detail: "Estimate the fee and net cash received, then compare a denomination count with the book balance." },
       { title: "Money flow and unexplained balance", detail: "Compare account balances with sales, expenses, and recorded movements." },
     ],
@@ -78,7 +84,7 @@ const specs: Record<string, BoardSpec> = {
     metrics: ["Current value", "Contributions", "Gain or loss", "Cash buffer", "Could set aside"],
     sections: [
       { title: "Holdings", detail: "No holdings are recorded yet. Add a holding to track its value and contributions.", kind: "table" },
-      { title: "Add a holding", detail: "Record the holding, account, initial value, date, and note.", kind: "workflow" },
+      { title: "Holdings tracking status", detail: "Savings holdings and contributions are not available yet.", kind: "workflow" },
       { title: "Savings goals and reserve target", detail: "Set a reserve target from monthly operating costs and review progress toward selected goals." },
       { title: "Set-aside planner", detail: "Compare 10%, 20%, and 30% of recorded monthly operating profit." },
       { title: "Allocation and returns", detail: "View the allocation when holdings exist and compare expected returns with equipment payback.", kind: "chart" },
@@ -89,7 +95,7 @@ const specs: Record<string, BoardSpec> = {
     metrics: ["Active loans", "Monthly payments", "Outstanding", "Debt capacity", "Equipment financing"],
     sections: [
       { title: "Loans", detail: "No loans are recorded. Add a loan to start a repayment schedule.", kind: "table" },
-      { title: "Add a loan", detail: "Record principal, annual rate, term, start date, and purpose.", kind: "workflow" },
+      { title: "Loan tracking status", detail: "Loan records and repayments are not available yet.", kind: "workflow" },
       { title: "Loan planner and affordability", detail: "Calculate monthly payment, total repayment, interest, and compare with recorded operating profit." },
       { title: "Repayment schedule", detail: "Scheduled principal and interest are estimates until actual payments are recorded.", kind: "table" },
       { title: "Early repayment and equipment impact", detail: "Compare interest saved and revised equipment payback from entered assumptions." },
@@ -107,11 +113,11 @@ const specs: Record<string, BoardSpec> = {
     ],
   },
   "monthly-pnl": {
-    title: "Monthly P&L", eyebrow: "Reports", description: "Review revenue, operating costs, and net result from recorded entries.", source: "09 · Monthly P&L",
-    metrics: ["Sales YTD", "Operating costs", "Operating profit", "Equipment", "Net profit"],
+    title: "Monthly P&L", eyebrow: "Reports", description: "Review recorded sales, total expenses, and cashbook net from saved entries.", source: "09 · Monthly P&L",
+    metrics: ["Sales YTD", "Total expenses", "Cashbook net", "Equipment", "Net profit"],
     sections: [
       { title: "Profit and loss by month", detail: "Monthly totals use saved cashbook entries. Missing source history is not filled with sample values.", kind: "table" },
-      { title: "Year-to-date statement", detail: "Sales, operating costs, operating profit, margin, equipment, and net result.", kind: "table" },
+      { title: "Year-to-date statement", detail: "Monthly sales, total expenses, and cashbook net from recorded entries.", kind: "table" },
       { title: "Operating margin and equipment", detail: "Compare recorded operating costs and equipment spend by period.", kind: "chart" },
       { title: "Budget versus actual", detail: "Budgets are read from Finance settings when configured." },
       { title: "Month-end close and shareable statement", detail: "Close controls and share links require permissions and configured export delivery." },
@@ -133,7 +139,7 @@ const specs: Record<string, BoardSpec> = {
     metrics: ["Bills tracked", "Due soon", "Next bill", "Monthly equivalent", "Paid YTD"],
     sections: [
       { title: "Bills and next 90 days", detail: "No recurring bills are configured. Add the next due date and recurrence to see upcoming obligations.", kind: "table" },
-      { title: "Add a bill", detail: "Record the supplier, amount, recurrence, category, and next due date.", kind: "workflow" },
+      { title: "Bill tracking status", detail: "Recurring bill records and payment reminders are not available yet.", kind: "workflow" },
       { title: "Margin impact and reminders", detail: "Accruals affect profit only when recorded as expenses; reminders do not book entries automatically." },
       { title: "Supplier price history", detail: "Payment history appears after supplier-linked expenses exist.", kind: "chart" },
       { title: "Calendar sync and accrual automation", detail: "Calendar delivery requires a configured provider. Bill payments must be confirmed before creating an expense." },
@@ -195,13 +201,13 @@ const specs: Record<string, BoardSpec> = {
     metrics: ["Users", "Invitations", "Role templates", "Features", "Recent changes"],
     sections: [
       { title: "Users and roles", detail: "Only active members can view business records. Role changes are audited.", kind: "table" },
-      { title: "Role templates and feature permissions", detail: "Owner, partner, and cashier access is enforced by Convex functions." },
+      { title: "Role templates and feature permissions", detail: "Owner, partner, and cashier access is checked on every request." },
       { title: "Recent settings changes", detail: "Review the actor, affected setting, previous value, and new value.", kind: "table" },
       { title: "Audit log detail", detail: "Audit events are append-only and scoped to this workspace." },
     ],
   },
   "settings/releases": {
-    title: "Releases", eyebrow: "Settings", description: "Review application version, update channel, and release notes.", source: "18 · Settings · Releases", settings: true,
+    title: "Product updates", eyebrow: "Settings", description: "Review improvements and service continuity information.", source: "18 · Settings · Updates", settings: true,
     metrics: ["Current version", "Channel", "Latest release", "Readiness", "Preview features"],
     sections: [
       { title: "Releases and upgrades", detail: "Production updates are deployed through reviewed releases. The app will not overwrite finance data automatically." },
@@ -243,6 +249,7 @@ export function BoardRoute({ route }: { route: string }) {
   const screen = specs[route];
   const [period, setPeriod] = useState<(typeof periods)[number]>("Month");
   const [entryLimit, setEntryLimit] = useState(100);
+  const [salesFormOpen, setSalesFormOpen] = useState(false);
   const [shareFeedback, setShareFeedback] = useState("");
   const settings = useQuery(api.settings.runtimeContext, {});
   const access = useQuery(api.workspace.currentAccess, {});
@@ -264,9 +271,16 @@ export function BoardRoute({ route }: { route: string }) {
   const entries = useQuery(api.workspace.recentEntries, { limit: entryLimit, kind: entryKind, from: range.from, toExclusive: range.toExclusive });
   const yearRange = useMemo(() => rangeFor("Year", today, weekStartsOn, fiscalStartMonth), [today, weekStartsOn, fiscalStartMonth]);
   const yearSummary = useQuery(api.workspace.dashboardSummary, yearRange);
+  const trailingSevenRange = useMemo(() => {
+    const from = new Date(`${today}T00:00:00.000Z`);
+    from.setUTCDate(from.getUTCDate() - 6);
+    const to = new Date(`${today}T00:00:00.000Z`);
+    to.setUTCDate(to.getUTCDate() + 1);
+    return { from: from.toISOString().slice(0, 10), toExclusive: to.toISOString().slice(0, 10) };
+  }, [today]);
+  const trailingSevenSummary = useQuery(api.workspace.dashboardSummary, screen?.title === "Daily Report" ? trailingSevenRange : "skip");
 
   if (!screen) return <WorkspaceTitle eyebrow="MylesNet" title="Page not found" description="Choose a section from the navigation." />;
-
   const requiredPermission: Record<string, string> = {
     dashboard: "dashboard.view", analytics: "analytics.view", sales: "sales.view", expenses: "expenses.view",
     movements: "movements.view", savings: "savings.view", loans: "loans.view", "daily-report": "dailyReport.view",
@@ -279,16 +293,23 @@ export function BoardRoute({ route }: { route: string }) {
   if (access?.access === "ready" && permission && !access.permissions.includes(permission)) return <><WorkspaceTitle eyebrow={screen.eyebrow} title={screen.title} description={screen.description} /><Card><p className="muted-note">Your role does not include access to this feature. Ask a workspace administrator to review your permissions.</p></Card></>;
 
   const stats = summary?.access === "ready" ? summary : null;
+  const yearDays = yearSummary?.access === "ready" ? yearSummary.days : undefined;
+  const weekDays = trailingSevenSummary?.access === "ready" ? trailingSevenSummary.days : undefined;
+  const rangeDayCount = Math.max(1, (Date.parse(`${range.toExclusive}T00:00:00.000Z`) - Date.parse(`${range.from}T00:00:00.000Z`)) / 86_400_000);
   const metricValues: Record<string, string> = {
     Sales: fmt(stats?.salesUgx),
-    "Best day": stats ? fmt(Math.max(0, ...stats.days.map((day) => day.salesUgx))) : "—",
-    "Days recorded": stats ? `${stats.days.filter((day) => day.salesUgx + day.expensesUgx > 0).length}` : "—",
+    "Best day": stats ? fmt(Math.max(0, ...stats.days.map((day) => screen?.title === "Expenses" ? day.expensesUgx : day.salesUgx))) : "—",
+    "Days recorded": stats ? `${stats.days.filter((day) => screen?.title === "Expenses" ? day.expensesUgx > 0 : day.salesUgx > 0).length}` : "—",
     "Expense ratio": stats ? `${stats.salesUgx ? Math.round(stats.expensesUgx / stats.salesUgx * 100) : 0}%` : "—",
-    "Average daily expenses": stats ? fmt(Math.round(stats.expensesUgx / Math.max(1, stats.days.length))) : "—",
+    "Average daily expenses": stats ? fmt(Math.round(stats.expensesUgx / rangeDayCount)) : "—",
     "Net margin": stats ? `${stats.salesUgx ? Math.round((stats.salesUgx - stats.expensesUgx) / stats.salesUgx * 100) : 0}%` : "—",
     "Cash on hand": fmt(stats?.cashBalanceUgx),
     "Mobile money": fmt(stats?.mobileMoneyBalanceUgx),
     "Sales today": stats ? fmt(stats.days.find((day) => day.day === today)?.salesUgx ?? 0) : "—",
+    "Sales this period": fmt(stats?.salesUgx),
+    "This month expenses": fmt(stats?.expensesUgx),
+    "Year to date": fmt(yearSummary?.access === "ready" ? yearSummary.expensesUgx : undefined),
+    "Sales year to date": fmt(yearSummary?.access === "ready" ? yearSummary.salesUgx : undefined),
     "Expenses": fmt(stats?.expensesUgx),
     "Average per day": stats ? fmt(Math.round((screen?.title === "Expenses" ? stats.expensesUgx : stats.salesUgx) / Math.max(1, stats.days.length))) : "—",
     "Entry basis": "Recorded",
@@ -302,6 +323,8 @@ export function BoardRoute({ route }: { route: string }) {
   };
   const selectedEntries = entries?.filter((entry) => entry.state === "posted");
   const hasRecordData = selectedEntries && selectedEntries.length > 0;
+  const operationalScreen = ["Movements", "Savings", "Loans", "Partners", "Bills", "Reconcile"].includes(screen.title);
+  const hasAnalyticsActivity = stats?.days.some((day) => day.salesUgx > 0 || day.expensesUgx > 0) ?? false;
 
   async function shareReport() {
     try {
@@ -322,42 +345,46 @@ export function BoardRoute({ route }: { route: string }) {
     />
     {screen.settings && <SettingsNav current={`/${route}`} />}
     <div className="board-toolbar no-print">
-      <span className="status-chip status-live">Live · Convex data</span>
+      <ConvexLiveStatus />
       <span className="toolbar-range">{fmtDate(range.from)} — {fmtDate(rangeLastDay.toISOString().slice(0, 10))}</span>
       <button className="button" type="button" onClick={() => window.print()}><Printer size={14} />Print</button>
       <button className="button" type="button" onClick={() => window.print()}><Download size={14} />Export PDF</button>
       <button className="button button-dark" type="button" onClick={() => void shareReport()}><Share2 size={14} />Share report</button>
+      {screen.title === "Sales" && <button className="button button-accent" type="button" aria-controls="sales-entry-form" aria-expanded={salesFormOpen} onClick={() => {
+        const opening = !salesFormOpen;
+        setSalesFormOpen(opening);
+        if (opening) requestAnimationFrame(() => document.getElementById("sales-entry-form")?.scrollIntoView({ behavior: "smooth", block: "nearest" }));
+      }}>{salesFormOpen ? <X size={14} /> : <Plus size={14} />}{salesFormOpen ? "Close form" : "Add sale"}</button>}
       {shareFeedback && <span className="form-feedback" role="status">{shareFeedback}</span>}
     </div>
     {summary?.access === "restricted" && <div className="notice-banner notice-info" role="status">Partner-specific reporting is being prepared. Business-wide totals are hidden from partner accounts.</div>}
-    {summary?.access === "pending" && <div className="notice-banner notice-warning" role="status">Workspace access is pending. Ask an owner to invite this Google account.</div>}
-    <div className="metric-grid board-metric-grid">
+    {summary?.access === "pending" && <div className="notice-banner notice-warning" role="status">Workspace access is pending. Ask an owner to invite this account.</div>}
+    {!operationalScreen && screen.title !== "Analytics" && <div className="metric-grid board-metric-grid">
       {screen.metrics.map((label, index) => <Card className="metric-card board-metric-card" key={label}>
         <div className="card-heading"><span className="eyebrow">{label}</span><span className="entry-icon">{index % 2 === 0 ? <ArrowUpRight size={15} /> : <ArrowDownRight size={15} />}</span></div>
         <div className="metric-value">{metricValues[label] ?? "—"}</div>
         <div className="metric-note">{metricValues[label] === undefined ? "Available when this record type is configured" : "Based on saved workspace records"}</div>
       </Card>)}
-    </div>
-    <div className="board-grid">
-      {screen.entryKind && <Card className="board-feature-card">
-        <div className="card-heading"><div><h2 className="card-title">{screen.entryKind === "sale" ? "Add a sale" : "Add an expense"}</h2><p className="card-subtitle">Saved values update the cashbook and account balance.</p></div></div>
-        <EntryForm kind={screen.entryKind} />
-      </Card>}
-      {screen.sections.map((section) => <Card className="board-section-card" key={section.title}>
+    </div>}
+    {screen.title === "Analytics" ? <AnalyticsInsights range={range} today={today} currency={currency} scale={currencyScale} locale={locale} /> : screen.title === "Needs attention" ? <AnalyticsInsights range={range} today={today} currency={currency} scale={currencyScale} locale={locale} issuesOnly /> : operationalScreen ? <OperationsWorkspace screen={screen.title as "Movements" | "Savings" | "Loans" | "Partners" | "Bills" | "Reconcile"} currency={currency} scale={currencyScale} locale={locale} timezone={timezone} dateFormat={dateFormat} range={range} /> : <div className={`board-grid ${screen.entryKind ? "board-grid-cashbook" : ""} ${screen.title === "Sales" ? "board-grid-sales" : ""}`}>
+      {screen.entryKind && <RecordFormDisclosure id={screen.title === "Sales" ? "sales-entry-form" : undefined} open={screen.title === "Sales" ? salesFormOpen : undefined} hideTrigger={screen.title === "Sales"} onClose={screen.title === "Sales" ? () => setSalesFormOpen(false) : undefined} title={screen.entryKind === "sale" ? "Add a sale" : "Add an expense"} description="Saved values update the cashbook and account balance.">
+        <Card className="board-feature-card"><EntryForm kind={screen.entryKind} /></Card>
+      </RecordFormDisclosure>}
+      {screen.sections.map((section) => <Card className={`board-section-card${screen.title === "Sales" && section.title.startsWith("Daily sales") ? " board-sales-daily-table" : ""}`} key={section.title}>
         <div className="card-heading"><div><h2 className="card-title">{section.title}</h2><p className="card-subtitle">{section.detail}</p></div></div>
         {section.kind === "table" && screen.title === "Sales" || section.kind === "table" && screen.title === "Expenses" ? (
           hasRecordData ? <div className="table-scroll"><table className="data-table"><thead><tr><th>Date</th><th>Type</th><th>Category</th><th>Account</th><th>Amount</th><th>Status</th></tr></thead><tbody>{selectedEntries.map((entry) => <tr key={entry._id}><td>{fmtDate(entry.occurredOn)}</td><td>{entry.kind}</td><td>{entry.category}</td><td>{entry.account === "cash" ? "Cash" : "Mobile money"}</td><td>{fmt(entry.amountUgx)}</td><td><span className={`status-chip ${entry.state === "posted" ? "status-ok" : "status-warning"}`}>{entry.state}</span></td></tr>)}</tbody></table></div> : <EmptyPanel message="No entries yet." next="Add an entry to populate this view. The design preview figures are examples, not live business data." />
         ) : section.kind === "chart" ? <ChartPanel summary={stats} title={section.title} message={section.detail} currency={currency} scale={currencyScale} locale={locale} />
-          : section.kind === "workflow" ? <WorkflowPanel screen={screen} section={section.title} />
+          : section.kind === "workflow" ? <WorkflowPanel screen={screen} section={section.title} currency={currency} scale={currencyScale} businessDay={today} />
             : <EmptyPanel message={hasRecordData ? "Live records are available for the selected period." : "No records yet."} next={section.detail} />}
       </Card>)}
-      {screen.title === "Sales" || screen.title === "Expenses" ? <Card className="board-section-card">
+      {screen.title === "Sales" || screen.title === "Expenses" ? <Card className={`board-section-card${screen.title === "Sales" ? " board-sales-entry-list" : ""}`}>
         <div className="card-heading"><div><h2 className="card-title">Recent cashbook entries</h2><p className="card-subtitle">Latest saved records in this workspace.</p></div></div>
         {hasRecordData ? <div className="entry-list">{selectedEntries.map((entry) => <div className="entry-row" key={entry._id}><div className="entry-main"><span className="entry-icon">{entry.kind === "sale" ? <ArrowUpRight size={15} /> : <ArrowDownRight size={15} />}</span><div><div className="entry-description">{entry.note || entry.category}</div><div className="entry-meta">{fmtDate(entry.occurredOn)} · {entry.category} · {entry.account === "cash" ? "Cash" : "Mobile money"}</div></div></div><span className={`entry-amount ${entry.kind === "sale" ? "amount-positive" : "amount-negative"}`}>{entry.kind === "sale" ? "+" : "−"}{fmt(entry.amountUgx)}</span></div>)}</div> : <EmptyPanel message="No posted entries in this batch." next="Voided entries remain available in the audit history." />}
         {entries?.length === entryLimit && entryLimit < 500 && <button className="button" type="button" onClick={() => setEntryLimit(limit => Math.min(limit + 100, 500))}>Load more entries</button>}{entries?.length === 500 && <p className="muted-note">Showing the latest 500 matching records. Narrow the date range to review older entries.</p>}
       </Card> : null}
-    </div>
-    <div className="board-source-note">{screen.source} · Values shown here come from authorized Convex records. Sample values from the design references are not loaded into the workspace.</div>
+    </div>}
+    <div className="board-source-note">{screen.source} · Values shown here come from authorized workspace records. Sample values from the design references are not loaded into the workspace.</div>
   </>;
 }
 
@@ -382,8 +409,10 @@ function ChartPanel({ summary, title, message, currency, scale, locale }: { summ
   </>;
 }
 
-function WorkflowPanel({ screen, section }: { screen: BoardSpec; section: string }) {
+function WorkflowPanel({ screen, section, currency, scale, businessDay }: { screen: BoardSpec; section: string; currency: string; scale: number; businessDay: string }) {
   if (section === "Add an expense" || section === "Add a sale") return <div className="empty-state compact-empty"><strong>Entry capture is available above.</strong><span>Use the saved cashbook form so the balance and audit trail update together.</span></div>;
-  const settingsWorkflow = screen.settings || screen.title === "Bills" || screen.title === "Reconcile";
+  const recordKind = section === "Movement tracking status" ? "movement" : section === "Holdings tracking status" ? "holding" : section === "Loan tracking status" ? "loan" : section === "Bill tracking status" ? "bill" : null;
+  if (recordKind) return <OperationalRecordForm kind={recordKind} currency={currency} scale={scale} businessDay={businessDay} />;
+  const settingsWorkflow = screen.settings || screen.title === "Reconcile";
   return <div className="workflow-callout"><span className="workflow-indicator" /><div><strong>{settingsWorkflow ? `${section} is not configured yet` : `${section} is not available yet`}</strong><p className="muted-note">{settingsWorkflow ? "Review the related Finance or Rules settings. This card does not create financial records." : "This workflow is a product roadmap item; it does not yet save records or change account balances."}</p>{settingsWorkflow && <Link href={screen.title === "Reconcile" ? "/settings/rules" : "/settings/finance"} className="text-link">Review related settings →</Link>}</div></div>;
 }

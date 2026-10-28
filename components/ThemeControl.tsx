@@ -6,11 +6,11 @@ import { useEffect, useSyncExternalStore } from "react";
 type Theme = "system" | "light" | "dark";
 
 const storageKey = "mylesnet-theme";
-const nextTheme: Record<Theme, Theme> = {
-  system: "light",
-  light: "dark",
-  dark: "system",
-};
+const themes: { id: Theme; label: string; Icon: typeof Sun }[] = [
+  { id: "light", label: "Light", Icon: Sun },
+  { id: "dark", label: "Dark", Icon: Moon },
+  { id: "system", label: "System", Icon: Monitor },
+];
 
 function subscribe(onChange: () => void) {
   window.addEventListener("mylesnet-theme-change", onChange);
@@ -41,11 +41,7 @@ export function ThemeControl() {
     applyTheme(theme);
   }, [theme]);
 
-  const label = theme === "system" ? "System theme" : `${theme[0]?.toUpperCase()}${theme.slice(1)} theme`;
-  const Icon = theme === "dark" ? Moon : theme === "light" ? Sun : Monitor;
-
-  function cycleTheme() {
-    const updated = nextTheme[theme];
+  function selectTheme(updated: Theme) {
     if (updated === "system") window.localStorage.removeItem(storageKey);
     else window.localStorage.setItem(storageKey, updated);
     applyTheme(updated);
@@ -53,15 +49,21 @@ export function ThemeControl() {
   }
 
   return (
-    <button
-      className="icon-button theme-control"
-      type="button"
-      onClick={cycleTheme}
-      aria-label={`${label}. Switch to ${nextTheme[theme]} theme.`}
-      title={`${label} · click to change`}
-    >
-      <Icon size={17} aria-hidden="true" />
-      <span className="theme-control-label">{label}</span>
-    </button>
+    <div className="appearance-selector" role="group" aria-label="Appearance">
+      {themes.map(({ id, label, Icon }) => (
+        <button
+          key={id}
+          className={`appearance-option${theme === id ? " appearance-option-active" : ""}`}
+          type="button"
+          onClick={() => selectTheme(id)}
+          aria-label={`${label} theme`}
+          aria-pressed={theme === id}
+          title={`${label} theme`}
+        >
+          <Icon size={15} aria-hidden="true" />
+          <span>{label}</span>
+        </button>
+      ))}
+    </div>
   );
 }

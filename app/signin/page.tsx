@@ -16,7 +16,7 @@ export default function SignInPage() {
       const redirectTo = requested.startsWith("/") && !requested.startsWith("//") ? requested : "/dashboard";
       await signIn("google", { redirectTo });
     }
-    catch { setError("Google sign-in could not start. Please try again."); setPending(false); }
+    catch { setError("Sign-in could not start. Please try again."); setPending(false); }
   }
   return <main className="signin-frame">
     <section className="card signin-card">

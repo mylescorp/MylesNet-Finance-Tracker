@@ -4,6 +4,7 @@ import { currencies } from "countries-list/currencies";
 import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
+import type { Id } from "./_generated/dataModel";
 import { hasPermission, isOwnerMembership, PERMISSIONS } from "./accessControl";
 
 const roleIdValidator = v.id("workspaceRoles");
@@ -31,6 +32,38 @@ async function activeWorkspace(ctx: QueryCtx | MutationCtx) {
   return business ? { userId, membership, business } : null;
 }
 
+async function hasCurrencySensitiveData(ctx: MutationCtx, businessId: Id<"businesses">) {
+  const checks = await Promise.all([
+    ctx.db.query("entries").withIndex("by_business_and_date", q => q.eq("businessId", businessId)).first(),
+    ctx.db.query("operationalRecords").withIndex("by_business_and_kind_and_date", q => q.eq("businessId", businessId)).first(),
+    ctx.db.query("movements").withIndex("by_business_and_date", q => q.eq("businessId", businessId)).first(),
+    ctx.db.query("savingsHoldings").withIndex("by_business_and_active", q => q.eq("businessId", businessId)).first(),
+    ctx.db.query("savingsFlows").withIndex("by_business_and_date", q => q.eq("businessId", businessId)).first(),
+    ctx.db.query("loans").withIndex("by_business_and_status", q => q.eq("businessId", businessId)).first(),
+    ctx.db.query("loanRepayments").withIndex("by_business_and_date", q => q.eq("businessId", businessId)).first(),
+    ctx.db.query("bills").withIndex("by_business_and_active_due", q => q.eq("businessId", businessId)).first(),
+    ctx.db.query("billPayments").withIndex("by_business_and_date", q => q.eq("businessId", businessId)).first(),
+    ctx.db.query("reconciliations").withIndex("by_business_and_date", q => q.eq("businessId", businessId)).first(),
+    ctx.db.query("balanceAdjustments").withIndex("by_business_and_created_at", q => q.eq("businessId", businessId)).first(),
+  ]);
+  return checks.some(Boolean);
+}
+
+async function hasPostedLedgerActivity(ctx: QueryCtx | MutationCtx, businessId: Id<"businesses">) {
+  const checks = await Promise.all([
+    ctx.db.query("entries").withIndex("by_business_and_date", q => q.eq("businessId", businessId)).first(),
+    ctx.db.query("operationalRecords").withIndex("by_business_and_kind_and_date", q => q.eq("businessId", businessId)).first(),
+    ctx.db.query("movements").withIndex("by_business_and_date", q => q.eq("businessId", businessId)).first(),
+    ctx.db.query("savingsFlows").withIndex("by_business_and_date", q => q.eq("businessId", businessId)).first(),
+    ctx.db.query("loans").withIndex("by_business_and_status", q => q.eq("businessId", businessId)).first(),
+    ctx.db.query("loanRepayments").withIndex("by_business_and_date", q => q.eq("businessId", businessId)).first(),
+    ctx.db.query("billPayments").withIndex("by_business_and_date", q => q.eq("businessId", businessId)).first(),
+    ctx.db.query("reconciliations").withIndex("by_business_and_date", q => q.eq("businessId", businessId)).first(),
+    ctx.db.query("balanceAdjustments").withIndex("by_business_and_created_at", q => q.eq("businessId", businessId)).first(),
+  ]);
+  return checks.some(Boolean);
+}
+
 function defaults() {
   return {
     locale: "en-UG",
@@ -42,6 +75,7 @@ function defaults() {
     weakDaySalesUgx: 50000,
     monthlySalesTargetUgx: 0,
     monthlyExpenseWarningUgx: 0,
+    lowCashAlertUgx: 100000,
     duplicateWindowDays: 1,
     requireEntryNote: false,
     negativeBalanceWarning: true,
@@ -56,7 +90,10 @@ export const overview = query({
     if (!(await hasPermission(ctx, current.membership, "settings.view"))) return { access: "restricted" as const, role: current.membership.role };
     const prefs = await ctx.db.query("workspacePreferences").withIndex("by_business", q => q.eq("businessId", current.business._id)).unique();
     const firstEntry = await ctx.db.query("entries").withIndex("by_business_and_date", q => q.eq("businessId", current.business._id)).first();
+    const firstOperationalRecord = await ctx.db.query("operationalRecords").withIndex("by_business_and_kind_and_date", q => q.eq("businessId", current.business._id)).first();
     const balances = await ctx.db.query("accountBalances").withIndex("by_business_and_account", q => q.eq("businessId", current.business._id)).take(2);
+    const firstBalanceAdjustment = await ctx.db.query("balanceAdjustments").withIndex("by_business_and_created_at", q => q.eq("businessId", current.business._id)).first();
+    const openingBalancesLocked = await hasPostedLedgerActivity(ctx, current.business._id);
     const fallback = defaults();
     const digits = currencyMinorDigits(current.business.currency);
     const scale = 10 ** digits;
@@ -64,12 +101,14 @@ export const overview = query({
       access: "ready" as const,
       role: current.membership.role,
       canUpdate: await hasPermission(ctx, current.membership, "settings.update"),
+      canManageBalanceAdjustments: await hasPermission(ctx, current.membership, "balanceAdjustments.manage"),
       businessName: current.business.name,
       countryCode: current.business.countryCode ?? "UG",
       currency: current.business.currency,
       currencyMinorDigits: digits,
       settingsUpdatedAt: prefs?.updatedAt ?? current.business.createdAt,
-      currencyLocked: Boolean(firstEntry || balances.some(b => (b.openingBalanceUgx ?? 0) !== 0)),
+      currencyLocked: Boolean(firstEntry || firstOperationalRecord || firstBalanceAdjustment || balances.some(b => (b.openingBalanceUgx ?? 0) !== 0)),
+      openingBalancesLocked,
       cashOpeningBalance: (balances.find(b => b.account === "cash")?.openingBalanceUgx ?? 0) / scale,
       mobileOpeningBalance: (balances.find(b => b.account === "mobile_money")?.openingBalanceUgx ?? 0) / scale,
       timezone: current.business.timezone,
@@ -83,6 +122,7 @@ export const overview = query({
       weakDaySalesUgx: (prefs?.weakDaySalesUgx ?? fallback.weakDaySalesUgx * scale) / scale,
       monthlySalesTargetUgx: (prefs?.monthlySalesTargetUgx ?? fallback.monthlySalesTargetUgx * scale) / scale,
       monthlyExpenseWarningUgx: (prefs?.monthlyExpenseWarningUgx ?? fallback.monthlyExpenseWarningUgx * scale) / scale,
+      lowCashAlertUgx: (prefs?.lowCashAlertUgx ?? fallback.lowCashAlertUgx * scale) / scale,
       duplicateWindowDays: prefs?.duplicateWindowDays ?? fallback.duplicateWindowDays,
       requireEntryNote: prefs?.requireEntryNote ?? fallback.requireEntryNote,
       negativeBalanceWarning: prefs?.negativeBalanceWarning ?? fallback.negativeBalanceWarning,
@@ -127,7 +167,7 @@ export const update = mutation({
     dateFormat: v.union(v.literal("DD/MM/YYYY"), v.literal("MM/DD/YYYY"), v.literal("YYYY-MM-DD")),
     fiscalYearStartMonth: v.number(), incomeCategories: v.array(v.string()), expenseCategories: v.array(v.string()),
     highExpenseReviewUgx: v.number(), weakDaySalesUgx: v.number(), monthlySalesTargetUgx: v.number(),
-    monthlyExpenseWarningUgx: v.number(), duplicateWindowDays: v.number(), requireEntryNote: v.boolean(),
+    monthlyExpenseWarningUgx: v.number(), lowCashAlertUgx: v.number(), duplicateWindowDays: v.number(), requireEntryNote: v.boolean(),
     negativeBalanceWarning: v.boolean(), cashOpeningBalance: v.number(), mobileOpeningBalance: v.number(),
   },
   returns: v.number(),
@@ -135,6 +175,7 @@ export const update = mutation({
     const current = await activeWorkspace(ctx);
     if (!current || !(await hasPermission(ctx, current.membership, "settings.update"))) throw new Error("You do not have permission to change workspace settings.");
     const existing = await ctx.db.query("workspacePreferences").withIndex("by_business", q => q.eq("businessId", current.business._id)).unique();
+    const balances = await ctx.db.query("accountBalances").withIndex("by_business_and_account", q => q.eq("businessId", current.business._id)).take(2);
     if (args.expectedSettingsUpdatedAt !== (existing?.updatedAt ?? current.business.createdAt)) {
       throw new Error("These settings changed in another session. Refresh this page before saving again.");
     }
@@ -147,7 +188,7 @@ export const update = mutation({
     try { new Intl.DateTimeFormat(args.locale); new Intl.DateTimeFormat("en", { timeZone: args.timezone }); scale = 10 ** (currencyMinorDigits(args.currency) ?? 0); new Intl.NumberFormat("en", { style: "currency", currency: args.currency }); }
     catch { throw new Error("Choose a valid locale and IANA timezone."); }
     if (!Number.isInteger(args.fiscalYearStartMonth) || args.fiscalYearStartMonth < 1 || args.fiscalYearStartMonth > 12) throw new Error("Fiscal year start must be a month from 1 to 12.");
-    for (const [label, amount] of [["High expense review", args.highExpenseReviewUgx], ["Weak day sales", args.weakDaySalesUgx], ["Monthly sales target", args.monthlySalesTargetUgx], ["Monthly expense warning", args.monthlyExpenseWarningUgx]] as const) {
+    for (const [label, amount] of [["High expense review", args.highExpenseReviewUgx], ["Weak day sales", args.weakDaySalesUgx], ["Monthly sales target", args.monthlySalesTargetUgx], ["Monthly expense warning", args.monthlyExpenseWarningUgx], ["Low cash alert", args.lowCashAlertUgx]] as const) {
       if (amount < 0 || !isValidCurrencyAmount(amount, scale)) throw new Error(`${label} must be a non-negative amount using the selected currency's decimal places.`);
     }
     if (!Number.isInteger(args.duplicateWindowDays) || args.duplicateWindowDays < 0 || args.duplicateWindowDays > 30) throw new Error("Duplicate review window must be between 0 and 30 days.");
@@ -162,28 +203,30 @@ export const update = mutation({
     }
     const cashOpeningMinor = toMinorUnits(args.cashOpeningBalance, scale);
     const mobileOpeningMinor = toMinorUnits(args.mobileOpeningBalance, scale);
+    if ((cashOpeningMinor !== (balances.find(b => b.account === "cash")?.openingBalanceUgx ?? 0) || mobileOpeningMinor !== (balances.find(b => b.account === "mobile_money")?.openingBalanceUgx ?? 0)) && !(await hasPermission(ctx, current.membership, "balanceAdjustments.manage"))) {
+      throw new Error("Your role cannot change opening balances.");
+    }
     const highExpenseReviewMinor = toMinorUnits(args.highExpenseReviewUgx, scale);
     const weakDaySalesMinor = toMinorUnits(args.weakDaySalesUgx, scale);
     const monthlySalesTargetMinor = toMinorUnits(args.monthlySalesTargetUgx, scale);
     const monthlyExpenseWarningMinor = toMinorUnits(args.monthlyExpenseWarningUgx, scale);
-    if (args.currency !== current.business.currency) {
-      const firstEntry = await ctx.db.query("entries").withIndex("by_business_and_date", q => q.eq("businessId", current.business._id)).first();
-      const balances = await ctx.db.query("accountBalances").withIndex("by_business_and_account", q => q.eq("businessId", current.business._id)).take(2);
-      if (firstEntry || balances.some(b => (b.openingBalanceUgx ?? 0) !== 0)) throw new Error("Currency is locked after the first opening balance or cashbook entry so existing amounts are never relabelled. Contact support for a reviewed currency migration.");
-    }
+    const firstEntry = await ctx.db.query("entries").withIndex("by_business_and_date", q => q.eq("businessId", current.business._id)).first();
+    const currencySensitiveDataExists = await hasCurrencySensitiveData(ctx, current.business._id);
+    const ledgerActivityExists = await hasPostedLedgerActivity(ctx, current.business._id);
+    const openingBalancesLocked = await hasPostedLedgerActivity(ctx, current.business._id);
+    if (args.currency !== current.business.currency && currencySensitiveDataExists) throw new Error("Currency is locked after financial activity so existing amounts are never relabelled. Contact support for a reviewed currency migration.");
     const businessPatch = {
       name: businessName, countryCode: args.countryCode, currency: args.currency,
       timezone: args.timezone, weekStartsOn: args.weekStartsOn,
     };
     await ctx.db.patch("businesses", current.business._id, businessPatch);
-    const firstEntry = await ctx.db.query("entries").withIndex("by_business_and_date", q => q.eq("businessId", current.business._id)).first();
     const currentBalances = await ctx.db.query("accountBalances").withIndex("by_business_and_account", q => q.eq("businessId", current.business._id)).take(2);
     const cashDoc = currentBalances.find(b => b.account === "cash");
     const mobileDoc = currentBalances.find(b => b.account === "mobile_money");
-    if (firstEntry && (cashOpeningMinor !== (cashDoc?.openingBalanceUgx ?? 0) || mobileOpeningMinor !== (mobileDoc?.openingBalanceUgx ?? 0))) {
+    if ((ledgerActivityExists || firstEntry) && (cashOpeningMinor !== (cashDoc?.openingBalanceUgx ?? 0) || mobileOpeningMinor !== (mobileDoc?.openingBalanceUgx ?? 0))) {
       throw new Error("Opening balances are locked after the first transaction. Use an auditable adjustment entry instead.");
     }
-    if (!firstEntry) {
+    if (!ledgerActivityExists && !firstEntry) {
       const now = Date.now();
       if (cashDoc) await ctx.db.patch("accountBalances", cashDoc._id, { balanceUgx: cashOpeningMinor, openingBalanceUgx: cashOpeningMinor, updatedAt: now });
       else if (cashOpeningMinor !== 0) await ctx.db.insert("accountBalances", { businessId: current.business._id, account: "cash", balanceUgx: cashOpeningMinor, openingBalanceUgx: cashOpeningMinor, updatedAt: now });
@@ -221,6 +264,7 @@ export const update = mutation({
           expenseCategories: existing?.expenseCategories ?? ["Transport", "Supplies", "Utilities", "Rent", "Equipment", "Other expense"],
           highExpenseReview: existing?.highExpenseReviewUgx ?? 500000, weakDaySales: existing?.weakDaySalesUgx ?? 50000,
           monthlySalesTarget: existing?.monthlySalesTargetUgx ?? 0, monthlyExpenseWarning: existing?.monthlyExpenseWarningUgx ?? 0,
+          lowCashAlert: existing?.lowCashAlertUgx ?? 100000,
           duplicateWindowDays: existing?.duplicateWindowDays ?? 1, requireEntryNote: existing?.requireEntryNote ?? false,
           negativeBalanceWarning: existing?.negativeBalanceWarning ?? true,
           cashOpeningBalanceMinor: cashDoc?.openingBalanceUgx ?? 0,
@@ -289,18 +333,20 @@ export const accessOverview = query({
   handler: async (ctx) => {
     const current = await activeWorkspace(ctx);
     if (!current || !(await hasPermission(ctx, current.membership, "access.view"))) return { access: "restricted" as const, members: [], invitations: [], audit: [], roles: [], pendingUsers: [] };
-    const [memberships, invitations, audit, roles, users] = await Promise.all([
+    const [memberships, invitations, audit, roles, users, partners] = await Promise.all([
       ctx.db.query("memberships").withIndex("by_business_and_user", q => q.eq("businessId", current.business._id)).take(100),
       ctx.db.query("invitations").withIndex("by_business_and_active", q => q.eq("businessId", current.business._id).eq("active", true)).take(100),
       ctx.db.query("auditEvents").withIndex("by_business_and_time", q => q.eq("businessId", current.business._id)).order("desc").take(20),
       ctx.db.query("workspaceRoles").withIndex("by_business", q => q.eq("businessId", current.business._id)).take(100),
       ctx.db.query("users").order("desc").take(500),
+      ctx.db.query("partners").withIndex("by_business_and_active", q => q.eq("businessId", current.business._id)).take(100),
     ]);
+    const partnerNames = new Map(partners.map(partner => [partner._id, partner.name]));
     const members = await Promise.all(memberships.map(async m => {
       const user = await ctx.db.get("users", m.userId);
       const assigned = m.roleId ? roles.find(r => r._id === m.roleId) : undefined;
       const legacyTemplate = roles.find(r => r.builtIn === m.role);
-      return { id: m._id, role: assigned?.name ?? m.role, roleId: m.roleId ?? legacyTemplate?._id ?? null, active: m.active, email: user?.email ?? "Signed-in user", createdAt: m.createdAt };
+      return { id: m._id, role: assigned?.name ?? m.role, roleId: m.roleId ?? legacyTemplate?._id ?? null, partnerName: m.partnerId ? partnerNames.get(m.partnerId) : undefined, active: m.active, email: user?.email ?? "Signed-in user", createdAt: m.createdAt };
     }));
     const memberUserIds = new Set(memberships.filter(m => m.active).map(m => m.userId));
     const pendingUsers = users.filter(u => !memberUserIds.has(u._id)).slice(0, 200).map(u => ({ id: u._id, email: u.email ?? "Google account", createdAt: u._creationTime }));
@@ -318,7 +364,7 @@ export const createRole = mutation({
     const permissions = [...new Set(args.permissions)];
     if (name.length < 2 || name.length > 50) throw new Error("Role names must be 2 to 50 characters.");
     if (permissions.some(p => !(PERMISSIONS as readonly string[]).includes(p))) throw new Error("Choose permissions from the supported list.");
-    if (!isOwnerMembership(current.membership) && permissions.some(p => p === "access.manage" || p === "roles.manage" || p === "data.export")) throw new Error("Only the workspace owner can grant privileged role permissions.");
+    if (!isOwnerMembership(current.membership) && permissions.some(p => p === "access.manage" || p === "roles.manage" || p === "data.export" || p === "imports.manage" || p === "integrations.manage" || p === "balanceAdjustments.manage" || p === "partners.distributions.manage" || p === "partners.distributions.approve")) throw new Error("Only the workspace owner can grant privileged role permissions.");
     const existing = await ctx.db.query("workspaceRoles").withIndex("by_business", q => q.eq("businessId", current.business._id)).take(100);
     if (existing.some(r => r.name.toLowerCase() === name.toLowerCase())) throw new Error("A role with that name already exists.");
     const now = Date.now();
@@ -339,6 +385,7 @@ export const initializeRoleTemplates = mutation({
       { name: "Owner", builtIn: "owner" as const, permissions: [...PERMISSIONS], description: "Full workspace control." },
       { name: "Cashier", builtIn: "cashier" as const, permissions: ["dashboard.view", "sales.view", "sales.create", "expenses.view", "expenses.create", "reports.view"], description: "Record sales and expenses and view standard reports." },
       { name: "Partner", builtIn: "partner" as const, permissions: ["dashboard.view", "partners.view"], description: "View partner area only; financial totals are not exposed." },
+      { name: "Finance Approver", builtIn: "finance_approver" as const, permissions: ["partners.view", "partners.distributions.approve"], description: "Review partner distributions without workspace-wide finance access." },
     ];
     for (const template of templates) if (!roles.some(r => r.builtIn === template.builtIn)) await ctx.db.insert("workspaceRoles", { businessId: current.business._id, ...template, active: true, createdBy: current.userId, createdAt: now, updatedAt: now });
     const seeded = await ctx.db.query("workspaceRoles").withIndex("by_business", q => q.eq("businessId", current.business._id)).take(100);
@@ -364,7 +411,7 @@ export const updateRole = mutation({
     if (role.builtIn === "owner") throw new Error("The protected Owner role cannot be changed.");
     const name = args.name.trim(); const permissions = [...new Set(args.permissions)];
     if (name.length < 2 || name.length > 50 || permissions.some(p => !(PERMISSIONS as readonly string[]).includes(p))) throw new Error("Enter a valid role name and permission set.");
-    if (!isOwnerMembership(current.membership) && permissions.some(p => p === "access.manage" || p === "roles.manage" || p === "data.export")) throw new Error("Only the workspace owner can grant privileged role permissions.");
+    if (!isOwnerMembership(current.membership) && permissions.some(p => p === "access.manage" || p === "roles.manage" || p === "data.export" || p === "imports.manage" || p === "integrations.manage" || p === "balanceAdjustments.manage" || p === "partners.distributions.manage" || p === "partners.distributions.approve")) throw new Error("Only the workspace owner can grant privileged role permissions.");
     const duplicate = await ctx.db.query("workspaceRoles").withIndex("by_business", q => q.eq("businessId", current.business._id)).take(100);
     if (duplicate.some(r => r._id !== role._id && r.name.toLowerCase() === name.toLowerCase())) throw new Error("A role with that name already exists.");
     if (!args.active && role.builtIn) throw new Error("Built-in role templates cannot be deactivated.");
@@ -385,7 +432,7 @@ export const grantPendingUser = mutation({
     const current = await activeWorkspace(ctx); const role = await ctx.db.get("workspaceRoles", args.roleId); const user = await ctx.db.get("users", args.userId);
     if (!current || !(await hasPermission(ctx, current.membership, "access.manage")) || !role || role.businessId !== current.business._id || !role.active || !user) throw new Error("User, role, or access permission is unavailable.");
     if (role.builtIn === "owner") throw new Error("Owner access can only be granted through the verified ownership process.");
-    if (!isOwnerMembership(current.membership) && role.permissions.some(p => p === "access.manage" || p === "roles.manage" || p === "data.export")) throw new Error("Only the workspace owner can assign a privileged role.");
+    if (!isOwnerMembership(current.membership) && role.permissions.some(p => p === "access.manage" || p === "roles.manage" || p === "data.export" || p === "imports.manage" || p === "integrations.manage" || p === "balanceAdjustments.manage" || p === "partners.distributions.manage" || p === "partners.distributions.approve")) throw new Error("Only the workspace owner can assign a privileged role.");
     const existing = await ctx.db.query("memberships").withIndex("by_business_and_user", q => q.eq("businessId", current.business._id).eq("userId", user._id)).unique();
     if (existing?.active) throw new Error("This user already has active workspace access.");
     if (existing && existing.role === "owner" && !existing.roleId) throw new Error("Owner access cannot be reassigned here.");
@@ -408,7 +455,7 @@ export const invite = mutation({
     const email = args.email.trim().toLowerCase();
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error("Enter a valid email address.");
     if (assignedRole.builtIn === "owner") throw new Error("Owner access can only be granted through the verified ownership process.");
-    if (!isOwnerMembership(current.membership) && assignedRole.permissions.some(p => p === "access.manage" || p === "roles.manage" || p === "data.export")) throw new Error("Only the workspace owner can invite a privileged role.");
+    if (!isOwnerMembership(current.membership) && assignedRole.permissions.some(p => p === "access.manage" || p === "roles.manage" || p === "data.export" || p === "imports.manage" || p === "integrations.manage" || p === "balanceAdjustments.manage" || p === "partners.distributions.manage" || p === "partners.distributions.approve")) throw new Error("Only the workspace owner can invite a privileged role.");
     const pending = await ctx.db.query("invitations").withIndex("by_business_and_active", q => q.eq("businessId", current.business._id).eq("active", true)).take(100);
     if (pending.some(i => i.email.toLowerCase() === email)) throw new Error("An active invitation already exists for this email.");
     const bytes = new Uint8Array(32); crypto.getRandomValues(bytes);
@@ -443,7 +490,7 @@ export const updateMember = mutation({
     if (!current || !(await hasPermission(ctx, current.membership, "access.manage")) || !member || member.businessId !== current.business._id || !assignedRole || assignedRole.businessId !== current.business._id || !assignedRole.active) throw new Error("Member, role, or access permission is unavailable.");
     if (isOwnerMembership(member) || member.role === "owner" && !member.roleId) throw new Error("Owner access cannot be changed here. Use the verified ownership transfer process.");
     if (assignedRole.builtIn === "owner") throw new Error("Owner access can only be granted through the verified ownership process.");
-    if (!isOwnerMembership(current.membership) && assignedRole.permissions.some(p => p === "access.manage" || p === "roles.manage" || p === "data.export")) throw new Error("Only the workspace owner can assign a privileged role.");
+    if (!isOwnerMembership(current.membership) && assignedRole.permissions.some(p => p === "access.manage" || p === "roles.manage" || p === "data.export" || p === "imports.manage" || p === "integrations.manage" || p === "balanceAdjustments.manage" || p === "partners.distributions.manage" || p === "partners.distributions.approve")) throw new Error("Only the workspace owner can assign a privileged role.");
     if (member.userId === current.userId && !args.active) throw new Error("You cannot deactivate your own account.");
     await ctx.db.patch("memberships", args.membershipId, { role: assignedRole.name, roleId: assignedRole._id, active: args.active });
     await ctx.db.insert("auditEvents", { businessId: current.business._id, actorId: current.userId, action: "member.access.updated", entityType: "membership", entityId: args.membershipId, occurredAt: Date.now(), summary: `Changed a member to ${assignedRole.name} (${args.active ? "active" : "inactive"}).` });
@@ -463,6 +510,11 @@ export const acceptInvite = mutation({
     const invite = await ctx.db.query("invitations").withIndex("by_token_hash", q => q.eq("tokenHash", tokenHash)).unique();
     if (!invite || !invite.active || invite.expiresAt < Date.now()) throw new Error("This invitation has expired or was already used.");
     if (invite.email.toLowerCase() !== user.email.toLowerCase()) throw new Error("Sign in using the invited email address.");
+    if ((invite.role === "partner") !== Boolean(invite.partnerId)) throw new Error("This partner invitation needs to be reviewed by the workspace owner before it can be accepted.");
+    if (invite.partnerId) {
+      const partner = await ctx.db.get("partners", invite.partnerId);
+      if (!partner || partner.businessId !== invite.businessId || !partner.active) throw new Error("This partner account is no longer active. Ask the workspace owner for a new invitation.");
+    }
     const existing = await ctx.db.query("memberships").withIndex("by_business_and_user", q => q.eq("businessId", invite.businessId).eq("userId", userId)).unique();
     if (existing?.active) throw new Error("You already have access to this workspace.");
     const templates = invite.roleId ? [] : await ctx.db.query("workspaceRoles").withIndex("by_business", q => q.eq("businessId", invite.businessId)).take(100);

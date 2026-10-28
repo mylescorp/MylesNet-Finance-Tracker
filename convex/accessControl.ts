@@ -11,8 +11,9 @@ export const PERMISSIONS = [
   "loans.view", "loans.create", "loans.update", "loans.approve", "loans.repay", "loans.void",
   "bills.view", "bills.create", "bills.update", "bills.pay", "bills.void",
   "reconcile.view", "reconcile.create", "reconcile.resolve",
-  "reports.view", "partners.view", "partners.manage",
+  "reports.view", "partners.view", "partners.manage", "partners.distributions.manage", "partners.distributions.approve",
   "settings.view", "settings.update", "data.export",
+  "imports.manage", "integrations.manage", "balanceAdjustments.manage",
   "access.view", "access.manage", "roles.manage", "audit.view",
 ] as const;
 export type Permission = typeof PERMISSIONS[number];
@@ -20,6 +21,7 @@ export type Permission = typeof PERMISSIONS[number];
 const OWNER = [...PERMISSIONS];
 const CASHIER: Permission[] = ["dashboard.view", "sales.view", "sales.create", "expenses.view", "expenses.create", "reports.view"];
 const PARTNER: Permission[] = ["dashboard.view", "partners.view"];
+const FINANCE_APPROVER: Permission[] = ["partners.view", "partners.distributions.approve"];
 
 export async function permissionsForMembership(ctx: QueryCtx | MutationCtx, membership: Doc<"memberships">) {
   if (membership.role === "owner" && !membership.roleId) return OWNER;
@@ -30,6 +32,7 @@ export async function permissionsForMembership(ctx: QueryCtx | MutationCtx, memb
   }
   if (membership.role === "cashier") return CASHIER;
   if (membership.role === "partner") return PARTNER;
+  if (membership.role === "finance_approver") return FINANCE_APPROVER;
   return [] as string[];
 }
 

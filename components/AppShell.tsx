@@ -1,85 +1,162 @@
 "use client";
 
-import { useAuthActions } from "@convex-dev/auth/react";
 import { useQuery } from "convex/react";
 import {
-  Activity, ArrowDownUp, BarChart3, Bell, ChevronDown, FileBarChart,
-  HandCoins, LayoutDashboard, LogOut, Menu, Receipt, Settings,
-  Wallet, X,
+  Activity, ArrowDownUp, BarChart3, Bell, CalendarDays, ChevronDown,
+  ChevronsLeft, ChevronsRight, FileBarChart, HandCoins, LayoutDashboard,
+  Menu, PiggyBank, Receipt, Settings2, UsersRound, Wallet, X,
 } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
-import { ReactNode, useState } from "react";
-import { ThemeControl } from "@/components/ThemeControl";
+import { usePathname, useRouter } from "next/navigation";
+import { ReactNode, useCallback, useEffect, useRef, useState } from "react";
+import { AccountDrawer, ProfileAvatar } from "@/components/account/AccountDrawer";
 import { GlobalSearch } from "@/components/workspace/GlobalSearch";
 import { api } from "@/convex/_generated/api";
 
-const nav = [
-  { label: "Dashboard", href: "/dashboard", icon: LayoutDashboard, permission: "dashboard.view" },
-  { label: "Analytics", href: "/analytics", icon: BarChart3, permission: "analytics.view" },
-  { label: "Sales", href: "/sales", icon: Receipt, permission: "sales.view" },
-  { label: "Expenses", href: "/expenses", icon: Wallet, permission: "expenses.view" },
-  { label: "Movements", href: "/movements", icon: ArrowDownUp, permission: "movements.view" },
-  { label: "Savings", href: "/savings", icon: HandCoins, permission: "savings.view" },
-  { label: "Loans", href: "/loans", icon: FileBarChart, permission: "loans.view" },
-  { label: "Daily Report", href: "/daily-report", icon: Activity, permission: "dailyReport.view" },
-  { label: "Monthly P&L", href: "/monthly-pnl", icon: FileBarChart, permission: "monthlyPnl.view" },
-  { label: "Partners", href: "/partners", icon: HandCoins, permission: "partners.view" },
-  { label: "Bills", href: "/bills", icon: Receipt, permission: "bills.view" },
-  { label: "Reconcile", href: "/reconcile", icon: ArrowDownUp, permission: "reconcile.view" },
-  { label: "Settings", href: "/settings/general", icon: Settings, permission: "settings.view" },
+const navGroups = [
+  { label: "Overview", items: [
+    { label: "Dashboard", href: "/dashboard", icon: LayoutDashboard, permission: "dashboard.view" },
+    { label: "Analytics", href: "/analytics", icon: BarChart3, permission: "analytics.view" },
+  ] },
+  { label: "Cashbook", items: [
+    { label: "Sales", href: "/sales", icon: Receipt, permission: "sales.view" },
+    { label: "Expenses", href: "/expenses", icon: Wallet, permission: "expenses.view" },
+    { label: "Movements", href: "/movements", icon: ArrowDownUp, permission: "movements.view" },
+    { label: "Savings", href: "/savings", icon: PiggyBank, permission: "savings.view" },
+    { label: "Loans", href: "/loans", icon: HandCoins, permission: "loans.view" },
+    { label: "Bills", href: "/bills", icon: CalendarDays, permission: "bills.view" },
+  ] },
+  { label: "Reports", items: [
+    { label: "Daily Report", href: "/daily-report", icon: Activity, permission: "dailyReport.view" },
+    { label: "Monthly P&L", href: "/monthly-pnl", icon: FileBarChart, permission: "monthlyPnl.view" },
+    { label: "Reconcile", href: "/reconcile", icon: ArrowDownUp, permission: "reconcile.view" },
+  ] },
+  { label: "Workspace", items: [
+    { label: "Partners", href: "/partners", icon: UsersRound, permission: "partners.view" },
+    { label: "Settings", href: "/settings/general", icon: Settings2, permission: "settings.view" },
+  ] },
 ];
 
 export function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
-  const { signOut } = useAuthActions();
+  const router = useRouter();
   const access = useQuery(api.workspace.currentAccess, {});
   const context = useQuery(api.settings.runtimeContext, {});
+  const profile = useQuery(api.users.profile, {});
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [collapsed, setCollapsed] = useState(false);
+  const [accountReturnTo, setAccountReturnTo] = useState("/dashboard");
+  const menuButtonRef = useRef<HTMLButtonElement>(null);
+  const sidebarCloseRef = useRef<HTMLButtonElement>(null);
   const accountLabel = access?.access === "ready" ? access.businessName : "My account";
-  const permissions = access?.access === "ready" ? access.permissions ?? [] : null;
-  const visibleNav = nav.filter(item => {
-    if (permissions === null) return item.href === "/dashboard";
-    return permissions.includes(item.permission) || item.label === "Settings" && ["access.view", "roles.manage", "data.export"].some(p => permissions.includes(p));
-  });
+  const financeApprover = access?.access === "ready" && access.permissions.includes("partners.distributions.approve") && !access.permissions.includes("dashboard.view");
+  const permissions = access?.access === "ready" ? access.permissions : [];
+  const visibleNavGroups = navGroups.map(group => ({
+    ...group,
+    items: group.items.filter(item => financeApprover ? item.href === "/partners" : access?.access !== "ready"
+      ? item.href === "/dashboard"
+      : permissions.includes(item.permission) || item.href === "/settings/general" && ["access.view", "roles.manage", "data.export"].some(permission => permissions.includes(permission))),
+  })).filter(group => group.items.length > 0);
+  const activePage = navGroups.flatMap(group => group.items).find(item => pathname === item.href || pathname.startsWith(`${item.href}/`));
+  const settingsPageLabels: Record<string, string> = {
+    general: "General settings", finance: "Finance settings", rules: "Rules",
+    data: "Data", access: "Access", releases: "Releases",
+  };
+  const routePageLabel = pathname === "/account" ? "Your account" : pathname === "/add-entry" ? "Add an entry" : activePage?.label
+    ?? (pathname.startsWith("/settings/") ? settingsPageLabels[pathname.split("/")[2]] ?? "Settings" : undefined)
+    ?? (pathname === "/issues" ? "Needs attention" : "Workspace");
+  const closeAccount = useCallback(() => {
+    router.replace(accountReturnTo === "/account" ? "/dashboard" : accountReturnTo);
+  }, [accountReturnTo, router]);
+  useEffect(() => {
+    const media = window.matchMedia("(max-width: 760px)");
+    if (!mobileOpen || !media.matches) return;
+    const previousOverflow = document.body.style.overflow;
+    const menuButton = menuButtonRef.current;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setMobileOpen(false);
+      if (event.key !== "Tab") return;
+      const drawer = document.getElementById("workspace-sidebar");
+      const focusable = drawer?.querySelectorAll<HTMLElement>('a[href], button:not([disabled]), [tabindex]:not([tabindex="-1"])');
+      if (!focusable?.length) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && (document.activeElement === first || !drawer?.contains(document.activeElement))) {
+        event.preventDefault(); last.focus();
+      } else if (!event.shiftKey && (document.activeElement === last || !drawer?.contains(document.activeElement))) {
+        event.preventDefault(); first.focus();
+      }
+    };
+    const closeOnDesktop = (event: MediaQueryListEvent) => { if (!event.matches) setMobileOpen(false); };
+    document.body.style.overflow = "hidden";
+    window.addEventListener("keydown", closeOnEscape);
+    media.addEventListener("change", closeOnDesktop);
+    sidebarCloseRef.current?.focus();
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener("keydown", closeOnEscape);
+      media.removeEventListener("change", closeOnDesktop);
+      if (media.matches) menuButton?.focus();
+    };
+  }, [mobileOpen]);
 
   return (
-    <div className="app-frame">
+    <div className={`app-frame${collapsed ? " app-frame-collapsed" : ""}${mobileOpen ? " app-frame-menu-open" : ""}`}>
+      <aside className="app-sidebar" id="workspace-sidebar" aria-label="Workspace sidebar" role={mobileOpen ? "dialog" : undefined} aria-modal={mobileOpen || undefined}>
+        <div className="sidebar-brand-row">
+          <Link className="sidebar-brand" href="/dashboard" aria-label="MylesNet Finance home" onClick={() => setMobileOpen(false)}>
+            <Image src="/brand/logo.png" width={174} height={52} alt="MylesNet" priority />
+          </Link>
+          <button className="sidebar-collapse-button" type="button" aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"} aria-pressed={collapsed} onClick={() => setCollapsed(value => !value)} title={collapsed ? "Expand sidebar" : "Collapse sidebar"}>
+            {collapsed ? <ChevronsRight size={17} /> : <ChevronsLeft size={17} />}
+          </button>
+          <button ref={sidebarCloseRef} className="sidebar-mobile-close" type="button" aria-label="Close navigation" onClick={() => setMobileOpen(false)}><X size={19} /></button>
+        </div>
+        <div className="sidebar-workspace" aria-label={`Current workspace: ${accountLabel}`} title={accountLabel}>
+          <span className="sidebar-workspace-mark" aria-hidden="true">M</span>
+          <span className="sidebar-workspace-copy"><strong>{accountLabel}</strong><small>FINANCE WORKSPACE</small></span>
+          <ChevronDown className="sidebar-workspace-chevron" size={15} aria-hidden="true" />
+        </div>
+        <nav className="sidebar-nav" aria-label="Main navigation">
+          {visibleNavGroups.map(group => <section className="sidebar-nav-group" key={group.label} aria-label={group.label}>
+            <h2 className="sidebar-group-label">{group.label}</h2>
+            {group.items.map(item => {
+              const Icon = item.icon;
+              const active = pathname === item.href || pathname.startsWith(`${item.href}/`);
+              return <Link className={`sidebar-link${active ? " sidebar-link-active" : ""}`} href={item.href} key={item.href} aria-current={active ? "page" : undefined} title={collapsed ? item.label : undefined} onClick={() => setMobileOpen(false)}>
+                <span className="sidebar-link-icon"><Icon size={18} strokeWidth={1.9} aria-hidden="true" /></span><span className="sidebar-link-label">{item.label}</span>
+                {active && <span className="sidebar-active-indicator" aria-hidden="true" />}
+              </Link>;
+            })}
+          </section>)}
+        </nav>
+        <div className="sidebar-bottom">
+          <div className="sidebar-support"><span className="sidebar-support-dot" /><span><strong>Workspace protected</strong><small>Secure finance access</small></span></div>
+        </div>
+      </aside>
+      {mobileOpen && <button className="sidebar-backdrop" type="button" aria-label="Close navigation" onClick={() => setMobileOpen(false)} />}
+      <div className="app-main-column">
       <header className="app-header">
-        <Link className="brand-mark" href="/dashboard" aria-label="MylesNet home">
-          <Image src="/brand/logo.png" width={174} height={52} alt="MylesNet" priority />
-        </Link>
-        <button className="button mobile-menu-button" type="button" aria-label={mobileOpen ? "Close navigation" : "Open navigation"} aria-expanded={mobileOpen} onClick={() => setMobileOpen((open) => !open)}>
+        <button ref={menuButtonRef} className="button mobile-menu-button" type="button" aria-label={mobileOpen ? "Close navigation" : "Open navigation"} aria-expanded={mobileOpen} aria-controls="workspace-sidebar" onClick={() => setMobileOpen((open) => !open)}>
           {mobileOpen ? <X size={19} /> : <Menu size={19} />}
         </button>
+        <div className="topbar-page-context"><span>MYLESNET</span><strong>{routePageLabel}</strong></div>
         <div className="header-actions">
-          <GlobalSearch />
-          <ThemeControl />
-          <Link className="utility-link" href="/issues" aria-label="Needs attention"><Bell size={17} /><span>Needs attention</span></Link>
-          <button className="user-menu" type="button" aria-label="Sign out" title={`Sign out of ${accountLabel}`} onClick={() => void signOut()}>
-            <span className="avatar">MN</span>
-            <span className="user-menu-label">{accountLabel}</span>
-            <LogOut size={15} aria-hidden="true" />
+          {!financeApprover && <GlobalSearch />}
+          {!financeApprover && <Link className="utility-link" href="/issues" aria-label="Needs attention"><Bell size={17} /><span>Needs attention</span></Link>}
+          <button className="user-menu" type="button" aria-label="Open your account" title="Manage your account" onClick={() => { setAccountReturnTo(pathname); router.push("/account"); }}>
+            <ProfileAvatar imageUrl={profile?.photoUrl} name={profile?.displayName || accountLabel} />
+            <span className="user-menu-label">{profile?.displayName || accountLabel}</span>
+            <ChevronDown size={15} aria-hidden="true" />
           </button>
         </div>
       </header>
-      <nav className={`primary-nav ${mobileOpen ? "primary-nav-open" : ""}`} aria-label="Main navigation">
-        {visibleNav.map((item, index) => {
-          const Icon = item.icon;
-          const active = pathname === item.href || pathname.startsWith(`${item.href}/`);
-          return <span className="nav-item-wrap" key={item.href}>
-            {index === 7 && <span className="nav-divider" aria-hidden="true" />}
-            <Link className={`nav-link ${active ? "nav-link-active" : ""}`} href={item.href} aria-current={active ? "page" : undefined} onClick={() => setMobileOpen(false)}>
-              <Icon size={15} strokeWidth={1.8} /><span>{item.label}</span>
-            </Link>
-          </span>;
-        })}
-        {access?.access === "ready" && (access.permissions.includes("sales.create") || access.permissions.includes("expenses.create")) && <Link className="button button-accent nav-add-entry" href={access.permissions.includes("sales.create") ? "/sales" : "/expenses"} onClick={() => setMobileOpen(false)}>+ Add entry <ChevronDown size={14} /></Link>}
-      </nav>
-      {access?.access === "pending" && <div className="access-pending" role="status"><strong>Workspace access pending</strong><span>Your account is signed in but has no active membership. A workspace owner can approve it or send you an invitation.</span></div>}
+      {access?.access === "pending" && <div className="access-pending" role="status"><strong>Access awaiting invitation</strong><span>Your account is not yet linked to a MylesNet workspace.</span></div>}
       <main className="page-content">{children}</main>
       <footer className="app-footer"><span>MylesNet Finance Tracker · {context?.access === "ready" ? context.currency : "UGX"}</span><span>Workspace data is protected by your assigned role.</span></footer>
+      </div>
+      {pathname === "/account" && <AccountDrawer onClose={closeAccount} />}
     </div>
   );
 }
