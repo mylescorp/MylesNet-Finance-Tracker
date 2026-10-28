@@ -78,8 +78,16 @@ export const webhook = httpAction(async (ctx, request) => {
   const transactionIdRaw = asText(pick(body, payload, ["transaction_id", "transaction", "reference", "ref", "receipt", "receipt_number", "payment_id", "id"])).slice(0, 120);
   const transactionId = maskPII(transactionIdRaw);
   const rawHash = await hash(raw || JSON.stringify(payload));
-  const eventGroup = kind === "ignored" || amount <= 0 ? `ignored:${event}:${rawHash}` : kind === "expense" ? "expense" : "sale";
-  const eventKey = await hash(transactionIdRaw ? `${eventGroup}:${transactionIdRaw}` : rawHash);
+  // Scope idempotency to the event family and event name. The previous key
+  // grouped all sales together, so a voucher and payment sharing an ID caused
+  // the later event to be dropped as a duplicate.
+  const eventGroup = kind === "ignored" || amount <= 0 ? `ignored:${event}:${rawHash}` : `${kind}:${event}`;
+  const eventKey = await hash(transactionIdRaw ? `${eventGroup}:${transactionIdRaw}` : `${eventGroup}:${rawHash}`);
+  // Keep recognizing receipts written with the previous key format during
+  // retries after rollout. The mutation checks the stored event name before
+  // treating this legacy key as a duplicate.
+  const legacyEventGroup = kind === "ignored" || amount <= 0 ? `ignored:${event}:${rawHash}` : kind === "expense" ? "expense" : "sale";
+  const legacyEventKey = await hash(transactionIdRaw ? `${legacyEventGroup}:${transactionIdRaw}` : rawHash);
   const paymentMethod = maskPII(asText(pick(body, payload, ["gateway", "payment_method", "method", "provider"]) || (kind === "voucher" ? "Voucher Redemption" : "Centipid System")).slice(0, 120));
   let description = maskPII(asText(pick(body, payload, ["description", "note"])).slice(0, 240));
   if (kind === "voucher") description = `Voucher Redeemed: ${maskPII(asText(pick(body, payload, ["code", "voucher_code", "serial", "voucher"]))) || "Hotspot Voucher"}`;
@@ -88,7 +96,7 @@ export const webhook = httpAction(async (ctx, request) => {
   let result;
   try {
     result = await ctx.runMutation(internal.centipid.processWebhook, {
-      tokenHash, eventKey, rawHash, event, kind, amount, transactionId, paymentMethod, description, customer,
+      tokenHash, eventKey, legacyEventKey, rawHash, event, kind, amount, transactionId, paymentMethod, description, customer,
       category: maskPII(asText(pick(body, payload, ["category", "expense_category", "type"])).slice(0, 100)),
       account: asText(pick(body, payload, ["account", "paid_from", "source"])).slice(0, 100),
       paidTo: maskPII(asText(pick(body, payload, ["paid_to", "vendor", "payee", "title", "name", "description"])).slice(0, 100)),
