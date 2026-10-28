@@ -298,8 +298,12 @@ export const dashboardSummary = query({
     // partner roles; reports.view remains an explicit finance-data grant.
     const canViewDashboard = await hasPermission(ctx, current.membership, "dashboard.view");
     const canViewReports = await hasPermission(ctx, current.membership, "reports.view");
-    const canViewPartnerArea = await hasPermission(ctx, current.membership, "partners.view");
-    if (!canViewReports && (!canViewDashboard || canViewPartnerArea)) {
+    const assignedRole = current.membership.roleId
+      ? await ctx.db.get("workspaceRoles", current.membership.roleId)
+      : null;
+    const isPartnerRole = assignedRole?.builtIn === "partner" ||
+      (!current.membership.roleId && current.membership.role === "partner");
+    if (!canViewReports && (!canViewDashboard || isPartnerRole)) {
       return { access: "restricted" as const };
     }
     const days = await ctx.db
