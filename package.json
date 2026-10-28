@@ -8,6 +8,7 @@
   "scripts": {
     "dev": "convex dev --start 'next dev --turbopack'",
     "typecheck": "tsc --noEmit",
+    "release:version": "node scripts/version-release.mjs",
     "build": "npm run test && npm run typecheck && next build",
     "test": "vitest run",
     "start": "next start",
@@ -33,6 +34,7 @@
     "tailwindcss-animate": "^1.0.7"
   },
   "devDependencies": {
+    "@changesets/cli": "^3.0.3",
     "@edge-runtime/vm": "^5.0.0",
     "@types/node": "^26.6.5",
     "@types/react": "^19",

@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 
 const baseRef = process.env.GITHUB_BASE_REF;
 if (!baseRef) {
@@ -15,9 +16,42 @@ const changesApplicationCode = changedFiles.some((file) =>
   || /^(next\.config\.|package\.json|package-lock\.json)$/.test(file),
 );
 
-if (changesApplicationCode && !changedFiles.includes("CHANGELOG.md")) {
-  console.error("Application changes require a dated user-facing entry in CHANGELOG.md.");
+const changesetFiles = changedFiles.filter((file) => /^\.changeset\/.+\.md$/.test(file) && file !== ".changeset/README.md");
+const releasePackageChanged = changedFiles.includes("package.json") && changedFiles.includes("CHANGELOG.md");
+
+if (releasePackageChanged) {
+  const basePackage = JSON.parse(execFileSync("git", ["show", `${base}:package.json`], { encoding: "utf8" }));
+  const currentPackage = JSON.parse(readFileSync("package.json", "utf8"));
+  const releaseHeader = new RegExp(`^## v${currentPackage.version.replaceAll(".", "\\.")} — \\d{4}-\\d{2}-\\d{2}$`, "m");
+  const changelog = readFileSync("CHANGELOG.md", "utf8");
+  if (currentPackage.version !== basePackage.version && releaseHeader.test(changelog)) {
+    console.log(`Versioned release PR for v${currentPackage.version} includes its release notes.`);
+    process.exit(0);
+  }
+}
+
+if (!changesApplicationCode) {
+  console.log("No application changes require a Changeset.");
+  process.exit(0);
+}
+
+if (changesetFiles.length === 0) {
+  console.error("Application changes require one user-facing Changeset per distinct feature or fix.");
   process.exit(1);
 }
 
-console.log(changesApplicationCode ? "Application changes include a changelog entry." : "No application changes require a changelog entry.");
+const packageName = "mylesnet-finance-tracker";
+for (const file of changesetFiles) {
+  const source = readFileSync(file, "utf8");
+  const match = source.match(/^---\s*\n([\s\S]*?)\n---\s*\n([\s\S]*)$/);
+  if (!match) throw new Error(`${file} must have valid Changesets frontmatter.`);
+  const packageEntry = match[1].match(new RegExp(`^["']?${packageName}["']?:\\s*(major|minor|patch)\\s*$`, "m"));
+  if (!packageEntry) throw new Error(`${file} must declare ${packageName} with a major, minor, or patch bump.`);
+  const body = match[2].trim();
+  const [title, ...descriptionLines] = body.split(/\r?\n/);
+  if (!title?.trim() || !descriptionLines.join(" ").trim()) {
+    throw new Error(`${file} must include a user-facing title and description separated by a blank line.`);
+  }
+}
+
+console.log(`Application changes include ${changesetFiles.length} valid Changeset(s).`);

@@ -15,7 +15,7 @@ import { AccountMenu } from "@/components/account/AccountMenu";
 import { GlobalSearch } from "@/components/workspace/GlobalSearch";
 import { api } from "@/convex/_generated/api";
 
-type ChangelogSummary = { version: string; totalChanges: number };
+type ChangelogSummary = { contentHash: string; totalChanges: number };
 const changelogSeenKey = "mylesnet-changelog-seen-v1";
 
 function readSeenChangelog() {
@@ -26,9 +26,10 @@ function readSeenChangelog() {
 function unreadChangelogCount(summary: ChangelogSummary, seenValue: string | null) {
   if (!seenValue) return summary.totalChanges;
   try {
-    const seen = JSON.parse(seenValue) as ChangelogSummary;
-    if (seen.version === summary.version) return 0;
-    return Math.max(summary.totalChanges - seen.totalChanges, 1);
+    const seen = JSON.parse(seenValue) as Partial<ChangelogSummary> & { version?: string };
+    const seenHash = seen.contentHash ?? (seen as unknown as { version?: string }).version;
+    if (seenHash === summary.contentHash) return 0;
+    return Math.max(summary.totalChanges - (seen.totalChanges ?? 0), 1);
   } catch {
     return summary.totalChanges;
   }
@@ -80,7 +81,7 @@ export function AppShell({ children }: { children: ReactNode }) {
     void fetch("/api/changelog/summary", { cache: "no-store" })
       .then(response => response.ok ? response.json() as Promise<ChangelogSummary> : null)
       .then(summary => {
-        if (!active || !summary || typeof summary.version !== "string" || !Number.isSafeInteger(summary.totalChanges)) return;
+        if (!active || !summary || typeof summary.contentHash !== "string" || !Number.isSafeInteger(summary.totalChanges)) return;
         changelogSummaryRef.current = summary;
         setChangelogSummary(summary);
         setUnreadChanges(unreadChangelogCount(summary, readSeenChangelog()));
