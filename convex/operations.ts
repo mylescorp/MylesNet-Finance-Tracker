@@ -1,4 +1,5 @@
 import { getAuthUserId } from "@convex-dev/auth/server";
+import { paginationOptsValidator } from "convex/server";
 import { ConvexError, v } from "convex/values";
 import { mutation, query } from "./_generated/server";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
@@ -125,12 +126,10 @@ export const overview = query({
       access: v.literal("ready"), role: membershipRoleV,
       movements: v.array(v.object({ _id: v.id("movements"), kind: v.union(v.literal("transfer"), v.literal("withdrawal"), v.literal("deposit"), v.literal("capital_contribution")), amountUgx: v.number(), feeUgx: v.optional(v.number()), fromAccount: v.optional(accountV), toAccount: v.optional(accountV), partnerName: v.optional(v.string()), occurredOn: v.string(), note: v.string(), state: v.union(v.literal("posted"), v.literal("void")), voidReason: v.optional(v.string()) })),
       savings: v.array(v.object({ _id: v.id("savingsHoldings"), name: v.string(), targetUgx: v.optional(v.number()), balanceUgx: v.number(), active: v.boolean() })),
-      archivedSavings: v.array(v.object({ _id: v.id("savingsHoldings"), name: v.string(), targetUgx: v.optional(v.number()), balanceUgx: v.number(), active: v.boolean() })),
       savingsFlows: v.array(v.object({ _id: v.id("savingsFlows"), holdingName: v.string(), kind: v.union(v.literal("contribution"), v.literal("withdrawal")), amountUgx: v.number(), account: accountV, occurredOn: v.string(), note: v.string(), state: v.union(v.literal("posted"), v.literal("void")), voidReason: v.optional(v.string()), canReverse: v.boolean() })),
       loans: v.array(v.object({ _id: v.id("loans"), lender: v.string(), principalUgx: v.number(), outstandingPrincipalUgx: v.number(), annualRateBps: v.number(), termMonths: v.number(), startedOn: v.string(), account: accountV, status: v.union(v.literal("active"), v.literal("paid_off")) })),
       loanRepayments: v.array(v.object({ _id: v.id("loanRepayments"), lender: v.string(), amountUgx: v.number(), principalUgx: v.number(), interestUgx: v.number(), account: accountV, paidOn: v.string(), state: v.union(v.literal("posted"), v.literal("void")), voidReason: v.optional(v.string()) })),
       bills: v.array(v.object({ _id: v.id("bills"), name: v.string(), category: v.string(), amountUgx: v.number(), account: accountV, recurrence: v.union(v.literal("weekly"), v.literal("monthly"), v.literal("quarterly"), v.literal("yearly")), nextDueOn: v.string(), active: v.boolean() })),
-      archivedBills: v.array(v.object({ _id: v.id("bills"), name: v.string(), category: v.string(), amountUgx: v.number(), account: accountV, recurrence: v.union(v.literal("weekly"), v.literal("monthly"), v.literal("quarterly"), v.literal("yearly")), nextDueOn: v.string(), active: v.boolean() })),
       billPayments: v.array(v.object({ _id: v.id("billPayments"), billName: v.string(), amountUgx: v.number(), account: v.optional(accountV), paidOn: v.string(), state: v.union(v.literal("posted"), v.literal("void")), voidReason: v.optional(v.string()), canReverse: v.boolean() })),
       reconciliations: v.array(v.object({ _id: v.id("reconciliations"), account: accountV, asOfDate: v.string(), bookBalanceUgx: v.number(), countedBalanceUgx: v.number(), varianceUgx: v.number(), status: v.union(v.literal("matched"), v.literal("open"), v.literal("explained")), note: v.string(), explanation: v.optional(v.string()) })),
       partners: v.array(v.object({ _id: v.id("partners"), name: v.string(), ownershipBps: v.number(), active: v.boolean() })),
@@ -142,15 +141,13 @@ export const overview = query({
     if (!current) return { access: "pending" as const };
     if (current.membership.role !== "owner" && current.membership.role !== "cashier") return { access: "restricted" as const };
     const businessId = current.business._id;
-    const [movements, savings, archivedSavings, savingsFlows, loans, loanRepayments, bills, archivedBills, billPayments, reconciliations, partners] = await Promise.all([
+    const [movements, savings, savingsFlows, loans, loanRepayments, bills, billPayments, reconciliations, partners] = await Promise.all([
       ctx.db.query("movements").withIndex("by_business_and_date", q => q.eq("businessId", businessId).gte("occurredOn", args.from).lt("occurredOn", args.toExclusive)).order("desc").take(100),
       ctx.db.query("savingsHoldings").withIndex("by_business_and_active", q => q.eq("businessId", businessId).eq("active", true)).take(101),
-      ctx.db.query("savingsHoldings").withIndex("by_business_and_active", q => q.eq("businessId", businessId).eq("active", false)).take(101),
       ctx.db.query("savingsFlows").withIndex("by_business_and_date", q => q.eq("businessId", businessId).gte("occurredOn", args.from).lt("occurredOn", args.toExclusive)).order("desc").take(100),
       ctx.db.query("loans").withIndex("by_business_and_status", q => q.eq("businessId", businessId).eq("status", "active")).take(101),
       ctx.db.query("loanRepayments").withIndex("by_business_and_date", q => q.eq("businessId", businessId).gte("paidOn", args.from).lt("paidOn", args.toExclusive)).order("desc").take(100),
       ctx.db.query("bills").withIndex("by_business_and_active_due", q => q.eq("businessId", businessId).eq("active", true)).take(101),
-      ctx.db.query("bills").withIndex("by_business_and_active_due", q => q.eq("businessId", businessId).eq("active", false)).take(101),
       ctx.db.query("billPayments").withIndex("by_business_and_date", q => q.eq("businessId", businessId).gte("paidOn", args.from).lt("paidOn", args.toExclusive)).order("desc").take(100),
       ctx.db.query("reconciliations").withIndex("by_business_and_date", q => q.eq("businessId", businessId).gte("asOfDate", args.from).lt("asOfDate", args.toExclusive)).order("desc").take(100),
       ctx.db.query("partners").withIndex("by_business_and_active", q => q.eq("businessId", businessId).eq("active", true)).take(101),
@@ -163,27 +160,45 @@ export const overview = query({
       return { ...partner, ownershipBps: history?.ownershipBps ?? partner.ownershipBps };
     }));
     const partnerById = new Map(partners.map(p => [p._id, p.name]));
-    const holdingById = new Map([...savings, ...archivedSavings].map(item => [item._id, { name: item.name, active: item.active }]));
+    const savingsFlowHoldings = await Promise.all(savingsFlows.map(row => ctx.db.get("savingsHoldings", row.holdingId)));
+    const holdingById = new Map(savingsFlowHoldings.flatMap(item => item?.businessId === businessId ? [[item._id, { name: item.name, active: item.active }] as const] : []));
     const loanById = new Map(loans.map(item => [item._id, item.lender]));
     const repaymentLoans = await Promise.all(loanRepayments.map(row => ctx.db.get("loans", row.loanId)));
     repaymentLoans.forEach(loan => {
       if (loan?.businessId === businessId) loanById.set(loan._id, loan.lender);
     });
-    const billById = new Map([...bills, ...archivedBills].map(item => [item._id, item]));
+    const paymentBills = await Promise.all(billPayments.map(row => ctx.db.get("bills", row.billId)));
+    const billById = new Map(paymentBills.flatMap(item => item?.businessId === businessId ? [[item._id, item] as const] : []));
     return {
       access: "ready" as const, role: current.membership.role,
       movements: movements.map(row => ({ _id: row._id, kind: row.kind, amountUgx: row.amountUgx, feeUgx: row.feeUgx, fromAccount: row.fromAccount, toAccount: row.toAccount, partnerName: row.partnerId ? partnerById.get(row.partnerId) : undefined, occurredOn: row.occurredOn, note: row.note, state: row.state, voidReason: row.voidReason })),
       savings: savings.map(row => ({ _id: row._id, name: row.name, targetUgx: row.targetUgx, balanceUgx: row.balanceUgx, active: row.active })),
-      archivedSavings: archivedSavings.map(row => ({ _id: row._id, name: row.name, targetUgx: row.targetUgx, balanceUgx: row.balanceUgx, active: row.active })),
       savingsFlows: savingsFlows.map(row => { const holding = holdingById.get(row.holdingId); return { _id: row._id, holdingName: holding?.name ?? "Inactive holding", kind: row.kind, amountUgx: row.amountUgx, account: row.account, occurredOn: row.occurredOn, note: row.note, state: row.state ?? "posted", voidReason: row.voidReason, canReverse: holding?.active === true }; }),
       loans: loans.map(row => ({ _id: row._id, lender: row.lender, principalUgx: row.principalUgx, outstandingPrincipalUgx: row.outstandingPrincipalUgx, annualRateBps: row.annualRateBps, termMonths: row.termMonths, startedOn: row.startedOn, account: row.account, status: row.status })),
       loanRepayments: loanRepayments.map(row => ({ _id: row._id, lender: loanById.get(row.loanId) ?? "Loan", amountUgx: row.amountUgx, principalUgx: row.principalUgx, interestUgx: row.interestUgx, account: row.account, paidOn: row.paidOn, state: row.state ?? "posted", voidReason: row.voidReason })),
       bills: bills.map(row => ({ _id: row._id, name: row.name, category: row.category, amountUgx: row.amountUgx, account: row.account, recurrence: row.recurrence, nextDueOn: row.nextDueOn, active: row.active })),
-      archivedBills: archivedBills.map(row => ({ _id: row._id, name: row.name, category: row.category, amountUgx: row.amountUgx, account: row.account, recurrence: row.recurrence, nextDueOn: row.nextDueOn, active: row.active })),
       billPayments: billPayments.map(row => { const bill = billById.get(row.billId); return { _id: row._id, billName: bill?.name ?? "Inactive bill", amountUgx: row.amountUgx, account: row.account, paidOn: row.paidOn, state: row.state ?? "posted", voidReason: row.voidReason, canReverse: row.state !== "void" && !!row.priorNextDueOn && !!row.nextDueOnAfter && bill?.nextDueOn === row.nextDueOnAfter }; }),
       reconciliations: reconciliations.map(row => ({ _id: row._id, account: row.account, asOfDate: row.asOfDate, bookBalanceUgx: row.bookBalanceUgx, countedBalanceUgx: row.countedBalanceUgx, varianceUgx: row.varianceUgx, status: row.status, note: row.note, explanation: row.explanation })),
       partners: currentPartnerShares.map(row => ({ _id: row._id, name: row.name, ownershipBps: row.ownershipBps, active: row.active })),
     };
+  },
+});
+
+export const savingsArchive = query({
+  args: { paginationOpts: paginationOptsValidator },
+  handler: async (ctx, args) => {
+    const current = await workspace(ctx);
+    if (!current || (current.membership.role !== "owner" && current.membership.role !== "cashier")) throw new Error("Archived savings holdings are not available to this account.");
+    return await ctx.db.query("savingsHoldings").withIndex("by_business_and_active", q => q.eq("businessId", current.business._id).eq("active", false)).order("desc").paginate(args.paginationOpts);
+  },
+});
+
+export const billArchive = query({
+  args: { paginationOpts: paginationOptsValidator },
+  handler: async (ctx, args) => {
+    const current = await workspace(ctx);
+    if (!current || (current.membership.role !== "owner" && current.membership.role !== "cashier")) throw new Error("Archived bill schedules are not available to this account.");
+    return await ctx.db.query("bills").withIndex("by_business_and_active_due", q => q.eq("businessId", current.business._id).eq("active", false)).order("desc").paginate(args.paginationOpts);
   },
 });
 
@@ -581,24 +596,33 @@ export const createBill = mutation({
 });
 
 export const updateBillSchedule = mutation({
-  args: { billId: v.id("bills"), name: v.string(), category: v.string(), amountUgx: v.number(), account: accountV, recurrence: v.union(v.literal("weekly"), v.literal("monthly"), v.literal("quarterly"), v.literal("yearly")), nextDueOn: v.string(), active: v.boolean() },
+  args: { billId: v.id("bills"), expectedNextDueOn: v.string(), name: v.string(), category: v.string(), amountUgx: v.number(), account: accountV, recurrence: v.union(v.literal("weekly"), v.literal("monthly"), v.literal("quarterly"), v.literal("yearly")), nextDueOn: v.string(), active: v.boolean() },
   returns: v.null(),
   handler: async (ctx, args) => {
     const current = await workspace(ctx);
     if (!current || current.membership.role !== "owner") throw new Error("Only a workspace owner can edit or archive bill schedules.");
     const bill = await ctx.db.get("bills", args.billId);
     if (!bill || bill.businessId !== current.business._id) throw new Error("Bill schedule not found.");
+    if (args.active !== bill.active) {
+      await ctx.db.patch("bills", bill._id, { active: args.active });
+      await ctx.db.insert("auditEvents", { businessId: current.business._id, actorId: current.userId, action: args.active ? "bill.schedule_restored" : "bill.schedule_archived", entityType: "bill", entityId: bill._id, occurredAt: Date.now(), summary: `${args.active ? "Restored" : "Archived"} bill schedule: ${bill.name}.` });
+      return null;
+    }
+    if (args.expectedNextDueOn !== bill.nextDueOn) throw new Error("This bill was updated after you opened it. Refresh the schedule and review your change before saving.");
     const name = args.name.trim();
     const category = args.category.trim();
     if (name.length < 2 || name.length > 100 || category.length < 1 || category.length > 80 || !Number.isSafeInteger(args.amountUgx) || args.amountUgx <= 0 || !validDay(args.nextDueOn)) throw new Error("Bill schedule details are invalid.");
     const activeBills = await ctx.db.query("bills").withIndex("by_business_and_active_due", q => q.eq("businessId", current.business._id).eq("active", true)).take(101);
     if (args.active && !bill.active && activeBills.length >= 100) throw new Error("A workspace can have up to 100 active bill schedules.");
+    const dateChanged = args.nextDueOn !== bill.nextDueOn;
     const startDate = new Date(`${args.nextDueOn}T00:00:00.000Z`);
-    const anchorDay = startDate.getUTCDate();
-    const endOfMonth = anchorDay === new Date(Date.UTC(startDate.getUTCFullYear(), startDate.getUTCMonth() + 1, 0)).getUTCDate();
+    const anchorDate = new Date(`${bill.scheduleStartDueOn ?? bill.nextDueOn}T00:00:00.000Z`);
+    const anchorDay = dateChanged ? startDate.getUTCDate() : bill.scheduleAnchorDay ?? anchorDate.getUTCDate();
+    const anchorMonthEnd = new Date(Date.UTC(anchorDate.getUTCFullYear(), anchorDate.getUTCMonth() + 1, 0)).getUTCDate();
+    const endOfMonth = dateChanged ? anchorDay === new Date(Date.UTC(startDate.getUTCFullYear(), startDate.getUTCMonth() + 1, 0)).getUTCDate() : bill.scheduleEndOfMonth ?? anchorDay === anchorMonthEnd;
     const before = { name: bill.name, category: bill.category, amountUgx: bill.amountUgx, account: bill.account, recurrence: bill.recurrence, nextDueOn: bill.nextDueOn, active: bill.active };
     const after = { name, category, amountUgx: args.amountUgx, account: args.account, recurrence: args.recurrence, nextDueOn: args.nextDueOn, active: args.active };
-    await ctx.db.patch("bills", bill._id, { ...after, scheduleStartDueOn: args.nextDueOn, scheduleAnchorDay: anchorDay, scheduleEndOfMonth: endOfMonth });
+    await ctx.db.patch("bills", bill._id, { ...after, scheduleStartDueOn: dateChanged ? args.nextDueOn : bill.scheduleStartDueOn ?? bill.nextDueOn, scheduleAnchorDay: anchorDay, scheduleEndOfMonth: endOfMonth });
     await ctx.db.insert("auditEvents", { businessId: current.business._id, actorId: current.userId, action: args.active ? "bill.schedule_updated" : "bill.schedule_archived", entityType: "bill", entityId: bill._id, occurredAt: Date.now(), summary: `${args.active ? "Updated" : "Archived"} bill schedule: ${name}.`, details: JSON.stringify({ before, after }) });
     return null;
   },
