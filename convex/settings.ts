@@ -213,7 +213,6 @@ export const update = mutation({
     const firstEntry = await ctx.db.query("entries").withIndex("by_business_and_date", q => q.eq("businessId", current.business._id)).first();
     const currencySensitiveDataExists = await hasCurrencySensitiveData(ctx, current.business._id);
     const ledgerActivityExists = await hasPostedLedgerActivity(ctx, current.business._id);
-    const openingBalancesLocked = await hasPostedLedgerActivity(ctx, current.business._id);
     if (args.currency !== current.business.currency && currencySensitiveDataExists) throw new Error("Currency is locked after financial activity so existing amounts are never relabelled. Contact support for a reviewed currency migration.");
     const businessPatch = {
       name: businessName, countryCode: args.countryCode, currency: args.currency,
