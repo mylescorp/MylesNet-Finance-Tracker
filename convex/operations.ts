@@ -113,6 +113,7 @@ export const overview = query({
     v.object({ access: v.literal("restricted") }),
     v.object({
       access: v.literal("ready"), role: membershipRoleV,
+      partnerStatementOnly: v.boolean(),
       canManageMovements: v.boolean(), canManageSavings: v.boolean(), canManageLoans: v.boolean(), canManageBills: v.boolean(),
       canManageReconciliation: v.boolean(), canResolveReconciliation: v.boolean(), canManagePartners: v.boolean(),
       movements: v.array(v.object({ _id: v.id("movements"), kind: v.union(v.literal("transfer"), v.literal("withdrawal"), v.literal("deposit"), v.literal("capital_contribution")), amountUgx: v.number(), feeUgx: v.optional(v.number()), fromAccount: v.optional(accountV), toAccount: v.optional(accountV), partnerName: v.optional(v.string()), occurredOn: v.string(), note: v.string() })),
@@ -144,6 +145,13 @@ export const overview = query({
     const canResolveReconciliation = await hasPermission(ctx, current.membership, "reconcile.resolve");
     const canManagePartners = await hasPermission(ctx, current.membership, "partners.manage");
     if (!canViewMovements && !canViewSavings && !canViewLoans && !canViewBills && !canViewReconciliation && !canViewPartners) return { access: "restricted" as const };
+    const partnerStatementOnly = Boolean(current.membership.partnerId);
+    if (partnerStatementOnly) return {
+      access: "ready" as const, role: current.membership.role, partnerStatementOnly: true,
+      canManageMovements: false, canManageSavings: false, canManageLoans: false, canManageBills: false,
+      canManageReconciliation: false, canResolveReconciliation: false, canManagePartners: false,
+      movements: [], savings: [], savingsFlows: [], loans: [], loanRepayments: [], bills: [], billPayments: [], reconciliations: [], partners: [],
+    };
     const businessId = current.business._id;
     const [movements, savings, savingsFlows, loans, loanRepayments, bills, billPayments, reconciliations, partners] = await Promise.all([
       ctx.db.query("movements").withIndex("by_business_and_date", q => q.eq("businessId", businessId).gte("occurredOn", args.from).lt("occurredOn", args.toExclusive)).order("desc").take(100),
@@ -172,7 +180,7 @@ export const overview = query({
     });
     const billById = new Map(bills.map(item => [item._id, item.name]));
     return {
-      access: "ready" as const, role: current.membership.role, canManageMovements, canManageSavings, canManageLoans, canManageBills, canManageReconciliation, canResolveReconciliation, canManagePartners,
+      access: "ready" as const, role: current.membership.role, partnerStatementOnly: false, canManageMovements, canManageSavings, canManageLoans, canManageBills, canManageReconciliation, canResolveReconciliation, canManagePartners,
       movements: canViewMovements ? movements.map(row => ({ _id: row._id, kind: row.kind, amountUgx: row.amountUgx, feeUgx: row.feeUgx, fromAccount: row.fromAccount, toAccount: row.toAccount, partnerName: canViewPartners && row.partnerId ? partnerById.get(row.partnerId) : undefined, occurredOn: row.occurredOn, note: row.note })) : [],
       savings: canViewSavings ? savings.map(row => ({ _id: row._id, name: row.name, targetUgx: row.targetUgx, balanceUgx: row.balanceUgx, active: row.active })) : [],
       savingsFlows: canViewSavings ? savingsFlows.map(row => ({ _id: row._id, holdingName: holdingById.get(row.holdingId) ?? "Inactive holding", kind: row.kind, amountUgx: row.amountUgx, account: row.account, occurredOn: row.occurredOn, note: row.note })) : [],
@@ -181,7 +189,7 @@ export const overview = query({
       bills: canViewBills ? bills.map(row => ({ _id: row._id, name: row.name, category: row.category, amountUgx: row.amountUgx, account: row.account, recurrence: row.recurrence, nextDueOn: row.nextDueOn, active: row.active })) : [],
       billPayments: canViewBills ? billPayments.map(row => ({ _id: row._id, billName: billById.get(row.billId) ?? "Inactive bill", amountUgx: row.amountUgx, account: row.account, paidOn: row.paidOn })) : [],
       reconciliations: canViewReconciliation ? reconciliations.map(row => ({ _id: row._id, account: row.account, asOfDate: row.asOfDate, bookBalanceUgx: row.bookBalanceUgx, countedBalanceUgx: row.countedBalanceUgx, varianceUgx: row.varianceUgx, status: row.status, note: row.note, explanation: row.explanation })) : [],
-      partners: canViewPartners ? currentPartnerShares.map(row => ({ _id: row._id, name: row.name, ownershipBps: row.ownershipBps, active: row.active })) : [],
+      partners: canViewPartners && !current.membership.partnerId ? currentPartnerShares.map(row => ({ _id: row._id, name: row.name, ownershipBps: row.ownershipBps, active: row.active })) : [],
     };
   },
 });

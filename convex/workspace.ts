@@ -382,9 +382,9 @@ export const dashboardSummary = query({
     const assignedRole = current.membership.roleId
       ? await ctx.db.get("workspaceRoles", current.membership.roleId)
       : null;
-    const isPartnerRole = assignedRole?.builtIn === "partner" ||
+    const isPartnerRole = Boolean(current.membership.partnerId) || assignedRole?.builtIn === "partner" ||
       (!current.membership.roleId && current.membership.role === "partner");
-    if (!canViewReports && (!canViewDashboard || isPartnerRole)) {
+    if (isPartnerRole || (!canViewDashboard && !canViewReports)) {
       return { access: "restricted" as const };
     }
     const days = await ctx.db

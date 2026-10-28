@@ -50,14 +50,14 @@ export function AppShell({ children }: { children: ReactNode }) {
   const menuButtonRef = useRef<HTMLButtonElement>(null);
   const sidebarCloseRef = useRef<HTMLButtonElement>(null);
   const accountLabel = access?.access === "ready" ? access.businessName : "My account";
-  const financeApprover = access?.access === "ready" && access.permissions.includes("partners.distributions.approve") && !access.permissions.includes("dashboard.view");
   const permissions = access?.access === "ready" ? access.permissions : [];
   const visibleNavGroups = navGroups.map(group => ({
     ...group,
-    items: group.items.filter(item => financeApprover ? item.href === "/partners" : access?.access !== "ready"
+    items: group.items.filter(item => access?.access !== "ready"
       ? item.href === "/dashboard"
       : permissions.includes(item.permission) || item.href === "/settings/general" && ["access.view", "roles.manage", "data.export"].some(permission => permissions.includes(permission))),
   })).filter(group => group.items.length > 0);
+  const financeApproverOnly = access?.access === "ready" && access.permissions.includes("partners.distributions.approve") && !access.permissions.some(permission => ["dashboard.view", "analytics.view", "sales.view", "expenses.view", "movements.view", "savings.view", "loans.view", "dailyReport.view", "monthlyPnl.view", "bills.view", "reconcile.view", "settings.view"].includes(permission));
   const activePage = navGroups.flatMap(group => group.items).find(item => pathname === item.href || pathname.startsWith(`${item.href}/`));
   const settingsPageLabels: Record<string, string> = {
     general: "General settings", finance: "Finance settings", rules: "Rules",
@@ -143,8 +143,8 @@ export function AppShell({ children }: { children: ReactNode }) {
         </button>
         <div className="topbar-page-context"><span>MYLESNET</span><strong>{routePageLabel}</strong></div>
         <div className="header-actions">
-          {!financeApprover && <GlobalSearch />}
-          {!financeApprover && <Link className="utility-link" href="/issues" aria-label="Needs attention"><Bell size={17} /><span>Needs attention</span></Link>}
+          {!financeApproverOnly && <GlobalSearch />}
+          {!financeApproverOnly && permissions.includes("audit.view") && <Link className="utility-link" href="/issues" aria-label="Needs attention"><Bell size={17} /><span>Needs attention</span></Link>}
           <button className="user-menu" type="button" aria-label="Open your account" title="Manage your account" onClick={() => { setAccountReturnTo(pathname); router.push("/account"); }}>
             <ProfileAvatar imageUrl={profile?.photoUrl} name={profile?.displayName || accountLabel} />
             <span className="user-menu-label">{profile?.displayName || accountLabel}</span>
