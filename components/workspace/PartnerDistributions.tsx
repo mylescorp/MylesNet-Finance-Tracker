@@ -7,9 +7,12 @@ import type { Id } from "@/convex/_generated/dataModel";
 import { Card } from "@/components/AppShell";
 import { formatBusinessDay } from "@/lib/format";
 import { RecordFormDisclosure } from "@/components/workspace/RecordFormDisclosure";
+import { useRecordEntryBusy, useRecordEntrySaved } from "@/components/workspace/RecordEntryDrawer";
 
 type Range = { from: string; toExclusive: string };
 export function PartnerDistributions({ range, currency, scale, locale, dateFormat, partners, today }: { range: Range; currency: string; scale: number; locale: string; dateFormat: "DD/MM/YYYY" | "MM/DD/YYYY" | "YYYY-MM-DD"; partners: { _id: string; name: string; ownershipBps: number; active: boolean }[]; today: string }) {
+  const recordSaved = useRecordEntrySaved();
+  const setDrawerBusy = useRecordEntryBusy();
   const create = useMutation(api.distributions.create);
   const decide = useMutation(api.distributions.decide);
   const cancel = useMutation(api.distributions.cancel);
@@ -28,10 +31,10 @@ export function PartnerDistributions({ range, currency, scale, locale, dateForma
   const owner = state.role === "owner";
   const reviewer = owner || state.role === "finance_approver";
   async function run(action: () => Promise<unknown>, success: string) {
-    setBusy(true); setFeedback("");
-    try { await action(); setFeedback(success); }
+    setBusy(true); setDrawerBusy(true); setFeedback("");
+    try { await action(); recordSaved(); setFeedback(success); }
     catch (error) { setFeedback(error instanceof Error ? error.message : "The request could not be saved."); }
-    finally { setBusy(false); }
+    finally { setBusy(false); setDrawerBusy(false); }
   }
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();

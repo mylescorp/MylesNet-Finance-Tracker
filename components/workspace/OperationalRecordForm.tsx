@@ -4,10 +4,13 @@ import { useMutation, useQuery } from "convex/react";
 import { useRef, useState, type FormEvent } from "react";
 import { api } from "@/convex/_generated/api";
 import { RecordFormDisclosure } from "@/components/workspace/RecordFormDisclosure";
+import { useRecordEntryBusy, useRecordEntrySaved } from "@/components/workspace/RecordEntryDrawer";
 
 type RecordKind = "movement" | "holding" | "loan" | "bill";
 
 export function OperationalRecordForm({ kind, currency, scale = 1, businessDay }: { kind: RecordKind; currency: string; scale?: number; businessDay: string }) {
+  const recordSaved = useRecordEntrySaved();
+  const setDrawerBusy = useRecordEntryBusy();
   const save = useMutation(api.workspace.createOperationalRecord);
   const records = useQuery(api.workspace.operationalRecords, { kind });
   const [title, setTitle] = useState("");
@@ -28,6 +31,7 @@ export function OperationalRecordForm({ kind, currency, scale = 1, businessDay }
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setBusy(true); setFeedback(null);
+    setDrawerBusy(true);
     try {
       const scaledAmount = Number(amount) * scale;
       const roundedAmount = Math.round(scaledAmount);
@@ -37,9 +41,10 @@ export function OperationalRecordForm({ kind, currency, scale = 1, businessDay }
       requestKey.current = null;
       setTitle(""); setAmount(""); setNote(""); setDateEdited(false); setOccurredOn("");
       setFeedback({ message: `${titleFor} saved.`, error: false });
+      recordSaved();
     } catch (error) {
       setFeedback({ message: error instanceof Error ? error.message : "Could not save this record.", error: true });
-    } finally { setBusy(false); }
+    } finally { setBusy(false); setDrawerBusy(false); }
   }
 
   return <div className="settings-stack">
