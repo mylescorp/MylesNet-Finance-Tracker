@@ -1,14 +1,14 @@
 /**
  * Companion Google Apps Script bridge for the existing accountant form.
  * Add this file to the Sheet's Apps Script project and run
- * installGoogleFormBridgeTriggers_ only after staging parity is approved.
+ * installGoogleFormBridgeTriggers only after staging parity is approved.
  * The existing onEntrySubmit/doPost handlers are not replaced.
  */
 
 const GOOGLE_FORM_QUEUE_TAB_ = 'Google_Form_Sync_Queue';
 const GOOGLE_FORM_URL_PROP_ = 'GOOGLE_FORM_INGRESS_URL';
 
-function installGoogleFormBridgeTriggers_() {
+function installGoogleFormBridgeTriggers() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   if (!ss) throw new Error('Open the workbook before installing the bridge.');
   let queue = ss.getSheetByName(GOOGLE_FORM_QUEUE_TAB_);
@@ -122,7 +122,7 @@ function flushGoogleFormQueue_() {
         });
         const code = response.getResponseCode();
         const body = JSON.parse(response.getContentText() || '{}');
-        result = String(body.status || `http_${code}`).slice(0, 80);
+        result = String(body.status || ('http_' + code)).slice(0, 80);
         if (code >= 200 && code < 300 && ['posted', 'needs_review', 'duplicate'].includes(body.status)) nextState = body.status === 'needs_review' ? 'needs_review' : 'delivered';
         else if (code >= 400 && code < 500) nextState = 'failed';
         else if (code >= 200 && code < 300) nextState = 'failed';
@@ -155,7 +155,7 @@ function retryFailedGoogleFormRow_() {
   ui.alert('Queue row marked for retry. It will be sent by the next scheduled flush.');
 }
 
-function configureGoogleFormIngressUrl_() {
+function configureGoogleFormIngressUrl() {
   if (typeof checkPermission === 'function' && !checkPermission('MANAGE_USERS')) return;
   const ui = SpreadsheetApp.getUi();
   const answer = ui.prompt('Connect Google Form to MylesNet', 'Paste the private connection URL copied from Settings → Data. The URL contains a secret; do not share it.', ui.ButtonSet.OK_CANCEL);
