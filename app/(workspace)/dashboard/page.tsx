@@ -168,7 +168,7 @@ export default function DashboardPage() {
       <label className="period-control dashboard-welcome-period">Period <select value={period} onChange={(event) => setPeriod(event.target.value)} aria-label="Dashboard period"><option value="today">Today</option><option value="week">This week</option><option value="month">This month</option><option value="year">This year</option><option value="custom">Custom</option></select></label>
     </section>
     {period === "custom" && <div className="custom-period-row"><label>From <input type="date" value={customFrom} onChange={(event) => setCustomFrom(event.target.value)} /></label><label>To <input type="date" value={customTo} min={customFrom || undefined} onChange={(event) => setCustomTo(event.target.value)} /></label>{customRangeError && <span className="form-feedback form-error" role="alert">{customRangeError}</span>}</div>}
-    <div className="dashboard-banner"><Image src="/brand/banner.png" alt="MylesNet Finance Tracker" fill priority sizes="(max-width: 760px) 100vw, 1100px" /><div className="banner-caption">Your business, clearly in view.</div></div>
+    <div className="dashboard-banner"><Image src="/brand/banner.png" alt="MylesNet Finance Tracker" fill priority sizes="(max-width: 760px) 100vw, 1100px" /></div>
     <div className="board-toolbar no-print">
       {customRangeInvalid ? <span className="toolbar-range">Complete the custom date range</span> : <span className="toolbar-range">{fmtDate(range.from)} — {fmtDate(rangeLastDay.toISOString().slice(0, 10))}</span>}
       <button className="button" type="button" onClick={() => window.print()}><Printer size={14} />Print</button>

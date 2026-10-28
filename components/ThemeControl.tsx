@@ -23,7 +23,7 @@ function subscribe(onChange: () => void) {
 
 function getTheme(): Theme {
   const stored = window.localStorage.getItem(storageKey);
-  return stored === "light" || stored === "dark" ? stored : "system";
+  return stored === "light" || stored === "dark" || stored === "system" ? stored : "light";
 }
 
 function applyTheme(theme: Theme) {
@@ -35,15 +35,14 @@ function applyTheme(theme: Theme) {
 }
 
 export function ThemeControl() {
-  const theme = useSyncExternalStore<Theme>(subscribe, getTheme, (): Theme => "system");
+  const theme = useSyncExternalStore<Theme>(subscribe, getTheme, (): Theme => "light");
 
   useEffect(() => {
     applyTheme(theme);
   }, [theme]);
 
   function selectTheme(updated: Theme) {
-    if (updated === "system") window.localStorage.removeItem(storageKey);
-    else window.localStorage.setItem(storageKey, updated);
+    window.localStorage.setItem(storageKey, updated);
     applyTheme(updated);
     window.dispatchEvent(new Event("mylesnet-theme-change"));
   }
