@@ -772,6 +772,23 @@ export const explainReconciliation = mutation({
   },
 });
 
+export const reopenReconciliation = mutation({
+  args: { reconciliationId: v.id("reconciliations"), reason: v.string() },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const current = await workspace(ctx);
+    if (!current || current.membership.role !== "owner") throw new Error("Only a workspace owner can reopen an explained reconciliation.");
+    const reason = args.reason.trim();
+    if (reason.length < 5 || reason.length > 300) throw new Error("Explain why this reconciliation must be reopened in 5 to 300 characters.");
+    const row = await ctx.db.get("reconciliations", args.reconciliationId);
+    if (!row || row.businessId !== current.business._id) throw new Error("Reconciliation not found.");
+    if (row.status !== "explained") throw new Error("Only an explained difference can be reopened.");
+    await ctx.db.patch("reconciliations", row._id, { status: "open", explanation: undefined, resolvedBy: undefined, resolvedAt: undefined });
+    await audit(ctx, current, "reconciliation.reopened", "reconciliation", row._id, `Explained difference reopened: ${reason}`, JSON.stringify({ priorExplanation: row.explanation, reason }));
+    return null;
+  },
+});
+
 export const createPartner = mutation({
   args: { name: v.string(), ownershipBps: v.number(), idempotencyKey: v.string() }, returns: v.id("partners"),
   handler: async (ctx, args) => {
