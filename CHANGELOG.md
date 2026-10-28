@@ -18,6 +18,7 @@ Add a dated entry at the top of this file for every user-visible product change.
 - Align the shared top bar with the reference by centering workspace search and grouping attention and account actions on the right.
 - Match the reference navigation more closely with a clean single-line page title, a working Ctrl+K search shortcut, and calmer active sidebar styling.
 - Bring the shared header and sidebar closer to the reference with inset rounded panels and aligned search, assistant, support, and account actions.
+- Open Support directly in WhatsApp at +254 743 993 715 and remove the unavailable Ask AI action from the shared header.
 - Simplify the sidebar by removing the redundant workspace-protection footer.
 - Configure workspace country, timezone, currency, finance rules, and reporting preferences in Settings.
 - Review imports and connected finance integrations from the Data settings area.
