@@ -5,7 +5,6 @@ const sections = [
   ["Finance", "/settings/finance"],
   ["Rules", "/settings/rules"],
   ["Data", "/settings/data"],
-  ["Access", "/settings/access"],
   ["Releases", "/settings/releases"],
 ] as const;
 
