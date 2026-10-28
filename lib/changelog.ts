@@ -3,6 +3,7 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 export type ChangelogEntry = {
+  id: string;
   date: string;
   version: string;
   title: string;
@@ -33,8 +34,10 @@ function readPendingChangesets(): ChangelogEntry[] {
       const [title, ...descriptionLines] = match[2].trim().split(/\r?\n/);
       const description = descriptionLines.join(" ").trim();
       if (!title?.trim() || !description) return [];
+      const id = file.slice(0, -".md".length);
       const category = release[1] === "major" ? "Breaking changes" : release[1] === "minor" ? "New" : "Fixes";
       return [{
+        id,
         date: "Next release",
         version: "",
         title: title.trim(),
@@ -50,8 +53,14 @@ export function readChangelog(options: { includePending?: boolean } = {}): Chang
   let date = "";
   let entry: ChangelogEntry | undefined;
   let section: ChangelogEntry["sections"][number] | undefined;
+  let nextEntryId = "";
 
   for (const line of readChangelogSource().split(/\r?\n/)) {
+    const cardId = line.match(/^<!-- change-id: ([a-zA-Z0-9_-]+) -->$/);
+    if (cardId) {
+      nextEntryId = cardId[1];
+      continue;
+    }
     const release = line.match(/^## v(\d+\.\d+\.\d+(?:-[\w.-]+)?) — (\d{4}-\d{2}-\d{2})$/);
     if (release) {
       version = release[1];
@@ -62,7 +71,8 @@ export function readChangelog(options: { includePending?: boolean } = {}): Chang
     }
     const heading = line.match(/^### (New|Improvements|Fixes|Breaking changes) — (.+)$/);
     if (heading && version) {
-      entry = { date, version, title: heading[2], sections: [], status: "released" };
+      entry = { id: nextEntryId || `${version}-${entries.length}`, date, version, title: heading[2], sections: [], status: "released" };
+      nextEntryId = "";
       section = { title: heading[1], items: [] };
       entry.sections.push(section);
       entries.push(entry);
@@ -78,7 +88,16 @@ export function readChangelog(options: { includePending?: boolean } = {}): Chang
 
 export function readChangelogSummary() {
   const entries = readChangelog();
-  const entryIds = entries.map(entry => createHash("sha256").update(JSON.stringify(entry)).digest("hex"));
+  const entryIds = entries.map(entry => entry.id || createHash("sha256").update(`${entry.version}:${entry.title}`).digest("hex"));
+  // Keep the previous content-hash IDs during migration so readers who opened
+  // What's new before stable IDs were introduced do not see old cards as new.
+  const legacyEntryIds = entries.map(entry => createHash("sha256").update(JSON.stringify({
+    date: entry.date,
+    version: entry.version,
+    title: entry.title,
+    sections: entry.sections,
+    status: entry.status,
+  })).digest("hex"));
   const contentHash = createHash("sha256").update(JSON.stringify(entryIds)).digest("hex");
-  return { contentHash, entryIds, totalChanges: entryIds.length };
+  return { contentHash, entryIds, legacyEntryIds, totalChanges: entryIds.length };
 }

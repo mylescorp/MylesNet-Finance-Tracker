@@ -28,6 +28,7 @@ const changes = changesetFiles.map((file) => {
 
   const bump = packageEntry[1];
   return {
+    id: file.slice(0, -".md".length),
     title: title.trim(),
     description,
     category: bump === "minor" ? "New" : bump === "major" ? "Breaking changes" : "Fixes",
@@ -61,7 +62,7 @@ if (changelog.includes(`## v${nextPackage.version} — `)) {
   throw new Error(`CHANGELOG.md already contains version ${nextPackage.version}.`);
 }
 
-const releaseCards = changes.map(({ category, title, description }) => `### ${category} — ${title}\n\n- ${description}`).join("\n\n");
+const releaseCards = changes.map(({ id, category, title, description }) => `<!-- change-id: ${id} -->\n### ${category} — ${title}\n\n- ${description}`).join("\n\n");
 const release = `## v${nextPackage.version} — ${date}\n\n${releaseCards}\n\n`;
 const firstReleaseIndex = changelog.search(/^## v\d+\.\d+\.\d+(?:-[\w.-]+)? — \d{4}-\d{2}-\d{2}$/m);
 const updatedChangelog = firstReleaseIndex >= 0

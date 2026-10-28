@@ -10,14 +10,13 @@ import Image from "next/image";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { ReactNode, useCallback, useEffect, useRef, useState } from "react";
-import { ThemeControl } from "@/components/ThemeControl";
 import { AccountDrawer, ProfileAvatar } from "@/components/account/AccountDrawer";
 import { AccountMenu } from "@/components/account/AccountMenu";
 import { GlobalSearch } from "@/components/workspace/GlobalSearch";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 
-type ChangelogSummary = { contentHash: string; entryIds: string[]; totalChanges: number };
+type ChangelogSummary = { contentHash: string; entryIds: string[]; legacyEntryIds?: string[]; totalChanges: number };
 const changelogSeenKey = "mylesnet-changelog-seen-v1";
 
 function readSeenChangelog() {
@@ -31,7 +30,10 @@ function unreadChangelogCount(summary: ChangelogSummary, seenValue: string | nul
     const seen = JSON.parse(seenValue) as Partial<ChangelogSummary> & { version?: string };
     if (Array.isArray(seen.entryIds)) {
       const seenIds = new Set(seen.entryIds.filter((id): id is string => typeof id === "string"));
-      return summary.entryIds.filter(id => !seenIds.has(id)).length;
+      return summary.entryIds.reduce((unread, id, index) => {
+        const legacyId = summary.legacyEntryIds?.[index];
+        return unread + (seenIds.has(id) || (legacyId !== undefined && seenIds.has(legacyId)) ? 0 : 1);
+      }, 0);
     }
     const seenHash = seen.contentHash ?? (seen as unknown as { version?: string }).version;
     if (seenHash === summary.contentHash) return 0;
@@ -86,7 +88,17 @@ export function AppShell({ children }: { children: ReactNode }) {
   const searchOpeningRef = useRef(false);
   const accountLabel = access?.access === "ready" ? access.businessName : "My account";
   const sidebarWorkspaceLabel = /^MylesNet Finance Tracker$/i.test(accountLabel) ? "Finance" : accountLabel;
-  const permissions = access?.access === "ready" ? access.permissions : [];
+  // Keep the shell resilient while a local or preview app reconnects to a
+  // Convex deployment that may still be serving the prior currentAccess shape.
+  const workspaces = access?.access === "ready" && Array.isArray(access.workspaces)
+    ? access.workspaces
+    : [];
+  const selectableWorkspaces = access?.access === "choose_workspace" && Array.isArray(access.workspaces)
+    ? access.workspaces
+    : [];
+  const permissions = access?.access === "ready" && Array.isArray(access.permissions)
+    ? access.permissions
+    : [];
   const searchScope = access?.access === "ready" && profile?.email
     ? `${profile.email.trim().toLowerCase()}::${access.businessId}`
     : null;
@@ -213,7 +225,7 @@ export function AppShell({ children }: { children: ReactNode }) {
           <span className="sidebar-workspace-mark" aria-hidden="true">M</span>
           <span className="sidebar-workspace-copy"><strong>{sidebarWorkspaceLabel}</strong></span>
         </div>
-        {access?.access === "ready" && access.workspaces.length > 1 && <label className="workspace-switcher"><span>Switch workspace</span><select aria-label="Switch workspace" value={access.businessId} disabled={switchingWorkspace} onChange={event => void changeWorkspace(event.target.value)}>{access.workspaces.map(workspace => <option key={workspace.businessId} value={workspace.businessId}>{workspace.businessName} · {workspace.role.replaceAll("_", " ")}</option>)}</select></label>}
+        {access?.access === "ready" && workspaces.length > 1 && <label className="workspace-switcher"><span>Switch workspace</span><select aria-label="Switch workspace" value={access.businessId} disabled={switchingWorkspace} onChange={event => void changeWorkspace(event.target.value)}>{workspaces.map(workspace => <option key={workspace.businessId} value={workspace.businessId}>{workspace.businessName} · {workspace.role.replaceAll("_", " ")}</option>)}</select></label>}
         <nav className="sidebar-nav" aria-label="Main navigation">
           {visibleNavGroups.map(group => <section className="sidebar-nav-group" key={group.label} aria-label={group.label}>
             <h2 className="sidebar-group-label">{group.label}</h2>
@@ -246,7 +258,6 @@ export function AppShell({ children }: { children: ReactNode }) {
           {!financeApproverOnly && <GlobalSearch searchScope={searchScope} />}
         </div>
         <div className="header-actions">
-          <ThemeControl />
           {!financeApproverOnly && permissions.includes("audit.view") && <Link className="utility-link" href="/issues" aria-label="Needs attention"><Bell size={17} /><span>Needs attention</span></Link>}
           <a className="topbar-support" href="https://wa.me/254743993715" target="_blank" rel="noopener noreferrer" aria-label="Contact support on WhatsApp" title="Contact support on WhatsApp"><MessageCircle size={15} aria-hidden="true" /><span>Support</span><ArrowUpRight size={13} aria-hidden="true" /></a>
           <button className="user-menu" type="button" aria-label="Open your account menu" aria-haspopup="dialog" aria-expanded={accountMenuOpen} title="Manage your account" onClick={() => setAccountMenuOpen(open => !open)}>
@@ -257,7 +268,7 @@ export function AppShell({ children }: { children: ReactNode }) {
         </div>
       </header>
       {access?.access === "pending" && <div className="access-pending" role="status"><strong>Access awaiting invitation</strong><span>Your account is not yet linked to a MylesNet workspace.</span></div>}
-      {access?.access === "choose_workspace" && <section className="access-pending workspace-choice" role="status"><strong>Choose a workspace</strong><span>Your account has access to more than one workspace. Select which workspace to open.</span>{workspaceError && <span role="alert">{workspaceError}</span>}{access.workspaces.map(workspace => <button key={workspace.businessId} className="button" type="button" disabled={switchingWorkspace} onClick={() => { setSwitchingWorkspace(true); setWorkspaceError(""); void selectWorkspace({ businessId: workspace.businessId }).catch(error => setWorkspaceError(error instanceof Error ? error.message : "Could not open this workspace.")).finally(() => setSwitchingWorkspace(false)); }}><strong>{workspace.businessName}</strong><span>{workspace.role.replaceAll("_", " ")}</span></button>)}</section>}
+      {access?.access === "choose_workspace" && <section className="access-pending workspace-choice" role="status"><strong>Choose a workspace</strong><span>Your account has access to more than one workspace. Select which workspace to open.</span>{workspaceError && <span role="alert">{workspaceError}</span>}{selectableWorkspaces.map(workspace => <button key={workspace.businessId} className="button" type="button" disabled={switchingWorkspace} onClick={() => { setSwitchingWorkspace(true); setWorkspaceError(""); void selectWorkspace({ businessId: workspace.businessId }).catch(error => setWorkspaceError(error instanceof Error ? error.message : "Could not open this workspace.")).finally(() => setSwitchingWorkspace(false)); }}><strong>{workspace.businessName}</strong><span>{workspace.role.replaceAll("_", " ")}</span></button>)}</section>}
       <main key={access?.access === "ready" ? access.businessId : access?.access ?? "loading"} className="page-content">{access?.access === "choose_workspace" ? null : children}</main>
       <footer className="app-footer"><span>Powered by <a href="https://mylescorptech.com" target="_blank" rel="noopener noreferrer">MylesCorp Technologies</a></span></footer>
       </div>
