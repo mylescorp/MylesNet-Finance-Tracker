@@ -1,4 +1,5 @@
 import { v } from "convex/values";
+import { paginationOptsValidator } from "convex/server";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { mutation, query } from "./_generated/server";
 import type { QueryCtx } from "./_generated/server";
@@ -163,6 +164,59 @@ export const overview = query({
       issuesComplete: reconciliations.length < 101 && expenseEntries.length < 1001 && salesEntries.length < 5001,
       periodActivity: { salesRowsComplete: salesEntries.length < 5001, expenseRowsComplete: expenseEntries.length < 1001 },
     };
+  },
+});
+
+export const reviewQueue = query({
+  args: {
+    businessId: v.id("businesses"),
+    status: v.optional(v.union(v.literal("open"), v.literal("acknowledged"), v.literal("resolved"))),
+    paginationOpts: paginationOptsValidator,
+  },
+  handler: async (ctx, args) => {
+    const callerId = await getAuthUserId(ctx);
+    const membership = callerId ? await ctx.db.query("memberships").withIndex("by_business_and_user", q => q.eq("businessId", args.businessId).eq("userId", callerId)).unique() : null;
+    if (!membership?.active || (membership.role !== "owner" && membership.role !== "cashier")) throw new Error("Only active owners and cashiers can review the workspace issue queue.");
+    if (args.paginationOpts.numItems > 50) throw new Error("Issue queue pages are limited to 50 records.");
+    const query = args.status
+      ? ctx.db.query("issueReviews").withIndex("by_business_and_status_and_updated", q => q.eq("businessId", args.businessId).eq("status", args.status!))
+      : ctx.db.query("issueReviews").withIndex("by_business_and_updated", q => q.eq("businessId", args.businessId));
+    const page = await query.order("desc").paginate(args.paginationOpts);
+    const results = await Promise.all(page.page.map(async row => {
+      const [assignee, author] = await Promise.all([
+        row.assignedTo ? ctx.db.get("users", row.assignedTo) : null,
+        ctx.db.get("users", row.updatedBy),
+      ]);
+      const [periodFrom, toExclusive, , amountText] = row.issueKey.split(":");
+      const amountUgx = Number(amountText);
+      const title = row.issueId.startsWith("weak-") ? `Low-sales day · ${row.issueId.slice(5)}` : ({
+        "missing-sales-days": "Days with no sales entry",
+        "unallocated-sales": "Sales need account allocation",
+        "low-cash": "Cash is below the alert threshold",
+        "sales-target-pace": "Behind monthly sales pace",
+        "open-reconciliations": "Reconciliation differences need review",
+        "high-expense-review": "Large expenses to review",
+        "monthly-expense-warning": "Monthly expenses crossed the warning level",
+        "ownership-incomplete": "Partner ownership does not total 100%",
+      } as Record<string, string>)[row.issueId] ?? "Data-health issue";
+      const href = row.issueId.includes("reconciliation") ? "/reconcile" : row.issueId.includes("expense") ? "/expenses" : row.issueId.includes("sales") || row.issueId.includes("unallocated") || row.issueId.includes("missing") ? "/sales" : row.issueId.includes("ownership") ? "/partners" : "/analytics";
+      return {
+        issueKey: row.issueKey,
+        issueId: row.issueId,
+        title,
+        href,
+        periodFrom,
+        toExclusive,
+        amountUgx: Number.isSafeInteger(amountUgx) ? amountUgx : 0,
+        status: row.status,
+        note: row.note,
+        assignedTo: row.assignedTo,
+        assignee: assignee?.name || assignee?.email || undefined,
+        updatedBy: author?.name || author?.email || "Workspace member",
+        updatedAt: row.updatedAt,
+      };
+    }));
+    return { ...page, page: results };
   },
 });
 

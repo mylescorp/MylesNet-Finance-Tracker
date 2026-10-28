@@ -396,7 +396,9 @@ export default defineSchema({
     updatedBy: v.id("users"),
     updatedAt: v.number(),
     createdAt: v.number(),
-  }).index("by_business_and_issue", ["businessId", "issueKey"]),
+  }).index("by_business_and_issue", ["businessId", "issueKey"])
+    .index("by_business_and_updated", ["businessId", "updatedAt"])
+    .index("by_business_and_status_and_updated", ["businessId", "status", "updatedAt"]),
   importBatches: defineTable({
     businessId: v.id("businesses"),
     fileName: v.string(),
