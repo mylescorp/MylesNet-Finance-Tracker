@@ -23,7 +23,7 @@ export function IssueHistoryCsvExport({ businessId, status, currency, scale }: {
         const page: { page: typeof rows; isDone: boolean; continueCursor: string } = await convex.query(api.analytics.reviewQueue, {
           businessId,
           ...(status === "all" ? {} : { status }),
-          paginationOpts: { numItems: 100, cursor },
+          paginationOpts: { numItems: 50, cursor },
         });
         if (rows.length + page.page.length > 10_000 || (rows.length + page.page.length === 10_000 && !page.isDone)) {
           setMessage("This history exceeds 10,000 records. Filter by status and try again.");
@@ -34,12 +34,20 @@ export function IssueHistoryCsvExport({ businessId, status, currency, scale }: {
         done = page.isDone;
       }
 
-      const headers = ["Issue ID", "Issue", "Period from", "Period to exclusive", `Amount (${currency})`, "Status", "Assignee", "Review note", "Updated by", "Updated at (UTC)", "Issue key"];
+      const headers = ["Issue ID", "Issue", "Period from", "Period to exclusive", "Value", "Unit", "Status", "Assignee", "Review note", "Updated by", "Updated at (UTC)", "Issue key"];
       const encodeCell = (value: string) => {
         const safe = /^[\s\uFEFF]*[=+\-@]/u.test(value) ? `'${value}` : value;
         return `"${safe.replaceAll('"', '""')}"`;
       };
-      const csvRows = rows.map(row => [row.issueId, row.title, row.periodFrom, row.toExclusive, String(row.amountUgx / scale), row.status, row.assignee ?? "", row.note ?? "", row.updatedBy, new Date(row.updatedAt).toISOString(), row.issueKey]);
+      const csvRows = rows.map(row => {
+        const value = row.issueId === "missing-sales-days" ? String(row.amountUgx)
+          : row.issueId === "ownership-incomplete" ? String(row.amountUgx / 100)
+            : String(row.amountUgx / scale);
+        const unit = row.issueId === "missing-sales-days" ? "days"
+          : row.issueId === "ownership-incomplete" ? "%"
+            : currency;
+        return [row.issueId, row.title, row.periodFrom, row.toExclusive, value, unit, row.status, row.assignee ?? "", row.note ?? "", row.updatedBy, new Date(row.updatedAt).toISOString(), row.issueKey];
+      });
       const csv = [headers, ...csvRows].map(row => row.map(encodeCell).join(",")).join("\r\n");
       const url = URL.createObjectURL(new Blob([`\uFEFF${csv}`], { type: "text/csv;charset=utf-8" }));
       const anchor = document.createElement("a");
