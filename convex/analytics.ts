@@ -122,8 +122,10 @@ export const overview = query({
     const salesUgx = scopedPeriodRows.reduce((sum, row) => safeAdd(sum, row.salesUgx, "Sales total"), 0);
     const expensesUgx = scopedPeriodRows.reduce((sum, row) => safeAdd(sum, row.expensesUgx, "Expense total"), 0);
     const netUgx = safeAdd(salesUgx, -expensesUgx, "Cashbook net");
-    const cashUgx = (!args.account || args.account === "cash") ? balances.find(row => row.account === "cash")?.balanceUgx ?? 0 : 0;
-    const mobileUgx = (!args.account || args.account === "mobile_money") ? balances.find(row => row.account === "mobile_money")?.balanceUgx ?? 0 : 0;
+    const workspaceCashUgx = balances.find(row => row.account === "cash")?.balanceUgx ?? 0;
+    const workspaceMobileMoneyUgx = balances.find(row => row.account === "mobile_money")?.balanceUgx ?? 0;
+    const cashUgx = (!args.account || args.account === "cash") ? workspaceCashUgx : 0;
+    const mobileUgx = (!args.account || args.account === "mobile_money") ? workspaceMobileMoneyUgx : 0;
     const liquidUgx = safeAdd(cashUgx, mobileUgx, "Liquid balance");
     const monthSales = scopedMonthRows.reduce((sum, row) => safeAdd(sum, row.salesUgx, "Month sales"), 0);
     const monthExpenses = scopedMonthRows.reduce((sum, row) => safeAdd(sum, row.expensesUgx, "Month expenses"), 0);
@@ -154,11 +156,11 @@ export const overview = query({
     }));
 
     const issues: { id: string; title: string; detail: string; severity: "review" | "warning" | "action"; href: string; amountUgx: number }[] = [];
-    const weakDays = scopedWeakRows.filter(row => row.salesUgx > 0 && row.salesUgx < weakThreshold);
+    const weakDays = scopedRecentComplete ? scopedWeakRows.filter(row => row.salesUgx > 0 && row.salesUgx < weakThreshold) : [];
     for (const row of weakDays.slice(0, 7)) issues.push({ id: `weak-${row.day}`, title: "Low-sales day", detail: `${row.day}: recorded sales are below the workspace review threshold. Confirm the day is complete.`, severity: "review", href: "/analytics", amountUgx: row.salesUgx });
     const recentSales = new Set(scopedWeakRows.filter(row => row.salesUgx > 0).map(row => row.day));
     const recentActivityExists = scopedWeakRows.some(row => row.saleCount > 0 || row.expenseCount > 0);
-    if (recentActivityExists) {
+    if (recentActivityExists && scopedRecentComplete) {
       const missingDays = Array.from({ length: 14 }, (_, index) => shiftDay(weakFrom, index)).filter(day => day <= args.today && !recentSales.has(day));
       if (missingDays.length > 0) issues.push({ id: "missing-sales-days", title: "Days with no sales entry", detail: `${missingDays.length} of the last 14 days have no recorded sales. Check whether those were closed days or missing entries.`, severity: "review", href: "/sales", amountUgx: missingDays.length });
     }
@@ -167,14 +169,15 @@ export const overview = query({
     const unallocatedComplete = scopedPeriodSalesComplete;
     if (unallocatedUgx > 0) issues.push({ id: "unallocated-sales", title: "Sales need account allocation", detail: unallocatedComplete ? `${unallocated.length} sales totaling ${displayMoney(unallocatedUgx)} are not assigned to cash or mobile money.` : `At least ${unallocated.length} unallocated sales were found; narrow the period to review all records.`, severity: "action", href: "/sales", amountUgx: unallocatedUgx });
     const cashThresholdEnabled = lowCashThreshold > 0;
-    if (cashThresholdEnabled && liquidUgx < lowCashThreshold) issues.push({ id: "low-cash", title: "Cash is below the alert threshold", detail: `Recorded cash and mobile money total ${displayMoney(liquidUgx)}; configured threshold is ${displayMoney(lowCashThreshold)}.`, severity: "warning", href: "/settings/rules", amountUgx: liquidUgx });
-    if (salesTarget > 0 && month.elapsedDays < month.daysInMonth && monthSales < Math.ceil(salesTarget * month.elapsedDays / month.daysInMonth)) issues.push({ id: "sales-target-pace", title: "Behind monthly sales pace", detail: `Month-to-date sales of ${displayMoney(monthSales)} are below the straight-line pace for the ${displayMoney(salesTarget)} target.`, severity: "warning", href: "/settings/rules", amountUgx: monthSales });
+    const workspaceLiquidUgx = safeAdd(workspaceCashUgx, workspaceMobileMoneyUgx, "Workspace liquid balance");
+    if (cashThresholdEnabled && workspaceLiquidUgx < lowCashThreshold) issues.push({ id: "low-cash", title: "Cash is below the alert threshold", detail: `Recorded cash and mobile money total ${displayMoney(workspaceLiquidUgx)}; configured threshold is ${displayMoney(lowCashThreshold)}.`, severity: "warning", href: "/settings/rules", amountUgx: workspaceLiquidUgx });
+    if (scopedRecentComplete && salesTarget > 0 && month.elapsedDays < month.daysInMonth && monthSales < Math.ceil(salesTarget * month.elapsedDays / month.daysInMonth)) issues.push({ id: "sales-target-pace", title: "Behind monthly sales pace", detail: `Month-to-date sales of ${displayMoney(monthSales)} are below the straight-line pace for the ${displayMoney(salesTarget)} target.`, severity: "warning", href: "/settings/rules", amountUgx: monthSales });
     const openReconciliations = reconciliations.filter(row => row.status === "open");
     if (openReconciliations.length > 0) issues.push({ id: "open-reconciliations", title: "Reconciliation differences need review", detail: `${openReconciliations.length}${reconciliations.length === 101 ? " or more" : ""} open account differences were recorded in the last 90 days.`, severity: "action", href: "/reconcile", amountUgx: openReconciliations.reduce((sum, row) => safeAdd(sum, Math.abs(row.varianceUgx), "Reconciliation differences"), 0) });
     const largeExpenses = scopedExpenseEntries.filter(row => row.state === "posted" && row.amountUgx >= (preferences?.highExpenseReviewUgx ?? 500000 * currencyScale));
     if (largeExpenses.length > 0) issues.push({ id: "high-expense-review", title: "Large expenses to review", detail: `${largeExpenses.length}${!scopedPeriodExpensesComplete ? " or more" : ""} posted expenses crossed the configured review threshold.`, severity: "review", href: "/expenses", amountUgx: largeExpenses.reduce((sum, row) => safeAdd(sum, row.amountUgx, "Large expenses"), 0) });
     const expenseWarning = preferences?.monthlyExpenseWarningUgx ?? 0;
-    if (expenseWarning > 0 && monthExpenses > expenseWarning) issues.push({ id: "monthly-expense-warning", title: "Monthly expenses crossed the warning level", detail: `Recorded month-to-date expenses are ${displayMoney(monthExpenses)} against a ${displayMoney(expenseWarning)} warning level.`, severity: "warning", href: "/expenses", amountUgx: monthExpenses });
+    if (scopedRecentComplete && expenseWarning > 0 && monthExpenses > expenseWarning) issues.push({ id: "monthly-expense-warning", title: "Monthly expenses crossed the warning level", detail: `Recorded month-to-date expenses are ${displayMoney(monthExpenses)} against a ${displayMoney(expenseWarning)} warning level.`, severity: "warning", href: "/expenses", amountUgx: monthExpenses });
     if (partners.length > 0 && !ownershipComplete) issues.push({ id: "ownership-incomplete", title: "Partner ownership does not total 100%", detail: `Active ownership currently totals ${(ownershipBps / 100).toFixed(2)}%. Partner profit shares are withheld until ownership is complete.`, severity: "warning", href: "/partners", amountUgx: ownershipBps });
 
     const reviewers = (await ctx.db.query("memberships").withIndex("by_business_and_user", q => q.eq("businessId", business._id)).take(100))
@@ -207,8 +210,9 @@ export const overview = query({
       unallocated: { count: unallocated.length, amountUgx: unallocatedUgx, complete: unallocatedComplete },
       issues: issueRows,
       reviewers: reviewerOptions,
+      recentActivityComplete: scopedRecentComplete,
       issuesComplete: reconciliations.length < 101 && (args.account ? scopedPeriodComplete && scopedRecentComplete : expenseEntries.length < 1001 && salesEntries.length < 5001),
-      periodActivity: { salesRowsComplete: scopedPeriodSalesComplete, expenseRowsComplete: scopedPeriodExpensesComplete },
+      periodActivity: { salesRowsComplete: args.account ? scopedPeriodSalesComplete : true, expenseRowsComplete: args.account ? scopedPeriodExpensesComplete : true },
     };
   },
 });

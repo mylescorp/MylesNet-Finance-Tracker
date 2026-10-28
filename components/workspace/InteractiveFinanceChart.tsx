@@ -38,7 +38,11 @@ export function InteractiveFinanceChart({
   showPrevious?: boolean;
 }) {
   const [activeIndex, setActiveIndex] = useState<number | null>(null);
-  if (!points.length || !points.some(point => point.salesUgx || point.expensesUgx || point.previousSalesUgx)) {
+  if (!complete) return <div className="interactive-finance-chart">
+    <p className="notice-banner notice-warning interactive-chart-warning" role="status">The matching records exceeded the safe summary limit. Chart values are withheld; choose a shorter date range to see complete results.</p>
+    <div className="empty-state compact-empty"><strong>Complete chart unavailable for this range.</strong><span>No partial totals are shown.</span></div>
+  </div>;
+  if (!points.length || !points.some(point => point.salesUgx || point.expensesUgx || (showPrevious && point.previousSalesUgx))) {
     return <div className="empty-state compact-empty"><strong>No recorded activity in this period.</strong><span>Chart values come from saved workspace records.</span></div>;
   }
 
@@ -74,7 +78,7 @@ export function InteractiveFinanceChart({
       {percentChange !== null && <span className={`chart-tooltip-change${percentChange < 0 ? " is-negative" : ""}`}>{percentChange > 0 ? "+" : ""}{percentChange}% vs previous period</span>}
     </div>}
     <div className="interactive-chart-scroll" onPointerLeave={() => setActiveIndex(null)}>
-      <svg className="interactive-chart-svg" viewBox={`0 0 ${width} ${height}`} role="group" aria-label={`Sales and expenses by date${accountFiltered ? ", filtered by account" : ""}`}>
+      <svg className="interactive-chart-svg" style={{ width: `${width}px`, minWidth: `${width}px` }} viewBox={`0 0 ${width} ${height}`} role="group" aria-label={`Sales and expenses by date${accountFiltered ? ", filtered by account" : ""}`}>
         {[0, 1, 2, 3].map(tick => {
           const y = top + plotHeight * tick / 3;
           const value = max - (max - min) * tick / 3;
@@ -92,11 +96,10 @@ export function InteractiveFinanceChart({
         <path className="chart-net-line" d={netLine} />
         {showPrevious && <path className="chart-previous-line" d={salesLine} />}
         {showPrevious && points.map((point, index) => <circle key={`previous-${point.day}`} className={`chart-previous-point${activeIndex === index ? " is-active" : ""}`} cx={xAt(index)} cy={yAt(point.previousSalesUgx)} r={activeIndex === index ? 4 : 2.5} />)}
-        {points.map((point, index) => <rect key={`hit-${point.day}`} className="chart-hit-area" x={xAt(index) - gap / 2} y={top} width={gap} height={bottom - top} tabIndex={activeIndex === index || (activeIndex === null && index === 0) ? 0 : -1} role="button" aria-pressed={activeIndex === index} aria-label={`${date(point.day)}. Sales ${money(point.salesUgx, currency, scale, locale)}. Expenses ${money(point.expensesUgx, currency, scale, locale)}. Net ${money(point.netUgx, currency, scale, locale)}. Previous period sales ${money(point.previousSalesUgx, currency, scale, locale)}.`} onPointerEnter={() => setActiveIndex(index)} onPointerLeave={event => { if (event.pointerType !== "touch") setActiveIndex(null); }} onFocus={() => setActiveIndex(index)} onBlur={() => setActiveIndex(null)} onClick={() => setActiveIndex(index)} onKeyDown={event => { if (event.key === "ArrowRight" || event.key === "ArrowLeft") { event.preventDefault(); const next = Math.max(0, Math.min(points.length - 1, index + (event.key === "ArrowRight" ? 1 : -1))); setActiveIndex(next); event.currentTarget.parentElement?.querySelector<SVGRectElement>(`[data-chart-index="${next}"]`)?.focus(); } if (event.key === "Enter" || event.key === " ") { event.preventDefault(); setActiveIndex(index); } if (event.key === "Escape") setActiveIndex(null); }} data-chart-index={index} />)}
+        {points.map((point, index) => <rect key={`hit-${point.day}`} className="chart-hit-area" x={xAt(index) - gap / 2} y={top} width={gap} height={bottom - top} tabIndex={activeIndex === index || (activeIndex === null && index === 0) ? 0 : -1} role="button" aria-pressed={activeIndex === index} aria-label={`${date(point.day)}. Sales ${money(point.salesUgx, currency, scale, locale)}. Expenses ${money(point.expensesUgx, currency, scale, locale)}. Net ${money(point.netUgx, currency, scale, locale)}.${showPrevious ? ` Previous period sales ${money(point.previousSalesUgx, currency, scale, locale)}.` : ""}`} onPointerEnter={() => setActiveIndex(index)} onPointerLeave={event => { if (event.pointerType !== "touch") setActiveIndex(null); }} onFocus={() => setActiveIndex(index)} onBlur={() => setActiveIndex(null)} onClick={() => setActiveIndex(index)} onKeyDown={event => { if (event.key === "ArrowRight" || event.key === "ArrowLeft") { event.preventDefault(); const next = Math.max(0, Math.min(points.length - 1, index + (event.key === "ArrowRight" ? 1 : -1))); setActiveIndex(next); event.currentTarget.parentElement?.querySelector<SVGRectElement>(`[data-chart-index="${next}"]`)?.focus(); } if (event.key === "Enter" || event.key === " ") { event.preventDefault(); setActiveIndex(index); } if (event.key === "Escape") setActiveIndex(null); }} data-chart-index={index} />)}
         {axisIndices.map(index => <text key={`axis-${index}`} className="chart-axis-label chart-date-label" x={xAt(index)} y={height - 8} textAnchor={index === 0 ? "start" : index === points.length - 1 ? "end" : "middle"}>{date(points[index]!.day)}</text>)}
       </svg>
     </div>
     <div className="interactive-chart-legend" aria-label="Chart legend"><span><i className="chart-mark chart-mark-sales" />Sales</span><span><i className="chart-mark chart-mark-expenses" />Expenses</span><span><i className="chart-mark chart-mark-net" />Net</span>{showPrevious && <span><i className="chart-mark chart-mark-previous" />Previous period sales</span>}</div>
-    {!complete && <p className="notice-banner notice-warning interactive-chart-warning" role="status">This account view reached the safe record limit, so older matching entries may be missing. Narrow the date range for a complete chart.</p>}
   </div>;
 }

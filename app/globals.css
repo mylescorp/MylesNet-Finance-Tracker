@@ -883,8 +883,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .finance-range-error { margin:-8px 0 14px; }
 .interactive-finance-chart { position:relative; min-width:0; }
 .interactive-chart-scroll { width:100%; overflow-x:auto; overscroll-behavior-inline:contain; scrollbar-width:thin; }
-.interactive-chart-svg { display:block; width:max(100%, min(100%, 900px)); min-width:900px; height:auto; overflow:visible; }
-.interactive-finance-chart.is-compact .interactive-chart-svg { min-width:680px; }
+.interactive-chart-svg { display:block; width:100%; min-width:0; height:auto; overflow:visible; }
 .chart-grid-line { stroke:var(--mn-line); stroke-width:1; }
 .chart-axis-label { fill:var(--mn-subtle); font-size:10px; }
 .chart-hover-band { fill:color-mix(in srgb,var(--mn-accent) 10%,transparent); }

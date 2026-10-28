@@ -307,7 +307,8 @@ export function BoardRoute({ route }: { route: string }) {
   if (!screen) return <WorkspaceTitle eyebrow="MylesNet" title="Page not found" description="Choose a section from the navigation." />;
   if (settings?.access === "ready" && settings.role === "finance_approver" && screen.title !== "Partners") return <><WorkspaceTitle eyebrow="Access limited" title="Distribution review" description="Finance approver access is scoped to independent partner distribution review." /><div className="notice-banner notice-info" role="status">Open Partners to review pending distribution requests. Business records, reports, and workspace settings are not available to this role.</div></>;
 
-  const stats = summary?.access === "ready" ? summary : null;
+  const summaryReady = summary?.access === "ready" ? summary : null;
+  const stats = summaryReady && (screen.title !== "Analytics" || summaryReady.accountFilterComplete) ? summaryReady : null;
   const yearDays = yearSummary?.access === "ready" ? yearSummary.days : undefined;
   const weekDays = trailingSevenSummary?.access === "ready" ? trailingSevenSummary.days : undefined;
   const metricValues: Record<string, string> = {
@@ -415,11 +416,12 @@ export function BoardRoute({ route }: { route: string }) {
     </div>
     {summary?.access === "restricted" && <div className="notice-banner notice-info" role="status">Partner-specific reporting is being prepared. Business-wide totals are hidden from partner accounts.</div>}
     {summary?.access === "pending" && <div className="notice-banner notice-warning" role="status">Workspace access is pending. Ask an owner to invite this Google account.</div>}
+    {screen.title === "Analytics" && summaryReady && !summaryReady.accountFilterComplete && <div className="notice-banner notice-warning" role="status">Some account-filtered totals reached the safe record limit. Affected figures are withheld; choose a shorter date range for complete results.</div>}
     {!operationalScreen && <div className="metric-grid board-metric-grid">
       {screen.metrics.map((label, index) => <Card className="metric-card board-metric-card" key={label}>
         <div className="card-heading"><span className="eyebrow">{label}</span><span className="entry-icon">{index % 2 === 0 ? <ArrowUpRight size={15} /> : <ArrowDownRight size={15} />}</span></div>
         <div className="metric-value">{metricValues[label] ?? "—"}</div>
-        <div className="metric-note">{metricValues[label] === undefined ? "Available when this record type is configured" : "Based on saved workspace records"}</div>
+        <div className="metric-note">{screen.title === "Analytics" && summaryReady && !summaryReady.accountFilterComplete ? "Unavailable · narrow the date range" : metricValues[label] === undefined ? "Available when this record type is configured" : "Based on saved workspace records"}</div>
       </Card>)}
     </div>}
     {screen.title === "Analytics" ? financeRangeError ? <Card><div className="empty-state compact-empty"><strong>Choose a valid date range.</strong><span>{financeRangeError}</span></div></Card> : <AnalyticsInsights range={range} today={today} currency={currency} scale={currencyScale} locale={locale} dateFormat={dateFormat} account={account === "all" ? undefined : account} /> : screen.title === "Needs attention" ? <AnalyticsInsights range={range} today={today} currency={currency} scale={currencyScale} locale={locale} issuesOnly /> : operationalScreen ? <OperationsWorkspace screen={screen.title as "Movements" | "Savings" | "Loans" | "Partners" | "Bills" | "Reconcile"} currency={currency} scale={currencyScale} locale={locale} timezone={timezone} dateFormat={dateFormat} range={range} /> : <div className="board-grid">
@@ -435,7 +437,7 @@ export function BoardRoute({ route }: { route: string }) {
         ) : section.kind === "table" && screen.title === "Daily Report" ? <DailyHistoryTable days={weekDays} today={today} loading={trailingSevenSummary === undefined} formatDay={fmtDate} formatMoney={fmt} />
           : section.kind === "table" && screen.title === "Monthly P&L" ? <MonthlyPnlTable days={yearDays} loading={yearSummary === undefined} locale={locale} formatMoney={fmt} />
           : section.kind === "chart" && section.title === "Sales by income type" ? <CategoryBreakdown entries={selectedEntries} kind="sale" formatMoney={fmt} truncated={selectedEntries?.length === entryLimit} />
-          : section.kind === "chart" ? <ChartPanel summary={stats} previous={previousSummary?.access === "ready" ? previousSummary : null} range={range} previousRange={previousRange} interactive={screen.title === "Analytics" && section.title.toLowerCase().includes("sales and expenses over time")} account={account} dateFormat={dateFormat} title={section.title} message={section.detail} currency={currency} scale={currencyScale} locale={locale} />
+          : section.kind === "chart" ? <ChartPanel summary={screen.title === "Analytics" ? summaryReady : stats} previous={previousSummary?.access === "ready" ? previousSummary : null} range={range} previousRange={previousRange} interactive={screen.title === "Analytics" && section.title.toLowerCase().includes("sales and expenses over time")} account={account} dateFormat={dateFormat} title={section.title} message={section.detail} currency={currency} scale={currencyScale} locale={locale} />
           : section.kind === "workflow" ? <WorkflowPanel screen={screen} section={section.title} currency={currency} scale={currencyScale} businessDay={today} />
             : <EmptyPanel
               message={screen.title === "Analytics"
@@ -555,6 +557,7 @@ function CategoryBreakdown({ entries, kind, formatMoney, truncated = false }: { 
 }
 
 function ChartPanel({ summary, previous, range, previousRange, interactive, account, dateFormat, title, message, currency, scale, locale }: { summary: { days: { day: string; salesUgx: number; expensesUgx: number }[]; accountFilterComplete?: boolean } | null; previous: { days: { day: string; salesUgx: number; expensesUgx: number }[]; accountFilterComplete?: boolean } | null; range: { from: string; toExclusive: string }; previousRange: { from: string; toExclusive: string }; interactive: boolean; account: FinanceAccount; dateFormat: DateFormat; title: string; message: string; currency: string; scale: number; locale: string }) {
+  if (summary?.accountFilterComplete === false || previous?.accountFilterComplete === false) return <p className="notice-banner notice-warning" role="status">Chart values are unavailable because the account scan reached its safe limit. Narrow the date range for complete results.</p>;
   const weekday = title.toLowerCase().includes("weekday") || title.toLowerCase().includes("best days");
   const daily = title.toLowerCase().includes("14 days") || title.toLowerCase().includes("daily");
   if (!weekday && !daily) return <EmptyPanel message="This chart is not available yet." next="The selected comparison needs categorized or workflow-specific records that are not stored in the cashbook yet." />;
@@ -572,7 +575,7 @@ function ChartPanel({ summary, previous, range, previousRange, interactive, acco
       const current = currentDays.get(day);
       return { day, salesUgx: current?.salesUgx ?? 0, expensesUgx: current?.expensesUgx ?? 0, netUgx: (current?.salesUgx ?? 0) - (current?.expensesUgx ?? 0), previousSalesUgx: prior?.salesUgx ?? 0 };
     });
-    return <InteractiveFinanceChart points={points} currency={currency} scale={scale} locale={locale} dateFormat={dateFormat} accountFiltered={account !== "all"} complete={summary?.accountFilterComplete !== false && previous?.accountFilterComplete !== false} />;
+    return <InteractiveFinanceChart points={points} currency={currency} scale={scale} locale={locale} dateFormat={dateFormat} accountFiltered={account !== "all"} complete />;
   }
   const days = summary?.days.slice(-14) ?? [];
   const bars = weekday ? Array.from({ length: 7 }, (_, weekdayIndex) => {
