@@ -56,7 +56,7 @@ export function readChangelog(options: { includePending?: boolean } = {}): Chang
   let nextEntryId = "";
 
   for (const line of readChangelogSource().split(/\r?\n/)) {
-    const cardId = line.match(/^<!-- change-id: ([a-zA-Z0-9_-]+) -->$/);
+    const cardId = line.match(/^<!-- change-id: ([a-zA-Z0-9_.-]+) -->$/);
     if (cardId) {
       nextEntryId = cardId[1];
       continue;

@@ -2,4 +2,6 @@
 "mylesnet-finance-tracker": patch
 ---
 
-Apply the shared sans-serif and serif accent typography to workspace headings. Match the dashboard's motivational quote to the reference with a classic italic serif, and load the actual Instrument Serif italic face for other italic-serif token use. Move Next.js font variables to the document root so the shared font tokens resolve to the loaded font families.
+Consistent workspace typography
+
+Apply shared heading fonts and serif accents to workspace titles, and give the dashboard quote a classic italic serif. Load the actual Instrument Serif italic face for italic-serif token use and move font variables to the document root so shared font tokens match their loaded families.

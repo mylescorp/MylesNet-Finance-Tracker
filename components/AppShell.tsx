@@ -116,6 +116,22 @@ export function AppShell({ children }: { children: ReactNode }) {
     };
   }, []);
   useEffect(() => {
+    const applyStoredTheme = () => {
+      let theme: string | null = null;
+      try { theme = window.localStorage.getItem("mylesnet-theme"); }
+      catch { return; /* Keep the current appearance if browser storage is unavailable. */ }
+      if (theme === "dark" || theme === "light") document.documentElement.dataset.theme = theme;
+      else if (theme === "system") document.documentElement.removeAttribute("data-theme");
+      else document.documentElement.dataset.theme = "light";
+    };
+    window.addEventListener("mylesnet-theme-change", applyStoredTheme);
+    window.addEventListener("storage", applyStoredTheme);
+    return () => {
+      window.removeEventListener("mylesnet-theme-change", applyStoredTheme);
+      window.removeEventListener("storage", applyStoredTheme);
+    };
+  }, []);
+  useEffect(() => {
     let active = true;
     void fetch("/api/changelog/summary", { cache: "no-store" })
       .then(response => response.ok ? response.json() as Promise<ChangelogSummary> : null)
