@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 
 const baseRef = process.env.GITHUB_BASE_REF;
 if (!baseRef) {
@@ -13,10 +13,10 @@ const changedFiles = execFileSync("git", ["diff", "--name-only", `${base}...HEAD
   .filter(Boolean);
 const changesApplicationCode = changedFiles.some((file) =>
   /^(app|components|convex|integrations|lib|public)\//.test(file)
-  || /^(next\.config\.|package\.json|package-lock\.json)$/.test(file),
+  || /^(next\.config\.(?:js|mjs|ts)|package\.json|package-lock\.json)$/.test(file),
 );
 
-const changesetFiles = changedFiles.filter((file) => /^\.changeset\/.+\.md$/.test(file) && file !== ".changeset/README.md");
+const changesetFiles = changedFiles.filter((file) => /^\.changeset\/.+\.md$/.test(file) && file !== ".changeset/README.md" && existsSync(file));
 const releasePackageChanged = changedFiles.includes("package.json") && changedFiles.includes("CHANGELOG.md");
 
 if (releasePackageChanged) {

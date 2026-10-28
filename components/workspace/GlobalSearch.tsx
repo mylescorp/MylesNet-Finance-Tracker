@@ -7,16 +7,28 @@ import { createPortal } from "react-dom";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "@/convex/_generated/api";
 
-const recentSearchesKey = "mylesnet-recent-searches-v1";
+const recentSearchesKeyPrefix = "mylesnet-recent-searches-v1";
 const maxRecentSearches = 5;
 
-function readRecentSearches() {
+function readRecentSearches(key: string | null) {
+  if (!key) return [];
   try {
-    const saved = JSON.parse(window.localStorage.getItem(recentSearchesKey) ?? "[]");
+    const saved = JSON.parse(window.localStorage.getItem(key) ?? "[]");
     return Array.isArray(saved) ? saved.filter((value): value is string => typeof value === "string").slice(0, maxRecentSearches) : [];
   } catch {
     return [];
   }
+}
+
+function hashSearchScope(scope: string) {
+  let first = 0x811c9dc5;
+  let second = 0x9e3779b9;
+  for (let index = 0; index < scope.length; index += 1) {
+    const code = scope.charCodeAt(index);
+    first = Math.imul(first ^ code, 0x01000193);
+    second = Math.imul(second ^ (code + index), 0x85ebca6b);
+  }
+  return `${(first >>> 0).toString(16)}${(second >>> 0).toString(16)}`;
 }
 
 function money(amountMinor: number, scale: number, locale: string) {
@@ -24,10 +36,10 @@ function money(amountMinor: number, scale: number, locale: string) {
   return new Intl.NumberFormat(locale, { minimumFractionDigits: digits, maximumFractionDigits: digits }).format(amountMinor / scale);
 }
 
-export function GlobalSearch() {
+export function GlobalSearch({ searchScope }: { searchScope: string | null }) {
   const [term, setTerm] = useState("");
   const [open, setOpen] = useState(false);
-  const [recentSearches, setRecentSearches] = useState<string[]>([]);
+  const [recentSearchState, setRecentSearchState] = useState<{ key: string | null; values: string[] }>({ key: null, values: [] });
   const [activeIndex, setActiveIndex] = useState(0);
   const dialogRef = useRef<HTMLElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -37,17 +49,21 @@ export function GlobalSearch() {
   const normalizedTerm = term.trim();
   const results = useQuery(api.workspace.searchEntries, normalizedTerm.length >= 2 ? { term: normalizedTerm, limit: 8 } : "skip");
   const showRecent = normalizedTerm.length === 0;
+  const recentSearchesKey = searchScope ? `${recentSearchesKeyPrefix}:${hashSearchScope(searchScope)}` : null;
+  const recentSearches = recentSearchState.key === recentSearchesKey ? recentSearchState.values : [];
   const resultCount = normalizedTerm.length >= 2 ? results?.length ?? 0 : 0;
   const itemCount = showRecent ? recentSearches.length : resultCount;
 
   const openSearch = useCallback(() => {
-    setRecentSearches(readRecentSearches());
+    setRecentSearchState({ key: recentSearchesKey, values: readRecentSearches(recentSearchesKey) });
     setTerm("");
     setActiveIndex(0);
+    window.dispatchEvent(new Event("mylesnet:workspace-search-open"));
     setOpen(true);
-  }, []);
+  }, [recentSearchesKey]);
 
   const closeSearch = useCallback(() => {
+    window.dispatchEvent(new Event("mylesnet:workspace-search-close"));
     setOpen(false);
     setTerm("");
     setActiveIndex(0);
@@ -55,14 +71,13 @@ export function GlobalSearch() {
 
   const rememberSearch = useCallback((value: string) => {
     const query = value.trim();
-    if (!query) return;
-    setRecentSearches((current) => {
-      const next = [query, ...current.filter((item) => item.toLowerCase() !== query.toLowerCase())].slice(0, maxRecentSearches);
-      try { window.localStorage.setItem(recentSearchesKey, JSON.stringify(next)); }
-      catch { /* Search still works if browser storage is unavailable. */ }
-      return next;
-    });
-  }, []);
+    if (!query || !recentSearchesKey) return;
+    const current = recentSearchState.key === recentSearchesKey ? recentSearchState.values : [];
+    const next = [query, ...current.filter((item) => item.toLowerCase() !== query.toLowerCase())].slice(0, maxRecentSearches);
+    try { window.localStorage.setItem(recentSearchesKey, JSON.stringify(next)); }
+    catch { /* Search still works if browser storage is unavailable. */ }
+    setRecentSearchState({ key: recentSearchesKey, values: next });
+  }, [recentSearchesKey, recentSearchState]);
 
   useEffect(() => {
     const onShortcut = (event: KeyboardEvent) => {
@@ -85,7 +100,12 @@ export function GlobalSearch() {
     return () => {
       window.cancelAnimationFrame(focusFrame);
       document.body.style.overflow = previousOverflow;
-      if (previousFocus?.isConnected) previousFocus.focus();
+      if (previousFocus?.isConnected) {
+        const sidebar = document.getElementById("workspace-sidebar");
+        const mobileMenuButton = document.querySelector<HTMLElement>(".mobile-menu-button");
+        if (window.matchMedia("(max-width: 760px)").matches && sidebar?.contains(previousFocus) && mobileMenuButton) mobileMenuButton.focus();
+        else previousFocus.focus();
+      }
     };
   }, [open]);
 
@@ -163,7 +183,7 @@ export function GlobalSearch() {
         </div>
         <div className="global-search-body" id="global-search-options" role="listbox" aria-label={showRecent ? "Recent searches" : "Matching records"}>
           {showRecent ? <>
-            <div className="global-search-section-heading"><span>Recent</span>{recentSearches.length > 0 && <button type="button" onClick={() => { setRecentSearches([]); try { window.localStorage.removeItem(recentSearchesKey); } catch { /* Ignore unavailable storage. */ } }}>Clear</button>}</div>
+            <div className="global-search-section-heading"><span>Recent</span>{recentSearches.length > 0 && <button type="button" onClick={() => { setRecentSearchState({ key: recentSearchesKey, values: [] }); try { if (recentSearchesKey) window.localStorage.removeItem(recentSearchesKey); } catch { /* Ignore unavailable storage. */ } }}>Clear</button>}</div>
             {recentSearches.length === 0 ? <p className="global-search-empty">Search saved sales and expenses in this workspace.</p> : recentSearches.map((recent, index) => <button className={`global-search-recent${activeIndex === index ? " is-active" : ""}`} id={`global-search-option-${index}`} role="option" aria-selected={activeIndex === index} type="button" key={recent} onMouseEnter={() => setActiveIndex(index)} onClick={() => { setTerm(recent); setActiveIndex(0); inputRef.current?.focus(); }}><Clock3 size={16} aria-hidden="true" /><span>{recent}</span></button>)}
           </> : normalizedTerm.length < 2 ? <p className="global-search-empty">Type at least 2 characters to search saved records.</p>
             : results === undefined ? <p className="global-search-empty">Searching this workspace…</p>

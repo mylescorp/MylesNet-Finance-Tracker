@@ -751,11 +751,15 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .app-frame-collapsed .sidebar-collapse-button,.sidebar-collapse-button { display:none; }
   .sidebar-mobile-close { flex:none; width:38px; height:38px; display:grid; place-items:center; border:1px solid var(--mn-line); border-radius:9px; color:var(--mn-muted); background:var(--mn-card); cursor:pointer; }
   .sidebar-mobile-close:hover { color:var(--mn-ink); background:var(--mn-inset); }
-  .app-frame-collapsed .sidebar-workspace { justify-content:flex-start; padding:8px 9px; }
+  .app-frame-collapsed .sidebar-workspace { align-self:stretch; justify-content:flex-start; width:100%; min-height:46px; padding:8px 9px; }
   .app-frame-collapsed .sidebar-workspace-copy,.app-frame-collapsed .sidebar-group-label,.app-frame-collapsed .sidebar-link-label { display:flex; }
   .app-frame-collapsed .sidebar-group-label { display:block; }
-  .app-frame-collapsed .sidebar-link { justify-content:flex-start; padding:0 10px; }
+  .app-frame-collapsed .sidebar-nav { gap:20px; }
+  .app-frame-collapsed .sidebar-link { align-self:stretch; justify-content:flex-start; width:auto; padding:0 10px; }
+  .app-frame-collapsed .sidebar-link-icon { width:22px; }
   .app-frame-collapsed .sidebar-link-label { display:block; }
+  .app-frame-collapsed .sidebar-bottom { align-items:stretch; }
+  .app-frame-collapsed .sidebar-changelog-link { width:auto; }
   .sidebar-backdrop { position:fixed; inset:0; z-index:39; display:block; border:0; background:rgba(12,15,20,.44); backdrop-filter:blur(2px); animation:sidebar-backdrop-in var(--mn-dur-base) ease-out; }
   .app-header { height:60px; display:flex; margin:8px 8px 0; padding:0 10px; gap:10px; border-radius:14px; }
   .account-menu-popover { top:68px; right:10px; width:min(304px,calc(100vw - 20px)); }

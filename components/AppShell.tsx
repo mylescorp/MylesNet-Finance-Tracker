@@ -78,9 +78,26 @@ export function AppShell({ children }: { children: ReactNode }) {
   const [accountReturnTo, setAccountReturnTo] = useState("/dashboard");
   const menuButtonRef = useRef<HTMLButtonElement>(null);
   const sidebarCloseRef = useRef<HTMLButtonElement>(null);
+  const searchOpeningRef = useRef(false);
   const accountLabel = access?.access === "ready" ? access.businessName : "My account";
   const sidebarWorkspaceLabel = /^MylesNet Finance Tracker$/i.test(accountLabel) ? "Finance" : accountLabel;
   const permissions = access?.access === "ready" ? access.permissions : [];
+  const searchScope = access?.access === "ready" && profile?.email
+    ? `${profile.email.trim().toLowerCase()}::${access.businessName.trim().toLowerCase()}`
+    : null;
+  useEffect(() => {
+    const onSearchOpen = () => {
+      searchOpeningRef.current = true;
+      setMobileOpen(false);
+    };
+    const onSearchClose = () => { searchOpeningRef.current = false; };
+    window.addEventListener("mylesnet:workspace-search-open", onSearchOpen);
+    window.addEventListener("mylesnet:workspace-search-close", onSearchClose);
+    return () => {
+      window.removeEventListener("mylesnet:workspace-search-open", onSearchOpen);
+      window.removeEventListener("mylesnet:workspace-search-close", onSearchClose);
+    };
+  }, []);
   useEffect(() => {
     let active = true;
     void fetch("/api/changelog/summary", { cache: "no-store" })
@@ -164,7 +181,7 @@ export function AppShell({ children }: { children: ReactNode }) {
       document.body.style.overflow = previousOverflow;
       window.removeEventListener("keydown", closeOnEscape);
       media.removeEventListener("change", closeOnDesktop);
-      if (media.matches) menuButton?.focus();
+      if (media.matches && !searchOpeningRef.current) menuButton?.focus();
     };
   }, [mobileOpen]);
 
@@ -213,7 +230,7 @@ export function AppShell({ children }: { children: ReactNode }) {
         </button>
         <div className="topbar-page-context"><strong>{routePageLabel}</strong></div>
         <div className="topbar-center">
-          {!financeApproverOnly && <GlobalSearch />}
+          {!financeApproverOnly && <GlobalSearch searchScope={searchScope} />}
         </div>
         <div className="header-actions">
           {!financeApproverOnly && permissions.includes("audit.view") && <Link className="utility-link" href="/issues" aria-label="Needs attention"><Bell size={17} /><span>Needs attention</span></Link>}
