@@ -68,7 +68,6 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .button-dark { background:var(--mn-ink); border-color:var(--mn-ink); color:var(--mn-card); }
 .button-dark:hover { opacity:.88; background:var(--mn-ink); }
 .status-chip { min-height:22px; display:inline-flex; align-items:center; border-radius:var(--mn-radius-full); padding:3px 9px; font-size:10px; font-weight:600; white-space:nowrap; }
-.status-live { color:var(--mn-accent); background:var(--mn-accent-bg); letter-spacing:.04em; text-transform:uppercase; }
 .status-ok { color:var(--mn-ok-fg); background:var(--mn-ok-bg); }
 .status-warning { color:var(--mn-warn-fg); background:var(--mn-warn-bg); }
 .status-danger { color:var(--mn-danger-fg); background:var(--mn-danger-bg); }
@@ -335,8 +334,6 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .button-dark { background:var(--mn-ink); border-color:var(--mn-ink); color:var(--mn-card); }
 .button-dark:hover { opacity:.88; background:var(--mn-ink); }
 .status-chip { min-height:22px; display:inline-flex; align-items:center; border-radius:var(--mn-radius-full); padding:3px 9px; font-size:10px; font-weight:600; white-space:nowrap; }
-.status-live { color:var(--mn-accent); background:var(--mn-accent-bg); letter-spacing:.04em; text-transform:uppercase; }
-.status-live-pending { color:var(--mn-warn-fg); background:var(--mn-warn-bg); }
 .status-ok { color:var(--mn-ok-fg); background:var(--mn-ok-bg); }
 .status-warning { color:var(--mn-warn-fg); background:var(--mn-warn-bg); }
 .status-danger { color:var(--mn-danger-fg); background:var(--mn-danger-bg); }

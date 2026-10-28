@@ -10,7 +10,6 @@ import { Card, WorkspaceTitle } from "@/components/AppShell";
 import { SettingsNav } from "@/components/settings/SettingsNav";
 import { EntryForm } from "@/components/workspace/EntryForm";
 import { OperationsWorkspace } from "@/components/workspace/OperationsWorkspace";
-import { ConvexLiveStatus } from "@/components/workspace/ConvexLiveStatus";
 import { OperationalRecordForm } from "@/components/workspace/OperationalRecordForm";
 import { RecordFormDisclosure } from "@/components/workspace/RecordFormDisclosure";
 import { formatBusinessDay } from "@/lib/format";
@@ -346,7 +345,6 @@ function BoardRouteContent({ route }: { route: string }) {
     />
     {screen.settings && <SettingsNav current={`/${route}`} />}
     <div className="board-toolbar no-print">
-      <ConvexLiveStatus />
       <span className="toolbar-range">{fmtDate(range.from)} — {fmtDate(rangeLastDay.toISOString().slice(0, 10))}</span>
       <button className="button" type="button" onClick={() => window.print()}><Printer size={14} />Print</button>
       <button className="button" type="button" onClick={() => window.print()}><Download size={14} />Export PDF</button>
