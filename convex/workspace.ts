@@ -6,6 +6,7 @@ import { mutation, query } from "./_generated/server";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import type { Id } from "./_generated/dataModel";
 import { hasPermission, PERMISSIONS, permissionsForMembership } from "./accessControl";
+import type { Permission } from "./accessControl";
 
 function addSafeInteger(left: number, right: number, label: string) {
   const result = left + right;
@@ -177,7 +178,19 @@ export const businessSettings = query({
       const businesses = await ctx.db.query("businesses").take(1);
       return { access: businesses.length === 0 ? "setup" as const : "pending" as const };
     }
-    if (!(await hasPermission(ctx, current.membership, "settings.view"))) return { access: "pending" as const };
+    const operationalPermissions: Permission[] = [
+      "settings.view",
+      "sales.view",
+      "sales.create",
+      "expenses.view",
+      "expenses.create",
+      "reports.view",
+      "analytics.view",
+      "dailyReport.view",
+      "monthlyPnl.view",
+    ];
+    const canUseOperationalContext = await Promise.all(operationalPermissions.map((permission) => hasPermission(ctx, current.membership, permission)));
+    if (!canUseOperationalContext.some(Boolean)) return { access: "pending" as const };
     return {
       access: "ready" as const,
       businessName: current.business.name,
