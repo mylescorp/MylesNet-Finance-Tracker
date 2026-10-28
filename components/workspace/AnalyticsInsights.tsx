@@ -22,6 +22,33 @@ export function AnalyticsInsights({ range, today, currency, scale, locale, compa
   const money = (amount: number) => new Intl.NumberFormat(locale, { style: "currency", currency, maximumFractionDigits: Math.round(Math.log10(scale)) }).format(amount / scale);
   if (!data || data.access === "pending") return <Card><div className="empty-state" role="status"><strong>Loading analytics…</strong><span>Authorized workspace totals are being calculated.</span></div></Card>;
   if (data.access === "restricted") return <Card><div className="notice-banner notice-info">Partner accounts see their own statement under Partners. Workspace-wide analytics are restricted.</div></Card>;
+  const analytics = data;
+  function exportAnalyticsCsv() {
+    const rows: string[][] = [
+      ["Summary", range.from, range.toExclusive, "Sales", String(analytics.period.salesUgx / scale), currency],
+      ["Summary", range.from, range.toExclusive, "Expenses", String(analytics.period.expensesUgx / scale), currency],
+      ["Summary", range.from, range.toExclusive, "Net", String(analytics.period.netUgx / scale), currency],
+      ["Summary", "Current month", today, "Projected sales", String(analytics.target.projectedSalesUgx / scale), currency],
+      ["Summary", "Current month", today, "Required daily sales", String(analytics.target.requiredSalesPerDayUgx / scale), currency],
+      ["Summary", "Trailing 30 days", today, "Runway days", analytics.runway.days === null ? "" : String(analytics.runway.days), "days"],
+      ["Summary", "Current balances", today, "Cash", String(analytics.balances.cashUgx / scale), currency],
+      ["Summary", "Current balances", today, "Mobile money", String(analytics.balances.mobileMoneyUgx / scale), currency],
+      ...analytics.period.days.map(day => ["Daily", day.day, "", "Sales", String(day.salesUgx / scale), currency, "Expenses", String(day.expensesUgx / scale), currency, day.hasActivity ? "Activity recorded" : "No activity"]),
+      ...analytics.partners.map(partner => ["Partner", range.from, range.toExclusive, partner.name, String(partner.ownershipBps / 100), "%", String(partner.shareOfNetUgx / scale), currency]),
+      ...analytics.issues.map(issue => ["Issue", range.from, range.toExclusive, issue.id, issue.title, issue.severity, String(issue.amountUgx / scale), currency, issue.detail]),
+    ];
+    const encode = (value: string) => {
+      const safe = /^[\s\uFEFF]*[=+\-@]/u.test(value) ? `'${value}` : value;
+      return `"${safe.replaceAll('"', '""')}"`;
+    };
+    const csv = [["Section", "From", "To", "Metric", "Value", "Unit", "Additional value", "Additional unit", "Notes"], ...rows].map(row => row.map(encode).join(",")).join("\r\n");
+    const url = URL.createObjectURL(new Blob([`\uFEFF${csv}`], { type: "text/csv;charset=utf-8" }));
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `mylesnet-analytics-${range.from}-to-${range.toExclusive}.csv`;
+    anchor.click();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
   const scenarioNet = Math.round(data.target.monthSalesUgx * (1 + salesChange / 100) - data.target.monthExpensesUgx * (1 - expenseChange / 100));
   const issues = data.issues;
   async function submitIssueReview(issue: typeof issues[number], event: FormEvent<HTMLFormElement>) {
@@ -42,7 +69,7 @@ export function AnalyticsInsights({ range, today, currency, scale, locale, compa
     <Card className="board-section-card"><h2 className="card-title">Analytics snapshot</h2><div className="settings-facts"><div><span>Cash runway</span><strong>{data.runway.days === null ? "No recent expense burn" : `${data.runway.days} days`}</strong></div><div><span>Monthly sales pace</span><strong>{money(data.target.projectedSalesUgx)}</strong></div><div><span>Required daily sales</span><strong>{money(data.target.requiredSalesPerDayUgx)}</strong></div></div><Link className="text-link" href="/analytics">Open advanced analytics →</Link></Card>
   </div>;
   return <div className={compact ? "dashboard-insight-grid" : "board-grid"}>
-    <Card className="board-section-card"><div className="card-heading"><div><h2 className="card-title">Cash runway</h2><p className="card-subtitle">Based on current liquid balances and recorded expenses over the trailing 30 days.</p></div></div><div className="metric-value">{data.runway.days === null ? "—" : `${data.runway.days} days`}</div><div className="metric-note">Recent expenses {money(data.runway.expensesUgx)} · average {money(data.runway.averageDailyExpenseUgx)} per day</div></Card>
+    <Card className="board-section-card"><div className="card-heading"><div><h2 className="card-title">Cash runway</h2><p className="card-subtitle">Based on current liquid balances and recorded expenses over the trailing 30 days.</p></div>{!compact && <button className="button" type="button" onClick={exportAnalyticsCsv}>Export analytics CSV</button>}</div><div className="metric-value">{data.runway.days === null ? "—" : `${data.runway.days} days`}</div><div className="metric-note">Recent expenses {money(data.runway.expensesUgx)} · average {money(data.runway.averageDailyExpenseUgx)} per day</div></Card>
     <Card className="board-section-card"><div className="card-heading"><div><h2 className="card-title">Sales pace vs target</h2><p className="card-subtitle">Month-to-date run rate is an estimate, not a guaranteed forecast.</p></div></div><div className="settings-facts"><div><span>Recorded / target</span><strong>{money(data.target.monthSalesUgx)} / {data.target.amountUgx ? money(data.target.amountUgx) : "No target set"}</strong></div><div><span>Projected at current pace</span><strong>{money(data.target.projectedSalesUgx)}</strong></div><div><span>Needed each remaining day</span><strong>{money(data.target.requiredSalesPerDayUgx)}</strong></div></div>{data.target.amountUgx > 0 && <div className="flow-track"><span className="flow-fill flow-sales" style={{ width: `${Math.min(100, data.target.monthSalesUgx / data.target.amountUgx * 100)}%` }} /></div>}</Card>
     <Card className="board-section-card"><div className="card-heading"><div><h2 className="card-title">Liquid balance composition</h2><p className="card-subtitle">Recorded account balances; excludes savings and loan liabilities.</p></div></div>{([["Cash", data.balances.cashUgx, data.balances.cashShareBps], ["Mobile money", data.balances.mobileMoneyUgx, data.balances.mobileShareBps]] as const).map(([label, amount, share]) => <div className="flow-row" key={label}><div className="flow-label"><span>{label} · {(share / 100).toFixed(1)}%</span><strong>{money(amount)}</strong></div><div className="flow-track"><span className="flow-fill flow-sales" style={{ width: `${Math.max(0, Math.min(100, share / 100))}%` }} /></div></div>)}<strong>Total liquid · {money(data.balances.totalUgx)}</strong></Card>
     <Card className="board-section-card"><div className="card-heading"><div><h2 className="card-title">Partner snapshot</h2><p className="card-subtitle">Profit-share illustration based on selected-period cashbook net and ownership at period end. It is not an approved payout.</p></div></div>{data.partners.length && data.ownershipComplete ? data.partners.map(partner => <div className="balance-detail" key={partner.id}><span>{partner.name} · {(partner.ownershipBps / 100).toFixed(2)}%</span><strong>{money(partner.shareOfNetUgx)}</strong></div>) : <div className="empty-state compact-empty"><strong>{data.partners.length ? "Ownership must total 100%." : "No active partners configured."}</strong><span>No distribution illustration is available until ownership is complete.</span></div>}</Card>
