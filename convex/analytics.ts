@@ -199,7 +199,11 @@ export const reviewQueue = query({
         "monthly-expense-warning": "Monthly expenses crossed the warning level",
         "ownership-incomplete": "Partner ownership does not total 100%",
       } as Record<string, string>)[row.issueId] ?? "Data-health issue";
-      const href = row.issueId.includes("reconciliation") ? "/reconcile" : row.issueId.includes("expense") ? "/expenses" : row.issueId.includes("sales") || row.issueId.includes("unallocated") || row.issueId.includes("missing") ? "/sales" : row.issueId.includes("ownership") ? "/partners" : "/analytics";
+      const href = row.issueId === "low-cash" || row.issueId === "sales-target-pace" ? "/settings/rules"
+        : row.issueId.includes("reconciliation") ? "/reconcile"
+        : row.issueId.includes("expense") ? "/expenses"
+        : row.issueId.includes("sales") || row.issueId.includes("unallocated") || row.issueId.includes("missing") ? "/sales"
+        : row.issueId.includes("ownership") ? "/partners" : "/analytics";
       return {
         issueKey: row.issueKey,
         issueId: row.issueId,
