@@ -1,19 +1,21 @@
 "use client";
 
-import { useMutation, useQuery } from "convex/react";
-import { Children, cloneElement, isValidElement, useId, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { useMutation, usePaginatedQuery, useQuery } from "convex/react";
+import { Banknote, CircleAlert, Radio, Smartphone } from "lucide-react";
+import { Children, cloneElement, isValidElement, useEffect, useId, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { countries, getEmojiFlag } from "countries-list";
 import { currencies } from "countries-list/currencies";
 import timezoneData from "countries-and-timezones";
 import { api } from "@/convex/_generated/api";
+import type { Id } from "@/convex/_generated/dataModel";
 import { CsvImportPanel } from "./CsvImportPanel";
 import { CentipidWebhookPanel } from "./CentipidWebhookPanel";
 import { GoogleFormsPanel } from "./GoogleFormsPanel";
-import type { Id } from "@/convex/_generated/dataModel";
 
 type Tab = "general" | "finance" | "rules" | "data" | "access" | "releases";
 const localeOptions = ["en-UG", "sw-UG", "en-KE", "sw-KE", "en-TZ", "sw-TZ", "en-GB", "en-US", "fr-FR", "ar-SA", "hi-IN", "zh-CN", "pt-BR", "es-ES"];
 const monthNames = Array.from({ length: 12 }, (_, i) => new Intl.DateTimeFormat("en", { month: "long", timeZone: "UTC" }).format(new Date(Date.UTC(2024, i, 1))));
+function businessDayKey(timezone: string) { return new Intl.DateTimeFormat("en-CA", { timeZone: timezone, year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date()); }
 
 export function SettingsWorkspace({ tab }: { tab: Tab }) {
   const overview = useQuery(api.settings.overview, {});
@@ -24,6 +26,7 @@ export function SettingsWorkspace({ tab }: { tab: Tab }) {
   if (tab === "access") return <AccessSettings />;
   if (tab === "releases") return <ReleaseSettings />;
   if (tab === "rules") return <><EditableSettings tab={tab} settings={overview} /><RulesReview /></>;
+  if (tab === "finance") return <><EditableSettings tab={tab} settings={overview} />{overview.role === "owner" ? <BalanceAdjustmentManager settings={overview} /> : <p className="muted-note settings-readonly-note">Only a workspace owner can record or manage counted balance adjustments.</p>}</>;
   return <EditableSettings tab={tab} settings={overview} />;
 }
 
@@ -37,6 +40,7 @@ function EditableSettings({ tab, settings }: { tab: "general" | "finance" | "rul
     incomeCategories: settings.incomeCategories, expenseCategories: settings.expenseCategories,
     highExpenseReviewUgx: settings.highExpenseReviewUgx, weakDaySalesUgx: settings.weakDaySalesUgx,
     monthlySalesTargetUgx: settings.monthlySalesTargetUgx, monthlyExpenseWarningUgx: settings.monthlyExpenseWarningUgx,
+    lowCashAlertUgx: settings.lowCashAlertUgx,
     cashOpeningBalance: settings.cashOpeningBalance, mobileOpeningBalance: settings.mobileOpeningBalance,
     duplicateWindowDays: settings.duplicateWindowDays, requireEntryNote: settings.requireEntryNote,
     negativeBalanceWarning: settings.negativeBalanceWarning,
@@ -75,9 +79,10 @@ function EditableSettings({ tab, settings }: { tab: "general" | "finance" | "rul
       <section className="card settings-card"><div className="card-heading"><div><h2 className="card-title">Regional preview</h2><p className="card-subtitle">A quick check of the settings that affect saved records.</p></div></div><div className="settings-facts"><div><span>Business date</span><strong>{new Intl.DateTimeFormat(form.locale, { dateStyle: "full", timeZone: form.timezone }).format(new Date())}</strong></div><div><span>Time zone</span><strong>{form.timezone} · {offsetLabel(form.timezone)}</strong></div><div><span>Currency preview</span><strong>{moneyPreview(form.currency, form.locale)}</strong></div><div><span>Financial year</span><strong>{monthNames[form.fiscalYearStartMonth - 1]}–{monthNames[(form.fiscalYearStartMonth + 10) % 12]}</strong></div></div></section>
     </>}
     {tab === "finance" && <>
+      <LiveBalancePanel settings={settings} />
       <section className="card settings-card"><div className="card-heading"><div><h2 className="card-title">Cashbook categories</h2><p className="card-subtitle">One category per line. Categories are available to everyone who can record entries.</p></div></div><div className="form-layout"><Field label="Income categories"><textarea rows={7} value={form.incomeCategories.join("\n")} disabled={!isOwner} onChange={e => update("incomeCategories", e.target.value.split("\n"))} /></Field><Field label="Expense categories"><textarea rows={7} value={form.expenseCategories.join("\n")} disabled={!isOwner} onChange={e => update("expenseCategories", e.target.value.split("\n"))} /></Field></div></section>
       <section className="card settings-card"><div className="card-heading"><div><h2 className="card-title">Accounts and opening balances</h2><p className="card-subtitle">Set the starting cash and mobile money amounts before recording transactions.</p></div></div><div className="form-layout"><NumberField label="Opening cash balance" value={form.cashOpeningBalance} currency={settings.currency} scale={10 ** (settings.currencyMinorDigits ?? 0)} disabled={!isOwner || settings.openingBalancesLocked} onChange={v => update("cashOpeningBalance", v)} /><NumberField label="Opening mobile money balance" value={form.mobileOpeningBalance} currency={settings.currency} scale={10 ** (settings.currencyMinorDigits ?? 0)} disabled={!isOwner || settings.openingBalancesLocked} onChange={v => update("mobileOpeningBalance", v)} /></div>{settings.openingBalancesLocked && <p className="muted-note">Opening balances are locked after the first sale, expense, or account movement. Correct later differences with an auditable adjustment.</p>}</section>
-      <section className="card settings-card"><div className="card-heading"><div><h2 className="card-title">Operating targets</h2><p className="card-subtitle">Targets help reports highlight exceptions. They do not create or change ledger entries.</p></div></div><div className="form-layout"><NumberField label="Monthly sales target" value={form.monthlySalesTargetUgx} currency={settings.currency} scale={10 ** (settings.currencyMinorDigits ?? 0)} disabled={!isOwner} onChange={v => update("monthlySalesTargetUgx", v)} /><NumberField label="Monthly expense warning" value={form.monthlyExpenseWarningUgx} currency={settings.currency} scale={10 ** (settings.currencyMinorDigits ?? 0)} disabled={!isOwner} onChange={v => update("monthlyExpenseWarningUgx", v)} /></div></section>
+      <section className="card settings-card"><div className="card-heading"><div><h2 className="card-title">Operating targets and cash alerts</h2><p className="card-subtitle">Targets help reports highlight exceptions. They do not create or change ledger entries. Set the cash alert to zero to turn it off.</p></div></div><div className="form-layout"><NumberField label="Monthly sales target" value={form.monthlySalesTargetUgx} currency={settings.currency} scale={10 ** (settings.currencyMinorDigits ?? 0)} disabled={!isOwner} onChange={v => update("monthlySalesTargetUgx", v)} /><NumberField label="Monthly expense warning" value={form.monthlyExpenseWarningUgx} currency={settings.currency} scale={10 ** (settings.currencyMinorDigits ?? 0)} disabled={!isOwner} onChange={v => update("monthlyExpenseWarningUgx", v)} /><NumberField label="Low cash alert threshold" value={form.lowCashAlertUgx} currency={settings.currency} scale={10 ** (settings.currencyMinorDigits ?? 0)} disabled={!isOwner} onChange={v => update("lowCashAlertUgx", v)} /></div></section>
     </>}
     {tab === "rules" && <>
       <section className="card settings-card"><div className="card-heading"><div><h2 className="card-title">Review and quality rules</h2><p className="card-subtitle">Rules flag records for review. They never silently post, reject, or remove a transaction.</p></div></div><div className="form-layout"><NumberField label="Flag expenses at or above" value={form.highExpenseReviewUgx} currency={settings.currency} scale={10 ** (settings.currencyMinorDigits ?? 0)} disabled={!isOwner} onChange={v => update("highExpenseReviewUgx", v)} /><NumberField label="Flag days with sales below" value={form.weakDaySalesUgx} currency={settings.currency} scale={10 ** (settings.currencyMinorDigits ?? 0)} disabled={!isOwner} onChange={v => update("weakDaySalesUgx", v)} /><Field label="Duplicate review window (days)"><input type="number" min="0" max="30" step="1" value={form.duplicateWindowDays} disabled={!isOwner} onChange={e => update("duplicateWindowDays", Number(e.target.value))} /></Field><label className="settings-toggle"><input type="checkbox" checked={form.requireEntryNote} disabled={!isOwner} onChange={e => update("requireEntryNote", e.target.checked)} /><span><strong>Require a note on every entry</strong><small>Entries without a note are blocked by the server.</small></span></label><label className="settings-toggle"><input type="checkbox" checked={form.negativeBalanceWarning} disabled={!isOwner} onChange={e => update("negativeBalanceWarning", e.target.checked)} /><span><strong>Warn when a balance goes below zero</strong><small>Warnings do not block a correction or withdrawal.</small></span></label></div></section>
@@ -91,6 +96,126 @@ type SettingsOverview = Extract<NonNullable<ReturnType<typeof useQuery<typeof ap
 type AccessOverview = Extract<NonNullable<ReturnType<typeof useQuery<typeof api.settings.accessOverview>>>, { access: "ready" }>;
 function Field({ label, children }: { label: string; children: ReactNode }) { const id = useId().replaceAll(":", ""); const childList = Children.toArray(children); const controlIndex = childList.findIndex(child => isValidElement(child) && typeof child.type === "string" && ["input", "select", "textarea"].includes(child.type)); return <div className="field"><label htmlFor={id}>{label}</label>{childList.map((child, index) => index === controlIndex && isValidElement(child) ? cloneElement(child as React.ReactElement<{ id?: string }>, { id }) : child)}</div>; }
 function NumberField({ label, value, currency, scale = 1, disabled, onChange }: { label: string; value: number; currency: string; scale?: number; disabled: boolean; onChange: (value: number) => void }) { return <Field label={`${label} (${currency})`}><input type="number" step={1 / scale} value={value} disabled={disabled} onChange={e => onChange(Number(e.target.value))} /></Field>; }
+function LiveBalancePanel({ settings }: { settings: SettingsOverview }) {
+  const [day, setDay] = useState(() => businessDayKey(settings.timezone));
+  useEffect(() => {
+    const refreshDay = () => setDay(businessDayKey(settings.timezone));
+    refreshDay();
+    const timer = window.setInterval(refreshDay, 30_000);
+    window.addEventListener("focus", refreshDay);
+    document.addEventListener("visibilitychange", refreshDay);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener("focus", refreshDay);
+      document.removeEventListener("visibilitychange", refreshDay);
+    };
+  }, [settings.timezone]);
+  const live = useQuery(api.workspace.balanceOverview, { day });
+  const scale = 10 ** (settings.currencyMinorDigits ?? 0);
+  const money = (amount: number) => {
+    try { return new Intl.NumberFormat(settings.locale, { style: "currency", currency: settings.currency }).format(amount / scale); }
+    catch { return `${(amount / scale).toLocaleString(settings.locale)} ${settings.currency}`; }
+  };
+  return <section className="card settings-card live-balance-card" aria-labelledby="live-balances-heading">
+    <div className="card-heading"><div><h2 className="card-title" id="live-balances-heading">Live balances and daily close</h2><p className="card-subtitle">Convex keeps these figures current as cashbook entries and Centipid events arrive.</p></div><span className="live-balance-indicator"><Radio size={14} aria-hidden="true" /> Live</span></div>
+    {live === undefined ? <p className="muted-note" role="status">Loading live balances…</p> : live.access !== "ready" ? <p className="muted-note">{live.access === "restricted" ? "Business balances are not available to partner accounts." : "Workspace access is required to view live balances."}</p> : <>
+      <div className="live-balance-grid">
+        <div className="live-balance-tile"><div><Banknote size={17} aria-hidden="true" /><span>Cash at hand</span></div><strong>{money(live.cashBalanceUgx)}</strong><small>Current cash account balance</small></div>
+        <div className="live-balance-tile"><div><Smartphone size={17} aria-hidden="true" /><span>Mobile collection balance</span></div><strong>{money(live.mobileMoneyBalanceUgx)}</strong><small>Current mobile money account balance</small></div>
+        <div className="live-balance-tile live-balance-estimate"><div><Banknote size={17} aria-hidden="true" /><span>Estimated cash sales today</span></div><strong>{money(live.estimatedCashSalesUgx)}</strong><small>Daily sales minus mobile money sales</small></div>
+      </div>
+      <div className="settings-facts live-balance-facts">
+        <div><span>Total sales · {day}</span><strong>{money(live.salesUgx)}</strong></div>
+        <div><span>Mobile sales · {day}</span><strong>{money(live.mobileSalesUgx)}</strong></div>
+        <div><span>Centipid payments received</span><strong>{money(live.centipidMobileUgx)}</strong></div>
+        <div><span>Centipid vouchers redeemed</span><strong>{money(live.centipidVoucherUgx)}</strong></div>
+      </div>
+      <p className="muted-note live-balance-note">Cash at hand is the actual ledger balance. Estimated cash sales are a daily reconciliation figure; expenses, opening balances, and transfers affect the actual cash balance separately.</p>
+      {!live.cashEstimateComplete && <p className="live-balance-warning" role="status"><CircleAlert size={16} aria-hidden="true" /> More than 1,000 entries were recorded today, so the mobile sales and Centipid breakdowns may be incomplete.</p>}
+    </>}
+  </section>;
+}
+type BalanceAdjustmentRow = {
+  _id: Id<"balanceAdjustments">;
+  account: "cash" | "mobile_money";
+  countedBalanceUgx: number;
+  deltaUgx: number;
+  occurredOn: string;
+  note: string;
+  state: "posted" | "void";
+  voidReason?: string;
+};
+function parseBalanceMinorUnits(value: string, decimalPlaces: number): number | null {
+  const match = /^(\d*)(?:\.(\d*))?(?:[eE]([+-]?\d+))?$/.exec(value.trim());
+  if (!match || (!match[1] && !match[2])) return null;
+  const exponent = Number(match[3] ?? 0);
+  if (!Number.isInteger(exponent) || Math.abs(exponent) > 100) return null;
+  const digits = `${match[1]}${match[2] ?? ""}`;
+  const decimalPoint = match[1].length + exponent;
+  const whole = decimalPoint <= 0 ? "0" : decimalPoint >= digits.length ? `${digits}${"0".repeat(decimalPoint - digits.length)}` : digits.slice(0, decimalPoint);
+  const fraction = decimalPoint <= 0 ? `${"0".repeat(-decimalPoint)}${digits}` : decimalPoint >= digits.length ? "" : digits.slice(decimalPoint);
+  const normalizedWhole = whole.replace(/^0+(?=\d)/, "");
+  if (normalizedWhole.length > 16 || (fraction.length > decimalPlaces && /[1-9]/.test(fraction.slice(decimalPlaces)))) return null;
+  const fractionalMinor = fraction.slice(0, decimalPlaces).padEnd(decimalPlaces, "0");
+  const amount = Number(`${normalizedWhole}${fractionalMinor}`);
+  return Number.isSafeInteger(amount) ? amount : null;
+}
+function BalanceAdjustmentManager({ settings }: { settings: SettingsOverview }) {
+  const { results: adjustmentRows, status: adjustmentStatus, loadMore } = usePaginatedQuery(api.workspace.balanceAdjustments, {}, { initialNumItems: 30 });
+  const create = useMutation(api.workspace.createBalanceAdjustment);
+  const updateAdjustment = useMutation(api.workspace.updateBalanceAdjustment);
+  const voidAdjustment = useMutation(api.workspace.voidBalanceAdjustment);
+  const [editing, setEditing] = useState<BalanceAdjustmentRow | null>(null);
+  const [account, setAccount] = useState<"cash" | "mobile_money">("cash");
+  const [countedBalance, setCountedBalance] = useState("");
+  const [occurredOn, setOccurredOn] = useState(() => businessDayKey(settings.timezone));
+  const [note, setNote] = useState("");
+  const [voidId, setVoidId] = useState<Id<"balanceAdjustments"> | null>(null);
+  const [voidReason, setVoidReason] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [feedback, setFeedback] = useState<{ message: string; error: boolean } | null>(null);
+  const scale = 10 ** (settings.currencyMinorDigits ?? 0);
+  const money = (amount: number) => new Intl.NumberFormat(settings.locale, { style: "currency", currency: settings.currency, minimumFractionDigits: Math.round(Math.log10(scale)), maximumFractionDigits: Math.round(Math.log10(scale)) }).format(amount / scale);
+
+  function startEdit(row: BalanceAdjustmentRow) {
+    setEditing(row); setAccount(row.account); setCountedBalance(String(row.countedBalanceUgx / scale)); setOccurredOn(row.occurredOn); setNote(row.note); setFeedback(null);
+  }
+  function resetForm() {
+    setEditing(null); setAccount("cash"); setCountedBalance(""); setOccurredOn(businessDayKey(settings.timezone)); setNote("");
+  }
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault(); setBusy(true); setFeedback(null);
+    try {
+      const amount = parseBalanceMinorUnits(countedBalance, settings.currencyMinorDigits ?? 0);
+      if (amount === null) throw new Error(`Enter a non-negative balance using ${settings.currency}'s supported decimal places.`);
+      if (editing) await updateAdjustment({ adjustmentId: editing._id, account, countedBalanceUgx: amount, occurredOn, note });
+      else await create({ account, countedBalanceUgx: amount, occurredOn, note });
+      resetForm(); setFeedback({ message: editing ? "Balance record updated; the difference was applied to the live account balance." : "Balance recorded; the live account balance has been adjusted.", error: false });
+    } catch (error) { setFeedback({ message: error instanceof Error ? error.message : "Could not save the balance record.", error: true }); }
+    finally { setBusy(false); }
+  }
+  async function remove(row: BalanceAdjustmentRow) {
+    if (voidId !== row._id) { setVoidId(row._id); setVoidReason(""); return; }
+    setBusy(true); setFeedback(null);
+    try { await voidAdjustment({ adjustmentId: row._id, reason: voidReason }); setVoidId(null); setVoidReason(""); setFeedback({ message: "Balance record reversed and retained in the audit history.", error: false }); }
+    catch (error) { setFeedback({ message: error instanceof Error ? error.message : "Could not reverse this balance record.", error: true }); }
+    finally { setBusy(false); }
+  }
+
+  return <section className="card settings-card balance-adjustment-card">
+    <div className="card-heading"><div><h2 className="card-title">Record a counted balance</h2><p className="card-subtitle">Enter the cash physically counted or the verified Centipid mobile collection balance. We’ll apply only the difference and keep an audit record.</p></div></div>
+    <form className="form-layout" onSubmit={event => void submit(event)}>
+      <label className="field"><span>Account</span><select value={account} disabled={Boolean(editing)} onChange={event => setAccount(event.target.value as "cash" | "mobile_money")}><option value="cash">Cash at hand</option><option value="mobile_money">Centipid mobile collection</option></select>{editing && <small className="muted-note">To move a count to another account, record a new count and remove this one.</small>}</label>
+      <label className="field"><span>Counted balance ({settings.currency})</span><input type="number" min="0" step={1 / scale} value={countedBalance} onChange={event => setCountedBalance(event.target.value)} placeholder="Enter the balance you counted" required /></label>
+      <label className="field"><span>Count date</span><input type="date" value={occurredOn} onChange={event => setOccurredOn(event.target.value)} required /></label>
+      <label className="field field-full"><span>Reason or reference</span><textarea rows={2} maxLength={300} value={note} onChange={event => setNote(event.target.value)} placeholder="e.g. Opening count, Centipid settlement statement, or cash count correction" minLength={3} required /></label>
+      <div className="form-actions field-full"><button className="button button-accent" disabled={busy}>{busy ? "Saving…" : editing ? "Save balance changes" : "Record balance"}</button>{editing && <button className="button" type="button" disabled={busy} onClick={resetForm}>Cancel edit</button>}{feedback && <span className={`form-feedback ${feedback.error ? "form-error" : "form-success"}`} role={feedback.error ? "alert" : "status"}>{feedback.message}</span>}</div>
+    </form>
+    <div className="balance-adjustment-history"><div className="card-heading"><div><h3 className="card-title">Balance record history</h3><p className="card-subtitle">Counts and corrections, newest first. Removed records remain visible as reversed.</p></div></div>
+      {adjustmentStatus === "LoadingFirstPage" ? <p className="muted-note">Loading balance records…</p> : adjustmentRows.length === 0 ? <p className="muted-note">No counted balances recorded yet.</p> : <><div className="table-scroll"><table className="data-table"><thead><tr><th>Date</th><th>Account</th><th>Counted balance</th><th>Reason</th><th>Status</th><th>Actions</th></tr></thead><tbody>{adjustmentRows.map(row => <tr key={row._id} className={row.state === "void" ? "balance-adjustment-void" : undefined}><td>{row.occurredOn}</td><td>{row.account === "cash" ? "Cash at hand" : "Centipid mobile collection"}</td><td>{money(row.countedBalanceUgx)}</td><td>{row.note}{row.voidReason && <small className="balance-adjustment-reason">Reversal: {row.voidReason}</small>}</td><td>{row.state === "posted" ? "Active" : "Reversed"}</td><td>{row.state === "posted" ? <div className="balance-adjustment-actions"><button type="button" className="button button-small" onClick={() => startEdit(row)}>Edit</button><button type="button" className="button button-small button-danger-quiet" onClick={() => { setVoidId(row._id); setVoidReason(""); }}>Remove</button></div> : "—"}{voidId === row._id && row.state === "posted" && <div className="balance-adjustment-void-form"><label>Reason for removal<textarea rows={2} maxLength={300} value={voidReason} onChange={event => setVoidReason(event.target.value)} /></label><div className="form-actions"><button type="button" className="button button-danger" disabled={busy} onClick={() => void remove(row)}>Confirm removal</button><button type="button" className="button" disabled={busy} onClick={() => setVoidId(null)}>Cancel</button></div></div>}</td></tr>)}</tbody></table></div>{adjustmentStatus === "CanLoadMore" && <button type="button" className="button" onClick={() => loadMore(30)}>Load older balance records</button>}{adjustmentStatus === "LoadingMore" && <p className="muted-note" role="status">Loading older balance records…</p>}</>}
+    </div>
+  </section>;
+}
 function offsetLabel(zone: string) { try { return new Intl.DateTimeFormat("en", { timeZone: zone, timeZoneName: "shortOffset" }).formatToParts(new Date()).find(p => p.type === "timeZoneName")?.value ?? "UTC"; } catch { return "UTC"; } }
 function currencyName(code: string) { return currencies[code as keyof typeof currencies]?.name ?? code; }
 function moneyPreview(code: string, locale: string) { try { return new Intl.NumberFormat(locale, { style: "currency", currency: code }).format(123456.78); } catch { return `123,456.78 ${code}`; } }
@@ -126,12 +251,13 @@ function AccessSettings() {
   const makeInvite = useMutation(api.settings.invite);
   const revoke = useMutation(api.settings.revokeInvite);
   const updateMember = useMutation(api.settings.updateMember);
-  const [email, setEmail] = useState(""); const [role, setRole] = useState<"partner" | "cashier">("cashier"); const [partnerId, setPartnerId] = useState("");
+  const [email, setEmail] = useState(""); const [role, setRole] = useState<"partner" | "cashier" | "finance_approver">("cashier"); const [partnerId, setPartnerId] = useState("");
   const [partnerSelections, setPartnerSelections] = useState<Record<string, string>>({});
+  const [roleSelections, setRoleSelections] = useState<Record<string, "partner" | "cashier" | "finance_approver">>({});
   const [inviteUrl, setInviteUrl] = useState(""); const [feedback, setFeedback] = useState(""); const [busy, setBusy] = useState(false); const [memberBusyId, setMemberBusyId] = useState<string | null>(null);
   async function submit(e: FormEvent) { e.preventDefault(); setBusy(true); setFeedback(""); try { const token = await makeInvite({ email, role, partnerId: role === "partner" && partnerId ? partnerId as Id<"partners"> : undefined }); const url = new URL(`/invite?token=${encodeURIComponent(token)}`, window.location.origin).toString(); setInviteUrl(url); setFeedback("Invitation created. Copy and send this link to the invited email address; no email has been sent automatically."); setEmail(""); setPartnerId(""); } catch (error) { setFeedback(error instanceof Error ? error.message : "Could not create invitation."); } finally { setBusy(false); } }
   if (!state || state.access !== "ready") return <p className="muted-note">Access management is available to workspace owners.</p>;
-  async function changeMember(m: AccessOverview["members"][number], nextRole: "partner" | "cashier", nextActive: boolean, nextPartner?: string) {
+  async function changeMember(m: AccessOverview["members"][number], nextRole: "partner" | "cashier" | "finance_approver", nextActive: boolean, nextPartner?: string) {
     const previousSelection = partnerSelections[m.id];
     const linkedPartner = nextPartner ?? m.partnerId ?? "";
     if (nextRole === "partner" && nextActive && !linkedPartner) { setFeedback(`Choose a partner record for ${m.email} before enabling partner access.`); return; }
@@ -140,12 +266,13 @@ function AccessSettings() {
       await updateMember({ membershipId: m.id, role: nextRole, partnerId: nextRole === "partner" && linkedPartner ? linkedPartner as Id<"partners"> : undefined, active: nextActive });
       setPartnerSelections(current => ({ ...current, [m.id]: linkedPartner }));
     } catch (error) {
+      setRoleSelections(current => ({ ...current, [m.id]: m.role as "partner" | "cashier" | "finance_approver" }));
       setPartnerSelections(current => { const next = { ...current }; if (previousSelection === undefined) delete next[m.id]; else next[m.id] = previousSelection; return next; });
       setFeedback(error instanceof Error ? error.message : `Could not update access for ${m.email}.`);
     } finally { setMemberBusyId(null); }
   }
-  return <div className="settings-stack"><section className="card settings-card"><div className="card-heading"><div><h2 className="card-title">Invite a teammate</h2><p className="card-subtitle">Invitations expire after seven days and can only be accepted by the invited Google account.</p></div></div><form className="form-layout" onSubmit={e => void submit(e)}><Field label="Google account email"><input type="email" value={email} onChange={e => setEmail(e.target.value)} required /></Field><Field label="Role"><select value={role} onChange={e => setRole(e.target.value as typeof role)}><option value="cashier">Cashier · record entries</option><option value="partner">Partner · their own capital statement only</option></select></Field>{role === "partner" && <Field label="Partner record"><select value={partnerId} onChange={e => setPartnerId(e.target.value)} required><option value="">Choose a partner</option>{state.partners.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</select></Field>}<div className="form-actions"><button className="button button-accent" disabled={busy}>{busy ? "Creating…" : "Create invitation link"}</button></div></form>{role === "partner" && <p className="notice-banner notice-info">The linked account sees its ownership and attributed capital contributions only. Business-wide balances and records stay private.</p>}{inviteUrl && <div className="field field-full"><label htmlFor="invite-link">Private invitation link</label><div className="copy-row"><input id="invite-link" readOnly value={inviteUrl} onFocus={e => e.target.select()} /><button className="button" type="button" onClick={() => void navigator.clipboard.writeText(inviteUrl)}>Copy link</button></div></div>}{feedback && <p className="muted-note" role="status">{feedback}</p>}</section>
-    <section className="card settings-card"><div className="card-heading"><div><h2 className="card-title">Workspace members</h2><p className="card-subtitle">Roles are enforced by Convex on every business-data request. Owner access changes require a verified handoff.</p></div></div>{feedback && <p className="form-feedback form-error" role="alert">{feedback}</p>}<div className="table-scroll"><table className="data-table"><thead><tr><th>Account</th><th>Role / partner</th><th>Status</th><th>Since</th><th>Access control</th></tr></thead><tbody>{state.members.map(m => { const selectedPartner = partnerSelections[m.id] ?? m.partnerId ?? ""; const memberBusy = memberBusyId === m.id; return <tr key={m.id}><td>{m.email}</td><td>{m.role}{m.partnerName ? ` · ${m.partnerName}` : ""}</td><td>{m.active ? "Active" : "Inactive"}</td><td>{new Date(m.createdAt).toLocaleDateString()}</td><td>{m.role === "owner" ? "Owner" : <div className="member-controls"><select aria-label={`Partner account for ${m.email}`} value={selectedPartner} disabled={memberBusy} onChange={e => { const value = e.target.value; setPartnerSelections(current => ({ ...current, [m.id]: value })); if (m.role === "partner" && m.active && value) void changeMember(m, "partner", true, value); }}><option value="">Choose partner</option>{state.partners.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</select><select aria-label={`Role for ${m.email}`} value={m.role} disabled={memberBusy} onChange={e => { const nextRole = e.target.value as "partner" | "cashier"; void changeMember(m, nextRole, m.active, nextRole === "partner" ? selectedPartner : undefined); }}><option value="partner">Partner</option><option value="cashier">Cashier</option></select><button className="button" type="button" disabled={memberBusy} onClick={() => void changeMember(m, m.role as "partner" | "cashier", !m.active, m.role === "partner" ? selectedPartner : undefined)}>{memberBusy ? "Saving…" : m.active ? "Deactivate" : "Reactivate"}</button></div>}</td></tr>; })}</tbody></table></div></section>
+  return <div className="settings-stack"><section className="card settings-card"><div className="card-heading"><div><h2 className="card-title">Invite a teammate</h2><p className="card-subtitle">Invitations expire after seven days and can only be accepted by the invited Google account.</p></div></div><form className="form-layout" onSubmit={e => void submit(e)}><Field label="Google account email"><input type="email" value={email} onChange={e => setEmail(e.target.value)} required /></Field><Field label="Role"><select value={role} onChange={e => setRole(e.target.value as typeof role)}><option value="cashier">Cashier · record entries</option><option value="finance_approver">Finance approver · review and approve partner distributions</option><option value="partner">Partner · their own capital and payout statement</option></select></Field>{role === "partner" && <Field label="Partner record"><select value={partnerId} onChange={e => setPartnerId(e.target.value)} required><option value="">Choose a partner</option>{state.partners.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</select></Field>}<div className="form-actions"><button className="button button-accent" disabled={busy}>{busy ? "Creating…" : "Create invitation link"}</button></div></form>{role === "partner" && <p className="notice-banner notice-info">The linked account sees only its own ownership, capital, and distribution history.</p>}{role === "finance_approver" && <p className="notice-banner notice-warning">This role can review financial records and approve or reject distributions created by another person. It cannot prepare distributions, record payouts, or change workspace settings.</p>}{inviteUrl && <div className="field field-full"><label htmlFor="invite-link">Private invitation link</label><div className="copy-row"><input id="invite-link" readOnly value={inviteUrl} onFocus={e => e.target.select()} /><button className="button" type="button" onClick={() => void navigator.clipboard.writeText(inviteUrl)}>Copy link</button></div></div>}{feedback && <p className="muted-note" role="status">{feedback}</p>}</section>
+    <section className="card settings-card"><div className="card-heading"><div><h2 className="card-title">Workspace members</h2><p className="card-subtitle">Roles are enforced by Convex on every business-data request. Owner access changes require a verified handoff.</p></div></div>{feedback && <p className="form-feedback form-error" role="alert">{feedback}</p>}<div className="table-scroll"><table className="data-table"><thead><tr><th>Account</th><th>Role / partner</th><th>Status</th><th>Since</th><th>Access control</th></tr></thead><tbody>{state.members.map(m => { const selectedPartner = partnerSelections[m.id] ?? m.partnerId ?? ""; const selectedRole = roleSelections[m.id] ?? m.role; const memberBusy = memberBusyId === m.id; return <tr key={m.id}><td>{m.email}</td><td>{m.role}{m.partnerName ? ` · ${m.partnerName}` : ""}</td><td>{m.active ? "Active" : "Inactive"}</td><td>{new Date(m.createdAt).toLocaleDateString()}</td><td>{m.role === "owner" ? "Owner" : <div className="member-controls">{selectedRole === "partner" && <select aria-label={`Partner account for ${m.email}`} value={selectedPartner} disabled={memberBusy} onChange={e => { const value = e.target.value; setPartnerSelections(current => ({ ...current, [m.id]: value })); if (selectedRole === "partner" && m.active && value) void changeMember(m, "partner", true, value); }}><option value="">Choose partner</option>{state.partners.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</select>}<select aria-label={`Role for ${m.email}`} value={selectedRole} disabled={memberBusy} onChange={e => { const nextRole = e.target.value as "partner" | "cashier" | "finance_approver"; setRoleSelections(current => ({ ...current, [m.id]: nextRole })); if (nextRole === "partner" && !selectedPartner && m.active) { setFeedback(`Choose a partner record for ${m.email} to complete this role change.`); return; } void changeMember(m, nextRole, m.active, nextRole === "partner" ? selectedPartner : undefined); }}><option value="partner">Partner</option><option value="cashier">Cashier</option><option value="finance_approver">Finance approver</option></select><button className="button" type="button" disabled={memberBusy} onClick={() => void changeMember(m, selectedRole, !m.active, selectedRole === "partner" ? selectedPartner : undefined)}>{memberBusy ? "Saving…" : m.active ? "Deactivate" : "Reactivate"}</button></div>}</td></tr>; })}</tbody></table></div></section>
     <section className="card settings-card"><div className="card-heading"><div><h2 className="card-title">Pending invitations</h2><p className="card-subtitle">Invite links are shown only once when created. Revoke and issue a fresh link if it is lost.</p></div></div>{state.invitations.length ? <div className="table-scroll"><table className="data-table"><thead><tr><th>Email</th><th>Role / partner</th><th>Expires</th><th></th></tr></thead><tbody>{state.invitations.map(i => <tr key={i.id}><td>{i.email}</td><td>{i.role}{i.partnerName ? ` · ${i.partnerName}` : ""}</td><td>{new Date(i.expiresAt).toLocaleString()}</td><td><button type="button" className="button" onClick={() => void revoke({ invitationId: i.id })}>Revoke</button></td></tr>)}</tbody></table></div> : <p className="muted-note">No pending invitations.</p>}</section>
     <section className="card settings-card"><div className="card-heading"><div><h2 className="card-title">Recent access audit</h2><p className="card-subtitle">Latest role, invitation, and settings changes.</p></div></div>{state.audit.length ? <ul className="settings-audit-list">{state.audit.map(a => <li key={a.id}><time>{new Date(a.occurredAt).toLocaleString()}</time><strong>{a.summary}</strong><span>{a.action}</span></li>)}</ul> : <p className="muted-note">No audit events yet.</p>}</section></div>;
 }

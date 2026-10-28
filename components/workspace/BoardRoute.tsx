@@ -13,6 +13,7 @@ import { OperationsWorkspace } from "@/components/workspace/OperationsWorkspace"
 import { ConvexLiveStatus } from "@/components/workspace/ConvexLiveStatus";
 import { OperationalRecordForm } from "@/components/workspace/OperationalRecordForm";
 import { formatBusinessDay } from "@/lib/format";
+import { AnalyticsInsights } from "@/components/workspace/AnalyticsInsights";
 
 type BoardSpec = {
   title: string;
@@ -280,6 +281,7 @@ export function BoardRoute({ route }: { route: string }) {
   const trailingSevenSummary = useQuery(api.workspace.dashboardSummary, needsDailyHistory ? trailingSevenRange : "skip");
 
   if (!screen) return <WorkspaceTitle eyebrow="MylesNet" title="Page not found" description="Choose a section from the navigation." />;
+  if (settings?.access === "ready" && settings.role === "finance_approver" && screen.title !== "Partners") return <><WorkspaceTitle eyebrow="Access limited" title="Distribution review" description="Finance approver access is scoped to independent partner distribution review." /><div className="notice-banner notice-info" role="status">Open Partners to review pending distribution requests. Business records, reports, and workspace settings are not available to this role.</div></>;
 
   const stats = summary?.access === "ready" ? summary : null;
   const yearDays = yearSummary?.access === "ready" ? yearSummary.days : undefined;
@@ -345,7 +347,7 @@ export function BoardRoute({ route }: { route: string }) {
         <div className="metric-note">{metricValues[label] === undefined ? "Available when this record type is configured" : "Based on saved workspace records"}</div>
       </Card>)}
     </div>}
-    {operationalScreen ? <OperationsWorkspace screen={screen.title as "Movements" | "Savings" | "Loans" | "Partners" | "Bills" | "Reconcile"} currency={currency} scale={currencyScale} locale={locale} timezone={timezone} dateFormat={dateFormat} range={range} /> : <div className="board-grid">
+    {screen.title === "Analytics" ? <AnalyticsInsights range={range} today={today} currency={currency} scale={currencyScale} locale={locale} /> : screen.title === "Needs attention" ? <AnalyticsInsights range={range} today={today} currency={currency} scale={currencyScale} locale={locale} issuesOnly /> : operationalScreen ? <OperationsWorkspace screen={screen.title as "Movements" | "Savings" | "Loans" | "Partners" | "Bills" | "Reconcile"} currency={currency} scale={currencyScale} locale={locale} timezone={timezone} dateFormat={dateFormat} range={range} /> : <div className="board-grid">
       {screen.entryKind && <Card className="board-feature-card">
         <div className="card-heading"><div><h2 className="card-title">{screen.entryKind === "sale" ? "Add a sale" : "Add an expense"}</h2><p className="card-subtitle">Saved values update the cashbook and account balance.</p></div></div>
         <EntryForm kind={screen.entryKind} />

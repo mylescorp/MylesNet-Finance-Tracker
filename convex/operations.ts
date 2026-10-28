@@ -23,6 +23,10 @@ function validDay(value: string) {
   return !Number.isNaN(parsed.valueOf()) && parsed.toISOString().slice(0, 10) === value;
 }
 
+function dayInZone(timestamp: number, timezone: string) {
+  return new Intl.DateTimeFormat("en-CA", { timeZone: timezone, year: "numeric", month: "2-digit", day: "2-digit" }).format(timestamp);
+}
+
 async function workspace(ctx: Ctx) {
   const userId = await getAuthUserId(ctx);
   if (!userId) return null;
@@ -44,6 +48,13 @@ async function historicalPartnerCapital(ctx: Ctx, businessId: Id<"businesses">, 
     .take(5000);
   const total = rows.reduce((sum, row) => row.kind === "capital_contribution" && row.state === "posted" ? safeAdd(sum, row.amountUgx, "Partner capital contributions") : sum, 0);
   return { total, complete: rows.length < 5000 };
+}
+
+async function ownershipAtDay(ctx: Ctx, businessId: Id<"businesses">, partner: { _id: Id<"partners">; ownershipBps: number }, day: string) {
+  const record = await ctx.db.query("partnerOwnershipHistory")
+    .withIndex("by_business_and_partner_and_effectiveOn", q => q.eq("businessId", businessId).eq("partnerId", partner._id).lte("effectiveOn", day))
+    .order("desc").first();
+  return record?.ownershipBps ?? partner.ownershipBps;
 }
 
 async function checkOutflow(ctx: MutationCtx, businessId: Id<"businesses">, account: Account, delta: number, confirmed: boolean) {
@@ -92,7 +103,7 @@ async function audit(ctx: MutationCtx, current: NonNullable<Awaited<ReturnType<t
 }
 
 const accountV = v.union(v.literal("cash"), v.literal("mobile_money"));
-const membershipRoleV = v.union(v.literal("owner"), v.literal("cashier"), v.literal("partner"));
+const membershipRoleV = v.union(v.literal("owner"), v.literal("cashier"), v.literal("partner"), v.literal("finance_approver"));
 
 export const overview = query({
   args: { from: v.string(), toExclusive: v.string() },
@@ -116,7 +127,7 @@ export const overview = query({
     if (!validDay(args.from) || !validDay(args.toExclusive) || args.from >= args.toExclusive) throw new Error("Choose a valid reporting date range.");
     const current = await workspace(ctx);
     if (!current) return { access: "pending" as const };
-    if (current.membership.role === "partner") return { access: "restricted" as const };
+    if (current.membership.role !== "owner" && current.membership.role !== "cashier") return { access: "restricted" as const };
     const businessId = current.business._id;
     const [movements, savings, savingsFlows, loans, loanRepayments, bills, billPayments, reconciliations, partners] = await Promise.all([
       ctx.db.query("movements").withIndex("by_business_and_date", q => q.eq("businessId", businessId).gte("occurredOn", args.from).lt("occurredOn", args.toExclusive)).order("desc").take(100),
@@ -129,6 +140,13 @@ export const overview = query({
       ctx.db.query("reconciliations").withIndex("by_business_and_date", q => q.eq("businessId", businessId).gte("asOfDate", args.from).lt("asOfDate", args.toExclusive)).order("desc").take(100),
       ctx.db.query("partners").withIndex("by_business_and_active", q => q.eq("businessId", businessId).eq("active", true)).take(101),
     ]);
+    const businessToday = dayInZone(Date.now(), current.business.timezone);
+    const currentPartnerShares = await Promise.all(partners.map(async partner => {
+      const history = await ctx.db.query("partnerOwnershipHistory")
+        .withIndex("by_business_and_partner_and_effectiveOn", q => q.eq("businessId", businessId).eq("partnerId", partner._id).lte("effectiveOn", businessToday))
+        .order("desc").first();
+      return { ...partner, ownershipBps: history?.ownershipBps ?? partner.ownershipBps };
+    }));
     const partnerById = new Map(partners.map(p => [p._id, p.name]));
     const holdingById = new Map(savings.map(item => [item._id, item.name]));
     const loanById = new Map(loans.map(item => [item._id, item.lender]));
@@ -147,7 +165,7 @@ export const overview = query({
       bills: bills.map(row => ({ _id: row._id, name: row.name, category: row.category, amountUgx: row.amountUgx, account: row.account, recurrence: row.recurrence, nextDueOn: row.nextDueOn, active: row.active })),
       billPayments: billPayments.map(row => ({ _id: row._id, billName: billById.get(row.billId) ?? "Inactive bill", amountUgx: row.amountUgx, account: row.account, paidOn: row.paidOn })),
       reconciliations: reconciliations.map(row => ({ _id: row._id, account: row.account, asOfDate: row.asOfDate, bookBalanceUgx: row.bookBalanceUgx, countedBalanceUgx: row.countedBalanceUgx, varianceUgx: row.varianceUgx, status: row.status, note: row.note, explanation: row.explanation })),
-      partners: partners.map(row => ({ _id: row._id, name: row.name, ownershipBps: row.ownershipBps, active: row.active })),
+      partners: currentPartnerShares.map(row => ({ _id: row._id, name: row.name, ownershipBps: row.ownershipBps, active: row.active })),
     };
   },
 });
@@ -165,21 +183,53 @@ export const partnerStatement = query({
     const contributions = await ctx.db.query("movements")
       .withIndex("by_business_and_partner_and_date", q => q.eq("businessId", current.business._id).eq("partnerId", partner._id).gte("occurredOn", args.from).lt("occurredOn", args.toExclusive))
       .order("desc").take(100);
+    const currentDay = dayInZone(Date.now(), current.business.timezone);
+    const currentOwnership = await ctx.db.query("partnerOwnershipHistory")
+      .withIndex("by_business_and_partner_and_effectiveOn", q => q.eq("businessId", current.business._id).eq("partnerId", partner._id).lte("effectiveOn", currentDay))
+      .order("desc").first();
     const legacyCapital = partner.capitalContributedUgx === undefined
       ? await historicalPartnerCapital(ctx, current.business._id, partner._id)
       : { total: partner.capitalContributedUgx, complete: true };
+    const distributionItems = await ctx.db.query("partnerDistributionItems")
+      .withIndex("by_business_and_partner", q => q.eq("businessId", current.business._id).eq("partnerId", partner._id))
+      .order("desc").take(501);
+    const distributions = await Promise.all(distributionItems.slice(0, 500).map(async item => {
+      const distribution = await ctx.db.get("partnerDistributions", item.distributionId);
+      if (!distribution || distribution.businessId !== current.business._id || distribution.periodFrom >= args.toExclusive || distribution.periodToExclusive <= args.from) return null;
+      return {
+        id: distribution._id,
+        periodFrom: distribution.periodFrom,
+        periodToExclusive: distribution.periodToExclusive,
+        status: distribution.status,
+        allocatedUgx: item.amountUgx,
+        paidUgx: item.paidUgx,
+        unpaidUgx: item.amountUgx - item.paidUgx,
+      };
+    }));
+    const payoutRows = await ctx.db.query("partnerPayouts")
+      .withIndex("by_business_and_partner_and_paidOn", q => q.eq("businessId", current.business._id).eq("partnerId", partner._id).gte("paidOn", args.from).lt("paidOn", args.toExclusive))
+      .order("desc").take(501);
+    const payouts = await Promise.all(payoutRows.slice(0, 500).map(async payout => {
+      const [item, distribution] = await Promise.all([ctx.db.get("partnerDistributionItems", payout.distributionItemId), ctx.db.get("partnerDistributions", payout.distributionId)]);
+      if (!item || item.businessId !== current.business._id || !distribution || distribution.businessId !== current.business._id) return null;
+      return { id: payout._id, partnerName: item.partnerName, periodFrom: distribution.periodFrom, amountUgx: payout.amountUgx, account: payout.account, paidOn: payout.paidOn, state: payout.state, reversedAt: payout.reversedAt, reversalReason: payout.reversalReason };
+    }));
     const preferences = await ctx.db.query("workspacePreferences").withIndex("by_business", q => q.eq("businessId", current.business._id)).unique();
     const currencyMinorDigits = new Intl.NumberFormat("en", { style: "currency", currency: current.business.currency }).resolvedOptions().maximumFractionDigits;
     return {
       access: "ready" as const,
       partner: partner.name,
-      ownershipBps: partner.ownershipBps,
+      ownershipBps: currentOwnership?.ownershipBps ?? partner.ownershipBps,
       currency: current.business.currency,
       currencyMinorDigits,
       locale: preferences?.locale ?? "en-UG",
       dateFormat: preferences?.dateFormat ?? "DD/MM/YYYY",
       capitalContributedUgx: legacyCapital.total,
       capitalTotalComplete: legacyCapital.complete,
+      distributions: distributions.filter((row): row is NonNullable<typeof row> => row !== null && ["approved", "partially_paid", "paid"].includes(row.status)),
+      distributionsComplete: distributionItems.length < 501,
+      payouts: payouts.filter((row): row is NonNullable<typeof row> => row !== null),
+      payoutsComplete: payoutRows.length < 501,
       contributions: contributions.filter(row => row.kind === "capital_contribution" && row.state === "posted").map(row => ({
         _id: row._id, occurredOn: row.occurredOn, amountUgx: row.amountUgx, account: row.toAccount ?? "cash", note: row.note,
       })),
@@ -196,7 +246,7 @@ export const createMovement = mutation({
   returns: v.id("movements"),
   handler: async (ctx, args) => {
     const current = await workspace(ctx);
-    if (!current || current.membership.role === "partner") throw new Error("Only an active owner or cashier can record a movement.");
+    if (!current || (current.membership.role !== "owner" && current.membership.role !== "cashier")) throw new Error("Only an active owner or cashier can record a movement.");
     if (!Number.isSafeInteger(args.amountUgx) || args.amountUgx <= 0 || !Number.isSafeInteger(args.feeUgx ?? 0) || (args.feeUgx ?? 0) < 0) throw new Error("Enter a positive whole-unit amount and a non-negative fee.");
     if (!validDay(args.occurredOn) || args.note.length > 300 || args.idempotencyKey.length < 16 || args.idempotencyKey.length > 120) throw new Error("Movement details are invalid.");
     const feeUgx = args.feeUgx ?? 0;
@@ -250,7 +300,7 @@ export const createSavingsHolding = mutation({
   args: { name: v.string(), targetUgx: v.optional(v.number()), idempotencyKey: v.string() }, returns: v.id("savingsHoldings"),
   handler: async (ctx, args) => {
     const current = await workspace(ctx);
-    if (!current || current.membership.role === "partner") throw new Error("Only an active owner or cashier can manage savings holdings.");
+    if (!current || (current.membership.role !== "owner" && current.membership.role !== "cashier")) throw new Error("Only an active owner or cashier can manage savings holdings.");
     const name = args.name.trim();
     if (name.length < 2 || name.length > 80 || args.idempotencyKey.length < 16 || args.idempotencyKey.length > 120) throw new Error("Name the savings goal using 2 to 80 characters.");
     const request = await ctx.db.query("savingsHoldings").withIndex("by_business_and_idempotency", q => q.eq("businessId", current.business._id).eq("idempotencyKey", args.idempotencyKey)).unique();
@@ -273,7 +323,7 @@ export const recordSavingsFlow = mutation({
   returns: v.id("savingsFlows"),
   handler: async (ctx, args) => {
     const current = await workspace(ctx);
-    if (!current || current.membership.role === "partner") throw new Error("Only an active owner or cashier can record savings activity.");
+    if (!current || (current.membership.role !== "owner" && current.membership.role !== "cashier")) throw new Error("Only an active owner or cashier can record savings activity.");
     if (!Number.isSafeInteger(args.amountUgx) || args.amountUgx <= 0 || !validDay(args.occurredOn) || args.note.length > 300 || args.idempotencyKey.length < 16 || args.idempotencyKey.length > 120) throw new Error("Savings transaction details are invalid.");
     const duplicate = await ctx.db.query("savingsFlows").withIndex("by_business_and_idempotency", q => q.eq("businessId", current.business._id).eq("idempotencyKey", args.idempotencyKey)).unique();
     if (duplicate) {
@@ -417,7 +467,7 @@ export const createReconciliation = mutation({
   returns: v.id("reconciliations"),
   handler: async (ctx, args) => {
     const current = await workspace(ctx);
-    if (!current || current.membership.role === "partner") throw new Error("Only an active owner or cashier can record a reconciliation count.");
+    if (!current || (current.membership.role !== "owner" && current.membership.role !== "cashier")) throw new Error("Only an active owner or cashier can record a reconciliation count.");
     if (!validDay(args.asOfDate) || !Number.isSafeInteger(args.countedBalanceUgx) || args.countedBalanceUgx < 0 || args.note.length > 300 || args.idempotencyKey.length < 16 || args.idempotencyKey.length > 120) throw new Error("Reconciliation details are invalid.");
     const duplicate = await ctx.db.query("reconciliations").withIndex("by_business_and_idempotency", q => q.eq("businessId", current.business._id).eq("idempotencyKey", args.idempotencyKey)).unique();
     if (duplicate) {
@@ -467,8 +517,23 @@ export const createPartner = mutation({
     const partners = await ctx.db.query("partners").withIndex("by_business_and_active", q => q.eq("businessId", current.business._id).eq("active", true)).take(101);
     if (partners.length >= 100) throw new Error("This version supports up to 100 active partner records in a workspace. Review ownership records before reaching this limit.");
     if (partners.some(row => row.name.toLowerCase() === name.toLowerCase())) throw new Error("A partner with this name already exists.");
-    if (partners.reduce((sum, row) => safeAdd(sum, row.ownershipBps, "Ownership"), args.ownershipBps) > 10_000) throw new Error("Active partner ownership cannot exceed 100%.");
+    const today = dayInZone(Date.now(), current.business.timezone);
+    const currentShares = await Promise.all(partners.map(partner => ownershipAtDay(ctx, current.business._id, partner, today)));
+    if (currentShares.reduce((sum, share) => safeAdd(sum, share, "Ownership"), args.ownershipBps) > 10_000) throw new Error("Active partner ownership cannot exceed 100% on today's effective shares.");
+    const scheduledHistory = await ctx.db.query("partnerOwnershipHistory")
+      .withIndex("by_business_and_effectiveOn", q => q.eq("businessId", current.business._id).gt("effectiveOn", today))
+      .take(5001);
+    if (scheduledHistory.length > 5000) throw new Error("There are too many scheduled ownership changes to safely add a partner. Ask an owner to review the schedule first.");
+    const scheduledDays = [...new Set(scheduledHistory.map(row => row.effectiveOn))];
+    if (scheduledDays.length > 20) throw new Error("There are too many future ownership dates to safely add a partner. Let scheduled changes take effect or ask an owner to review the schedule first.");
+    for (const day of scheduledDays) {
+      const scheduledShares = await Promise.all(partners.map(partner => ownershipAtDay(ctx, current.business._id, partner, day)));
+      const scheduledTotal = scheduledShares.reduce((sum, share) => safeAdd(sum, share, "Scheduled ownership"), args.ownershipBps);
+      if (scheduledTotal > 10_000) throw new Error(`Adding this partner would make ownership exceed 100% after the change scheduled for ${day}. Revise that snapshot before adding the partner.`);
+    }
+    const now = Date.now();
     const partnerId = await ctx.db.insert("partners", { businessId: current.business._id, name, ownershipBps: args.ownershipBps, capitalContributedUgx: 0, active: true, idempotencyKey: args.idempotencyKey });
+    await ctx.db.insert("partnerOwnershipHistory", { businessId: current.business._id, partnerId, ownershipBps: args.ownershipBps, effectiveOn: today, createdBy: current.userId, createdAt: now, idempotencyKey: `${args.idempotencyKey}:ownership` });
     await audit(ctx, current, "partner.created", "partner", partnerId, `${name} added with ${args.ownershipBps / 100}% ownership.`);
     return partnerId;
   },

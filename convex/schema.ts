@@ -6,6 +6,7 @@ const role = v.union(
   v.literal("owner"),
   v.literal("partner"),
   v.literal("cashier"),
+  v.literal("finance_approver"),
 );
 
 export default defineSchema({
@@ -71,6 +72,7 @@ export default defineSchema({
     weakDaySalesUgx: v.optional(v.number()),
     monthlySalesTargetUgx: v.optional(v.number()),
     monthlyExpenseWarningUgx: v.optional(v.number()),
+    lowCashAlertUgx: v.optional(v.number()),
     duplicateWindowDays: v.optional(v.number()),
     requireEntryNote: v.optional(v.boolean()),
     negativeBalanceWarning: v.optional(v.boolean()),
@@ -85,6 +87,75 @@ export default defineSchema({
     active: v.boolean(),
     idempotencyKey: v.optional(v.string()),
   }).index("by_business_and_active", ["businessId", "active"]).index("by_business_and_idempotency", ["businessId", "idempotencyKey"]),
+  partnerOwnershipHistory: defineTable({
+    businessId: v.id("businesses"),
+    partnerId: v.id("partners"),
+    ownershipBps: v.number(),
+    effectiveOn: v.string(),
+    createdBy: v.id("users"),
+    createdAt: v.number(),
+    idempotencyKey: v.string(),
+  })
+    .index("by_business_and_partner_and_effectiveOn", ["businessId", "partnerId", "effectiveOn"])
+    .index("by_business_and_effectiveOn", ["businessId", "effectiveOn"])
+    .index("by_business_and_idempotency", ["businessId", "idempotencyKey"]),
+  partnerDistributions: defineTable({
+    businessId: v.id("businesses"),
+    periodFrom: v.string(),
+    periodToExclusive: v.string(),
+    profitUgx: v.number(),
+    distributionUgx: v.number(),
+    reserveUgx: v.number(),
+    minimumPayoutUgx: v.number(),
+    paidUgx: v.number(),
+    status: v.union(v.literal("pending_approval"), v.literal("approved"), v.literal("rejected"), v.literal("partially_paid"), v.literal("paid"), v.literal("cancelled")),
+    createdBy: v.id("users"),
+    createdAt: v.number(),
+    idempotencyKey: v.string(),
+    approvedBy: v.optional(v.id("users")),
+    approvedAt: v.optional(v.number()),
+    rejectedBy: v.optional(v.id("users")),
+    rejectedAt: v.optional(v.number()),
+    rejectionReason: v.optional(v.string()),
+    cancelledBy: v.optional(v.id("users")),
+    cancelledAt: v.optional(v.number()),
+    cancellationReason: v.optional(v.string()),
+  })
+    .index("by_business_and_period_start", ["businessId", "periodFrom"])
+    .index("by_business_and_status_and_created", ["businessId", "status", "createdAt"])
+    .index("by_business_and_idempotency", ["businessId", "idempotencyKey"]),
+  partnerDistributionItems: defineTable({
+    businessId: v.id("businesses"),
+    distributionId: v.id("partnerDistributions"),
+    partnerId: v.id("partners"),
+    partnerName: v.string(),
+    ownershipBps: v.number(),
+    amountUgx: v.number(),
+    paidUgx: v.number(),
+  })
+    .index("by_business_and_distribution", ["businessId", "distributionId"])
+    .index("by_business_and_partner", ["businessId", "partnerId"]),
+  partnerPayouts: defineTable({
+    businessId: v.id("businesses"),
+    distributionId: v.id("partnerDistributions"),
+    distributionItemId: v.id("partnerDistributionItems"),
+    partnerId: v.id("partners"),
+    amountUgx: v.number(),
+    account: v.union(v.literal("cash"), v.literal("mobile_money")),
+    paidOn: v.string(),
+    note: v.string(),
+    state: v.union(v.literal("posted"), v.literal("reversed")),
+    idempotencyKey: v.string(),
+    createdBy: v.id("users"),
+    createdAt: v.number(),
+    reversedBy: v.optional(v.id("users")),
+    reversedAt: v.optional(v.number()),
+    reversalReason: v.optional(v.string()),
+  })
+    .index("by_business_and_distribution", ["businessId", "distributionId"])
+    .index("by_business_and_item", ["businessId", "distributionItemId"])
+    .index("by_business_and_partner_and_paidOn", ["businessId", "partnerId", "paidOn"])
+    .index("by_business_and_idempotency", ["businessId", "idempotencyKey"]),
   entries: defineTable({
     businessId: v.id("businesses"),
     kind: v.union(v.literal("sale"), v.literal("expense")),
@@ -133,6 +204,21 @@ export default defineSchema({
     openingBalanceUgx: v.optional(v.number()),
     updatedAt: v.number(),
   }).index("by_business_and_account", ["businessId", "account"]),
+  balanceAdjustments: defineTable({
+    businessId: v.id("businesses"),
+    account: v.union(v.literal("cash"), v.literal("mobile_money")),
+    countedBalanceUgx: v.number(),
+    deltaUgx: v.number(),
+    occurredOn: v.string(),
+    note: v.string(),
+    state: v.union(v.literal("posted"), v.literal("void")),
+    createdBy: v.id("users"),
+    createdAt: v.number(),
+    updatedAt: v.optional(v.number()),
+    voidedAt: v.optional(v.number()),
+    voidedBy: v.optional(v.id("users")),
+    voidReason: v.optional(v.string()),
+  }).index("by_business_and_date", ["businessId", "occurredOn"]).index("by_business_and_created_at", ["businessId", "createdAt"]),
   dailyTotals: defineTable({
     businessId: v.id("businesses"),
     day: v.string(),

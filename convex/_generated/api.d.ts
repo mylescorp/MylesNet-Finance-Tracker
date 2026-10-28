@@ -9,9 +9,11 @@
  */
 
 import type * as auth from "../auth.js";
+import type * as analytics from "../analytics.js";
 import type * as centipid from "../centipid.js";
 import type * as centipidHttp from "../centipidHttp.js";
 import type * as centipidUtils from "../centipidUtils.js";
+import type * as distributions from "../distributions.js";
 import type * as googleFormHttp from "../googleFormHttp.js";
 import type * as googleForms from "../googleForms.js";
 import type * as http from "../http.js";
@@ -29,9 +31,11 @@ import type {
 
 declare const fullApi: ApiFromModules<{
   auth: typeof auth;
+  analytics: typeof analytics;
   centipid: typeof centipid;
   centipidHttp: typeof centipidHttp;
   centipidUtils: typeof centipidUtils;
+  distributions: typeof distributions;
   googleFormHttp: typeof googleFormHttp;
   googleForms: typeof googleForms;
   http: typeof http;
