@@ -1,9 +1,11 @@
+import { paginationOptsValidator } from "convex/server";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { ConvexError, v } from "convex/values";
 import { internalMutation, mutation, query } from "./_generated/server";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
-import { hasPermission } from "./accessControl";
+import type { Doc, Id } from "./_generated/dataModel";
 import { isIgnoredCentipidEvent } from "./centipidUtils";
+import { hasPermission } from "./accessControl";
 
 function addSafeInteger(left: number, right: number, label: string) {
   const result = left + right;
@@ -11,15 +13,14 @@ function addSafeInteger(left: number, right: number, label: string) {
   return result;
 }
 
-async function owner(ctx: MutationCtx | QueryCtx) {
+async function owner(ctx: MutationCtx | QueryCtx, businessId: Id<"businesses">) {
   const userId = await getAuthUserId(ctx);
-  if (!userId) throw new ConvexError("Sign in before managing Centipid integration.");
-  const memberships = await ctx.db.query("memberships").withIndex("by_user", q => q.eq("userId", userId)).take(20);
-  const active = memberships.filter(item => item.active);
-  if (memberships.length >= 20 || active.length !== 1 || !(await hasPermission(ctx, active[0], "integrations.manage"))) throw new ConvexError("Your role cannot manage the integration.");
-  const business = await ctx.db.get("businesses", active[0].businessId);
-  if (!business) throw new ConvexError("Workspace not found.");
-  return { userId, business };
+  if (!userId) throw new ConvexError("Sign in to manage the integration.");
+  const membership = await ctx.db.query("memberships").withIndex("by_business_and_user", q => q.eq("businessId", businessId).eq("userId", userId)).unique();
+  const business = membership?.active ? await ctx.db.get("businesses", businessId) : null;
+  const current = business && membership ? { userId, membership, business } : null;
+  if (!current || !(await hasPermission(ctx, current.membership, "integrations.manage"))) throw new ConvexError("Your role cannot manage this integration.");
+  return { userId: current.userId, business: current.business };
 }
 
 async function sha256(value: string) {
@@ -28,10 +29,10 @@ async function sha256(value: string) {
 }
 
 export const createToken = mutation({
-  args: {},
+  args: { businessId: v.id("businesses") },
   returns: v.string(),
-  handler: async (ctx) => {
-    const { business, userId } = await owner(ctx);
+  handler: async (ctx, args) => {
+    const { business, userId } = await owner(ctx, args.businessId);
     const random = crypto.getRandomValues(new Uint8Array(32));
     const token = [...random].map(byte => byte.toString(16).padStart(2, "0")).join("");
     const tokenHash = await sha256(token);
@@ -44,9 +45,9 @@ export const createToken = mutation({
 });
 
 export const revokeToken = mutation({
-  args: {}, returns: v.null(),
-  handler: async (ctx) => {
-    const { business, userId } = await owner(ctx);
+  args: { businessId: v.id("businesses") }, returns: v.null(),
+  handler: async (ctx, args) => {
+    const { business, userId } = await owner(ctx, args.businessId);
     const rows = await ctx.db.query("centipidIntegrations").withIndex("by_business", q => q.eq("businessId", business._id)).order("desc").take(10);
     for (const integration of rows) if (integration.active) await ctx.db.patch("centipidIntegrations", integration._id, { active: false, revokedAt: Date.now() });
     await ctx.db.insert("auditEvents", { businessId: business._id, actorId: userId, action: "integration.centipid.revoked", entityType: "integration", entityId: business._id, occurredAt: Date.now(), summary: "Centipid webhook access revoked." });
@@ -55,17 +56,51 @@ export const revokeToken = mutation({
 });
 
 export const status = query({
-  args: {}, returns: v.object({ enabled: v.boolean() }),
-  handler: async (ctx) => {
-    const { business } = await owner(ctx);
+  args: { businessId: v.id("businesses") }, returns: v.object({ enabled: v.boolean() }),
+  handler: async (ctx, args) => {
+    const { business } = await owner(ctx, args.businessId);
     const rows = await ctx.db.query("centipidIntegrations").withIndex("by_business", q => q.eq("businessId", business._id)).order("desc").take(10);
     return { enabled: rows.some(item => item.active) };
   },
 });
 
+export const history = query({
+  args: { businessId: v.id("businesses"), paginationOpts: paginationOptsValidator },
+  handler: async (ctx, args) => {
+    const { business } = await owner(ctx, args.businessId);
+    return await ctx.db.query("webhookReceipts")
+      .withIndex("by_business_and_created", q => q.eq("businessId", business._id))
+      .order("desc")
+      .paginate(args.paginationOpts);
+  },
+});
+
+export const recordFailure = internalMutation({
+  args: { tokenHash: v.string(), eventKey: v.string(), rawHash: v.string(), event: v.string() },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const integration = await ctx.db.query("centipidIntegrations").withIndex("by_token_hash", q => q.eq("tokenHash", args.tokenHash)).unique();
+    if (!integration?.active) return null;
+    const prior = await ctx.db.query("webhookReceipts").withIndex("by_business_and_event", q => q.eq("businessId", integration.businessId).eq("eventKey", args.eventKey)).unique();
+    if (prior && prior.status !== "failed") return null;
+    const now = Date.now();
+    const errorMessage = "Processing failed. Check the mapped event data, then retry with the same transaction reference.";
+    if (prior) await ctx.db.patch("webhookReceipts", prior._id, { status: "failed", rawHash: args.rawHash, errorMessage, attemptCount: (prior.attemptCount ?? 1) + 1, lastAttemptAt: now });
+    else await ctx.db.insert("webhookReceipts", { businessId: integration.businessId, eventKey: args.eventKey, event: args.event, status: "failed", rawHash: args.rawHash, errorMessage, attemptCount: 1, lastAttemptAt: now, createdAt: now });
+    return null;
+  },
+});
+
+async function saveReceipt(ctx: MutationCtx, businessId: Id<"businesses">, prior: Doc<"webhookReceipts"> | null, receipt: { eventKey: string; event: string; status: "success" | "ignored"; routed?: string; entryId?: Id<"entries">; rawHash: string }) {
+  const now = Date.now();
+  const values = { ...receipt, businessId, errorMessage: undefined, attemptCount: (prior?.attemptCount ?? 0) + 1, lastAttemptAt: now };
+  if (prior) await ctx.db.patch("webhookReceipts", prior._id, values);
+  else await ctx.db.insert("webhookReceipts", { ...values, createdAt: now });
+}
+
 export const processWebhook = internalMutation({
   args: {
-    tokenHash: v.string(), eventKey: v.string(), legacyEventKey: v.string(), rawHash: v.string(), event: v.string(), kind: v.union(v.literal("payment"), v.literal("voucher"), v.literal("expense"), v.literal("ignored")),
+    tokenHash: v.string(), eventKey: v.string(), legacyEventKey: v.optional(v.string()), rawHash: v.string(), event: v.string(), kind: v.union(v.literal("payment"), v.literal("voucher"), v.literal("expense"), v.literal("ignored")),
     amount: v.number(), transactionId: v.string(), paymentMethod: v.string(), description: v.string(), customer: v.string(), category: v.string(), account: v.string(), paidTo: v.string(),
   },
   returns: v.object({ status: v.union(v.literal("success"), v.literal("duplicate"), v.literal("ignored"), v.literal("unauthorized")), routed: v.optional(v.string()), event: v.optional(v.string()) }),
@@ -75,9 +110,9 @@ export const processWebhook = internalMutation({
     const business = await ctx.db.get("businesses", integration.businessId);
     if (!business) return { status: "unauthorized" as const };
     const prior = await ctx.db.query("webhookReceipts").withIndex("by_business_and_event", q => q.eq("businessId", business._id).eq("eventKey", args.eventKey)).unique();
-    if (prior) return prior.status === "ignored" ? { status: "ignored" as const, event: prior.event } : { status: "duplicate" as const };
-    if (args.legacyEventKey !== args.eventKey) {
-      const legacyPrior = await ctx.db.query("webhookReceipts").withIndex("by_business_and_event", q => q.eq("businessId", business._id).eq("eventKey", args.legacyEventKey)).unique();
+    if (prior && prior.status !== "failed") return prior.status === "ignored" ? { status: "ignored" as const, event: prior.event } : { status: "duplicate" as const };
+    if (args.legacyEventKey && args.legacyEventKey !== args.eventKey) {
+      const legacyPrior = await ctx.db.query("webhookReceipts").withIndex("by_business_and_event", q => q.eq("businessId", business._id).eq("eventKey", args.legacyEventKey!)).unique();
       if (legacyPrior?.event === args.event) return legacyPrior.status === "ignored" ? { status: "ignored" as const, event: legacyPrior.event } : { status: "duplicate" as const };
     }
 
@@ -86,7 +121,7 @@ export const processWebhook = internalMutation({
     const kind = ignoredEvent ? "ignored" : args.kind;
     const amount = Math.abs(args.amount);
     if (kind === "ignored" || !Number.isFinite(amount) || amount <= 0) {
-      await ctx.db.insert("webhookReceipts", { businessId: business._id, eventKey: args.eventKey, event: args.event, status: "ignored", createdAt: Date.now() });
+      await saveReceipt(ctx, business._id, prior, { eventKey: args.eventKey, event: args.event, status: "ignored", rawHash: args.rawHash });
       await ctx.db.insert("auditEvents", { businessId: business._id, actorId: business.createdBy, action: "webhook.ignored", entityType: "integration", entityId: args.eventKey, occurredAt: Date.now(), summary: `Centipid event ignored: ${args.event || "unknown"}.` });
       return { status: "ignored" as const, event: args.event };
     }
@@ -117,7 +152,7 @@ export const processWebhook = internalMutation({
     const idempotencyKey = `centipid:${args.eventKey}`;
     const existing = await ctx.db.query("entries").withIndex("by_business_and_idempotency", q => q.eq("businessId", business._id).eq("idempotencyKey", idempotencyKey)).unique();
     if (existing) {
-      await ctx.db.insert("webhookReceipts", { businessId: business._id, eventKey: args.eventKey, event: args.event, status: "success", routed: kind, entryId: existing._id, createdAt: now });
+      await saveReceipt(ctx, business._id, prior, { eventKey: args.eventKey, event: args.event, status: "success", routed: kind, entryId: existing._id, rawHash: args.rawHash });
       return { status: "duplicate" as const };
     }
     const balance = await ctx.db.query("accountBalances").withIndex("by_business_and_account", q => q.eq("businessId", business._id).eq("account", account)).unique();
@@ -141,7 +176,7 @@ export const processWebhook = internalMutation({
       saleCount: entryKind === "sale" ? 1 : 0,
       expenseCount: entryKind === "expense" ? 1 : 0,
     });
-    await ctx.db.insert("webhookReceipts", { businessId: business._id, eventKey: args.eventKey, event: args.event, status: "success", routed: kind, entryId, createdAt: now });
+    await saveReceipt(ctx, business._id, prior, { eventKey: args.eventKey, event: args.event, status: "success", routed: kind, entryId, rawHash: args.rawHash });
     await ctx.db.insert("auditEvents", { businessId: business._id, actorId: business.createdBy, action: "webhook.entry_created", entityType: "entry", entityId: entryId, occurredAt: now, summary: `Centipid ${kind} recorded · ${occurredOn} · ${category}.` });
     return { status: "success" as const, routed: kind };
   },

@@ -10,10 +10,12 @@ import Image from "next/image";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { ReactNode, useCallback, useEffect, useRef, useState } from "react";
+import { ThemeControl } from "@/components/ThemeControl";
 import { AccountDrawer, ProfileAvatar } from "@/components/account/AccountDrawer";
 import { AccountMenu } from "@/components/account/AccountMenu";
 import { GlobalSearch } from "@/components/workspace/GlobalSearch";
 import { api } from "@/convex/_generated/api";
+import type { Id } from "@/convex/_generated/dataModel";
 
 const navGroups = [
   { label: "Overview", items: [
@@ -43,13 +45,16 @@ export function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
   const access = useQuery(api.workspace.currentAccess, {});
-  const context = useQuery(api.settings.runtimeContext, {});
+  const selectWorkspace = useMutation(api.workspace.selectWorkspace);
+  const businessSettings = useQuery(api.workspace.businessSettings, {});
   const profile = useQuery(api.users.profile, {});
   const requestWorkspaceAccess = useMutation(api.settings.requestWorkspaceAccess);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
   const [accountMenuOpen, setAccountMenuOpen] = useState(false);
   const [accountReturnTo, setAccountReturnTo] = useState("/dashboard");
+  const [workspaceError, setWorkspaceError] = useState("");
+  const [switchingWorkspace, setSwitchingWorkspace] = useState(false);
   const menuButtonRef = useRef<HTMLButtonElement>(null);
   const sidebarCloseRef = useRef<HTMLButtonElement>(null);
   const accountLabel = access?.access === "ready" ? access.businessName : "My account";
@@ -75,6 +80,13 @@ export function AppShell({ children }: { children: ReactNode }) {
   const closeAccount = useCallback(() => {
     router.replace(accountReturnTo === "/account" ? "/dashboard" : accountReturnTo);
   }, [accountReturnTo, router]);
+  async function changeWorkspace(businessId: string) {
+    if (!businessId || access?.access !== "ready" || businessId === access.businessId) return;
+    setSwitchingWorkspace(true); setWorkspaceError("");
+    try { await selectWorkspace({ businessId: businessId as Id<"businesses"> }); }
+    catch (error) { setWorkspaceError(error instanceof Error ? error.message : "Could not switch workspaces."); }
+    finally { setSwitchingWorkspace(false); }
+  }
   const closeAccountMenu = useCallback(() => setAccountMenuOpen(false), []);
   const openProfile = useCallback(() => {
     setAccountReturnTo(pathname);
@@ -130,6 +142,7 @@ export function AppShell({ children }: { children: ReactNode }) {
           <span className="sidebar-workspace-copy"><strong>{accountLabel}</strong><small>FINANCE WORKSPACE</small></span>
           <ChevronDown className="sidebar-workspace-chevron" size={15} aria-hidden="true" />
         </div>
+        {access?.access === "ready" && access.workspaces.length > 1 && <label className="workspace-switcher"><span>Switch workspace</span><select aria-label="Switch workspace" value={access.businessId} disabled={switchingWorkspace} onChange={event => void changeWorkspace(event.target.value)}>{access.workspaces.map(workspace => <option key={workspace.businessId} value={workspace.businessId}>{workspace.businessName} · {workspace.role.replaceAll("_", " ")}</option>)}</select></label>}
         <nav className="sidebar-nav" aria-label="Main navigation">
           {visibleNavGroups.map(group => <section className="sidebar-nav-group" key={group.label} aria-label={group.label}>
             <h2 className="sidebar-group-label">{group.label}</h2>
@@ -156,6 +169,7 @@ export function AppShell({ children }: { children: ReactNode }) {
         <div className="topbar-page-context"><span>MYLESNET</span><strong>{routePageLabel}</strong></div>
         <div className="header-actions">
           {!financeApproverOnly && <GlobalSearch />}
+          <ThemeControl />
           {!financeApproverOnly && permissions.includes("audit.view") && <Link className="utility-link" href="/issues" aria-label="Needs attention"><Bell size={17} /><span>Needs attention</span></Link>}
           <button className="user-menu" type="button" aria-label="Open your account menu" aria-haspopup="dialog" aria-expanded={accountMenuOpen} title="Manage your account" onClick={() => setAccountMenuOpen(open => !open)}>
             <ProfileAvatar imageUrl={profile?.photoUrl} name={profile?.displayName || accountLabel} />
@@ -165,8 +179,9 @@ export function AppShell({ children }: { children: ReactNode }) {
         </div>
       </header>
       {access?.access === "pending" && <div className="access-pending" role="status"><strong>Access awaiting invitation</strong><span>Your account is not yet linked to a MylesNet workspace.</span></div>}
-      <main className="page-content">{children}</main>
-      <footer className="app-footer"><span>MylesNet Finance Tracker · {context?.access === "ready" ? context.currency : "UGX"}</span><span>Workspace data is protected by your assigned role.</span></footer>
+      {access?.access === "choose_workspace" && <section className="access-pending workspace-choice" role="status"><strong>Choose a workspace</strong><span>Your account has access to more than one workspace. Select which workspace to open.</span>{workspaceError && <span role="alert">{workspaceError}</span>}{access.workspaces.map(workspace => <button key={workspace.businessId} className="button" type="button" disabled={switchingWorkspace} onClick={() => { setSwitchingWorkspace(true); setWorkspaceError(""); void selectWorkspace({ businessId: workspace.businessId }).catch(error => setWorkspaceError(error instanceof Error ? error.message : "Could not open this workspace.")).finally(() => setSwitchingWorkspace(false)); }}><strong>{workspace.businessName}</strong><span>{workspace.role.replaceAll("_", " ")}</span></button>)}</section>}
+      <main key={access?.access === "ready" ? access.businessId : access?.access ?? "loading"} className="page-content">{access?.access === "choose_workspace" ? null : children}</main>
+      <footer className="app-footer"><span>MylesNet Finance Tracker · {businessSettings?.access === "ready" ? businessSettings.currency : "UGX"}</span><span>Workspace data is protected by your assigned role.</span></footer>
       </div>
       {pathname === "/account" && <AccountDrawer onClose={closeAccount} />}
       {accountMenuOpen && <AccountMenu displayName={profile?.displayName || accountLabel} email={profile?.email} photoUrl={profile?.photoUrl} workspaceName={accountLabel} canManageStaff={permissions.includes("access.view") || permissions.includes("access.manage") || permissions.includes("roles.manage")} canViewAudit={permissions.includes("audit.view")} onClose={closeAccountMenu} onProfile={openProfile} />}

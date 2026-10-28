@@ -102,6 +102,7 @@ export const webhook = httpAction(async (ctx, request) => {
       paidTo: maskPII(asText(pick(body, payload, ["paid_to", "vendor", "payee", "title", "name", "description"])).slice(0, 100)),
     });
   } catch {
+    try { await ctx.runMutation(internal.centipid.recordFailure, { tokenHash, eventKey, rawHash, event }); } catch { /* Keep the public webhook response generic if the receipt cannot be saved. */ }
     return json({ status: "error", message: "Processing failed" });
   }
   if (result.status === "success") return json({ status: "success", routed: result.routed });

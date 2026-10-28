@@ -12,6 +12,11 @@ export default defineSchema({
     photoRemoved: v.optional(v.boolean()),
     updatedAt: v.number(),
   }).index("by_user", ["userId"]),
+  workspaceSelections: defineTable({
+    userId: v.id("users"),
+    businessId: v.id("businesses"),
+    selectedAt: v.number(),
+  }).index("by_user", ["userId"]),
   profilePhotoUploads: defineTable({
     userId: v.id("users"),
     storageId: v.id("_storage"),
@@ -50,10 +55,12 @@ export default defineSchema({
     invitedBy: v.id("users"),
     expiresAt: v.number(),
     acceptedAt: v.optional(v.number()),
+    revokedAt: v.optional(v.number()),
     active: v.boolean(),
     tokenHash: v.optional(v.string()),
   })
     .index("by_email", ["email"])
+    .index("by_business_and_expires", ["businessId", "expiresAt"])
     .index("by_business_and_active", ["businessId", "active"])
     .index("by_business_and_partner_and_active", ["businessId", "partnerId", "active"])
     .index("by_token_hash", ["tokenHash"]),
@@ -102,7 +109,7 @@ export default defineSchema({
     capitalContributedUgx: v.optional(v.number()),
     active: v.boolean(),
     idempotencyKey: v.optional(v.string()),
-  }).index("by_business_and_active", ["businessId", "active"]).index("by_business_and_idempotency", ["businessId", "idempotencyKey"]),
+  }).index("by_business", ["businessId"]).index("by_business_and_active", ["businessId", "active"]).index("by_business_and_idempotency", ["businessId", "idempotencyKey"]),
   partnerOwnershipHistory: defineTable({
     businessId: v.id("businesses"),
     partnerId: v.id("partners"),
@@ -185,6 +192,8 @@ export default defineSchema({
     state: v.union(v.literal("posted"), v.literal("void")),
     operationSource: v.optional(v.union(v.literal("movement_fee"), v.literal("loan_interest"), v.literal("bill_payment"))),
     operationKey: v.optional(v.string()),
+    correctionOf: v.optional(v.id("entries")),
+    correctedBy: v.optional(v.id("entries")),
     createdBy: v.id("users"),
     createdAt: v.number(),
     voidedAt: v.optional(v.number()),
@@ -257,6 +266,9 @@ export default defineSchema({
     state: v.union(v.literal("posted"), v.literal("void")),
     createdBy: v.id("users"),
     createdAt: v.number(),
+    voidedAt: v.optional(v.number()),
+    voidedBy: v.optional(v.id("users")),
+    voidReason: v.optional(v.string()),
   })
     .index("by_business_and_date", ["businessId", "occurredOn"])
     .index("by_business_and_partner_and_date", ["businessId", "partnerId", "occurredOn"])
@@ -282,6 +294,10 @@ export default defineSchema({
     idempotencyKey: v.string(),
     createdBy: v.id("users"),
     createdAt: v.number(),
+    state: v.optional(v.union(v.literal("posted"), v.literal("void"))),
+    voidedAt: v.optional(v.number()),
+    voidedBy: v.optional(v.id("users")),
+    voidReason: v.optional(v.string()),
   })
     .index("by_business_and_date", ["businessId", "occurredOn"])
     .index("by_business_and_idempotency", ["businessId", "idempotencyKey"])
@@ -314,6 +330,10 @@ export default defineSchema({
     idempotencyKey: v.string(),
     createdBy: v.id("users"),
     createdAt: v.number(),
+    state: v.optional(v.union(v.literal("posted"), v.literal("void"))),
+    voidedAt: v.optional(v.number()),
+    voidedBy: v.optional(v.id("users")),
+    voidReason: v.optional(v.string()),
   })
     .index("by_business_and_date", ["businessId", "paidOn"])
     .index("by_business_and_idempotency", ["businessId", "idempotencyKey"])
@@ -341,13 +361,26 @@ export default defineSchema({
     amountUgx: v.number(),
     account: v.optional(v.union(v.literal("cash"), v.literal("mobile_money"))),
     paidOn: v.string(),
+    priorNextDueOn: v.optional(v.string()),
+    nextDueOnAfter: v.optional(v.string()),
+    priorScheduleStartDueOn: v.optional(v.string()),
+    priorScheduleAnchorDay: v.optional(v.number()),
+    priorScheduleEndOfMonth: v.optional(v.boolean()),
+    nextScheduleStartDueOn: v.optional(v.string()),
+    nextScheduleAnchorDay: v.optional(v.number()),
+    nextScheduleEndOfMonth: v.optional(v.boolean()),
     idempotencyKey: v.string(),
     createdBy: v.id("users"),
     createdAt: v.number(),
+    state: v.optional(v.union(v.literal("posted"), v.literal("void"))),
+    voidedAt: v.optional(v.number()),
+    voidedBy: v.optional(v.id("users")),
+    voidReason: v.optional(v.string()),
   })
     .index("by_business_and_date", ["businessId", "paidOn"])
     .index("by_business_and_idempotency", ["businessId", "idempotencyKey"])
-    .index("by_bill_and_date", ["billId", "paidOn"]),
+    .index("by_bill_and_date", ["billId", "paidOn"])
+    .index("by_bill_and_created_at", ["billId", "createdAt"]),
   reconciliations: defineTable({
     businessId: v.id("businesses"),
     account: v.union(v.literal("cash"), v.literal("mobile_money")),
@@ -355,15 +388,16 @@ export default defineSchema({
     bookBalanceUgx: v.number(),
     countedBalanceUgx: v.number(),
     varianceUgx: v.number(),
-    status: v.union(v.literal("matched"), v.literal("open"), v.literal("explained")),
+    status: v.union(v.literal("matched"), v.literal("open"), v.literal("explained"), v.literal("superseded")),
     note: v.string(),
     explanation: v.optional(v.string()),
+    supersedesId: v.optional(v.id("reconciliations")),
     idempotencyKey: v.string(),
     resolvedBy: v.optional(v.id("users")),
     resolvedAt: v.optional(v.number()),
     createdBy: v.id("users"),
     createdAt: v.number(),
-  }).index("by_business_and_date", ["businessId", "asOfDate"]).index("by_business_and_idempotency", ["businessId", "idempotencyKey"]),
+  }).index("by_business_and_date", ["businessId", "asOfDate"]).index("by_business_and_idempotency", ["businessId", "idempotencyKey"]).index("by_business_and_supersedes", ["businessId", "supersedesId"]),
   auditEvents: defineTable({
     businessId: v.id("businesses"),
     actorId: v.id("users"),
@@ -374,6 +408,19 @@ export default defineSchema({
     summary: v.string(),
     details: v.optional(v.string()),
   }).index("by_business_and_time", ["businessId", "occurredAt"]),
+  issueReviews: defineTable({
+    businessId: v.id("businesses"),
+    issueKey: v.string(),
+    issueId: v.string(),
+    status: v.union(v.literal("open"), v.literal("acknowledged"), v.literal("resolved")),
+    note: v.optional(v.string()),
+    assignedTo: v.optional(v.id("users")),
+    updatedBy: v.id("users"),
+    updatedAt: v.number(),
+    createdAt: v.number(),
+  }).index("by_business_and_issue", ["businessId", "issueKey"])
+    .index("by_business_and_updated", ["businessId", "updatedAt"])
+    .index("by_business_and_status_and_updated", ["businessId", "status", "updatedAt"]),
   importBatches: defineTable({
     businessId: v.id("businesses"),
     fileName: v.string(),
@@ -384,7 +431,12 @@ export default defineSchema({
     importedCount: v.number(),
     skippedCount: v.number(),
     progressRows: v.number(),
-    status: v.union(v.literal("in_progress"), v.literal("completed"), v.literal("cancelled")),
+    status: v.union(v.literal("in_progress"), v.literal("completed"), v.literal("cancelled"), v.literal("reversing"), v.literal("reversed")),
+    rollbackCursor: v.optional(v.string()),
+    rollbackProgressRows: v.optional(v.number()),
+    rollbackReason: v.optional(v.string()),
+    rollbackStartedAt: v.optional(v.number()),
+    rollbackCompletedAt: v.optional(v.number()),
     createdBy: v.id("users"),
     createdAt: v.number(),
   }).index("by_business_and_created", ["businessId", "createdAt"]).index("by_business_and_source", ["businessId", "sourceHash"]),
@@ -419,14 +471,20 @@ export default defineSchema({
     summary: v.string(),
     detailsJson: v.string(),
     createdAt: v.number(),
+    attemptCount: v.optional(v.number()),
+    lastAttemptAt: v.optional(v.number()),
   }).index("by_business_and_source", ["businessId", "sourceKey"]).index("by_business_and_created", ["businessId", "createdAt"]),
   webhookReceipts: defineTable({
     businessId: v.id("businesses"),
     eventKey: v.string(),
     event: v.string(),
-    status: v.union(v.literal("success"), v.literal("ignored")),
+    status: v.union(v.literal("success"), v.literal("ignored"), v.literal("failed")),
     routed: v.optional(v.string()),
     entryId: v.optional(v.id("entries")),
+    rawHash: v.optional(v.string()),
+    errorMessage: v.optional(v.string()),
+    attemptCount: v.optional(v.number()),
+    lastAttemptAt: v.optional(v.number()),
     createdAt: v.number(),
-  }).index("by_business_and_event", ["businessId", "eventKey"]),
+  }).index("by_business_and_event", ["businessId", "eventKey"]).index("by_business_and_created", ["businessId", "createdAt"]),
 });

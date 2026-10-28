@@ -1,20 +1,21 @@
 "use client";
 
-import { useQuery } from "convex/react";
+import { useConvex, useMutation, useQuery } from "convex/react";
+import { ConvexError } from "convex/values";
 import { ArrowDownRight, ArrowUpRight, Download, Printer, Share2 } from "lucide-react";
 import Link from "next/link";
 import { useMemo, useState } from "react";
 import { api } from "@/convex/_generated/api";
+import type { Id } from "@/convex/_generated/dataModel";
 import { accountLabel } from "@/lib/finance";
 import { Card, WorkspaceTitle } from "@/components/AppShell";
 import { SettingsNav } from "@/components/settings/SettingsNav";
 import { EntryForm } from "@/components/workspace/EntryForm";
 import { OperationsWorkspace } from "@/components/workspace/OperationsWorkspace";
+import { ConvexLiveStatus } from "@/components/workspace/ConvexLiveStatus";
 import { OperationalRecordForm } from "@/components/workspace/OperationalRecordForm";
-import { RecordFormDisclosure } from "@/components/workspace/RecordFormDisclosure";
 import { formatBusinessDay } from "@/lib/format";
 import { AnalyticsInsights } from "@/components/workspace/AnalyticsInsights";
-import { AddRecordButton, RecordEntryDrawerProvider } from "@/components/workspace/RecordEntryDrawer";
 
 type BoardSpec = {
   title: string;
@@ -26,18 +27,19 @@ type BoardSpec = {
   settings?: boolean;
   entryKind?: "sale" | "expense";
 };
+const EXPORT_ENTRY_LIMIT = 10_000;
 
 const specs: Record<string, BoardSpec> = {
   sales: {
     title: "Sales", eyebrow: "Cashbook", description: "Record and review income from approved sources.", source: "03 · Sales", entryKind: "sale",
-    metrics: ["Sales today", "Sales this period", "Sales year to date", "Best day", "Entry basis"],
+    metrics: ["Sales today", "Sales", "Best day", "Days recorded", "Entry basis"],
     sections: [
+      { title: "Daily sales · last 14 days", detail: "Recorded entries by date, account, and amount. Estimated split is shown only when an imported estimate exists.", kind: "table" },
       { title: "Sales by income type", detail: "Category breakdown uses saved entries; no mock amounts are loaded.", kind: "chart" },
       { title: "Best days and weekday pattern", detail: "Strongest sales days are calculated from the selected period.", kind: "chart" },
+      { title: "Imports and data checks", detail: "Import history will be available after a source mapping and staging import are approved.", kind: "table" },
       { title: "Weak-day diary and split corrections", detail: "Record the reason for an unusual day and correct estimated account splits with an audit trail.", kind: "workflow" },
       { title: "Voucher batches and mobile entry", detail: "Voucher stock and mobile entry layouts are not populated until those record types are configured." },
-      { title: "Imports and data checks", detail: "Import history will be available after a source mapping and staging import are approved.", kind: "table" },
-      { title: "Daily sales · last 14 days", detail: "Recorded daily sales, expenses, and net cashbook activity for the latest dates in this period.", kind: "table" },
     ],
   },
   expenses: {
@@ -201,13 +203,13 @@ const specs: Record<string, BoardSpec> = {
     metrics: ["Users", "Invitations", "Role templates", "Features", "Recent changes"],
     sections: [
       { title: "Users and roles", detail: "Only active members can view business records. Role changes are audited.", kind: "table" },
-      { title: "Role templates and feature permissions", detail: "Owner, partner, and cashier access is checked on every request." },
+      { title: "Role templates and feature permissions", detail: "Owner, partner, and cashier access is enforced by Convex functions." },
       { title: "Recent settings changes", detail: "Review the actor, affected setting, previous value, and new value.", kind: "table" },
       { title: "Audit log detail", detail: "Audit events are append-only and scoped to this workspace." },
     ],
   },
   "settings/releases": {
-    title: "Product updates", eyebrow: "Settings", description: "Review improvements and service continuity information.", source: "18 · Settings · Updates", settings: true,
+    title: "Releases", eyebrow: "Settings", description: "Review application version, update channel, and release notes.", source: "18 · Settings · Releases", settings: true,
     metrics: ["Current version", "Channel", "Latest release", "Readiness", "Preview features"],
     sections: [
       { title: "Releases and upgrades", detail: "Production updates are deployed through reviewed releases. The app will not overwrite finance data automatically." },
@@ -246,85 +248,126 @@ function formatMoney(value: number | undefined, currency = "UGX", scale = 1, loc
 }
 
 export function BoardRoute({ route }: { route: string }) {
-  return <RecordEntryDrawerProvider><BoardRouteContent route={route} /></RecordEntryDrawerProvider>;
-}
-
-function BoardRouteContent({ route }: { route: string }) {
   const screen = specs[route];
   const [period, setPeriod] = useState<(typeof periods)[number]>("Month");
   const [entryLimit, setEntryLimit] = useState(100);
   const [shareFeedback, setShareFeedback] = useState("");
-  const settings = useQuery(api.settings.runtimeContext, {});
+  const settings = useQuery(api.workspace.businessSettings, {});
   const access = useQuery(api.workspace.currentAccess, {});
-  const preferences = settings;
-
+  const preferences = useQuery(api.settings.runtimeContext, {});
   const timezone = settings?.access === "ready" ? settings.timezone : "Africa/Kampala";
   const weekStartsOn = settings?.access === "ready" ? settings.weekStartsOn : "monday";
   const currency = preferences?.access === "ready" ? preferences.currency : "UGX";
   const currencyScale = 10 ** (preferences?.access === "ready" ? (preferences.currencyMinorDigits ?? 0) : 0);
   const locale = preferences?.access === "ready" ? preferences.locale : "en-UG";
-  const fmt = (value: number | null | undefined) => value == null ? "—" : formatMoney(value, currency, currencyScale, locale);
+  const fmt = (value: number | undefined) => formatMoney(value, currency, currencyScale, locale);
   const dateFormat = preferences?.access === "ready" ? preferences.dateFormat : "DD/MM/YYYY";
   const fmtDate = (value: string) => formatBusinessDay(value, dateFormat);
   const today = businessDate(timezone);
   const fiscalStartMonth = preferences?.access === "ready" ? preferences.fiscalYearStartMonth : 1;
   const range = useMemo(() => rangeFor(period, today, weekStartsOn, fiscalStartMonth), [period, today, weekStartsOn, fiscalStartMonth]);
   const rangeLastDay = new Date(`${range.toExclusive}T00:00:00.000Z`); rangeLastDay.setUTCDate(rangeLastDay.getUTCDate() - 1);
-  const summary = useQuery(api.workspace.dashboardSummary, range);
+  const needsSummary = screen?.entryKind !== undefined || ["Analytics", "Daily Report", "Monthly P&L", "Movements"].includes(screen?.title ?? "");
+  const needsYearSummary = screen?.title === "Monthly P&L";
+  const needsDailyHistory = screen?.title === "Daily Report";
+  const summary = useQuery(api.workspace.dashboardSummary, needsSummary ? range : "skip");
   const entryKind = screen?.title === "Sales" ? "sale" : screen?.title === "Expenses" ? "expense" : undefined;
-  const entries = useQuery(api.workspace.recentEntries, { limit: entryLimit, kind: entryKind, from: range.from, toExclusive: range.toExclusive });
+  const entries = useQuery(api.workspace.recentEntries, entryKind ? { limit: entryLimit, kind: entryKind, from: range.from, toExclusive: range.toExclusive } : "skip");
   const yearRange = useMemo(() => rangeFor("Year", today, weekStartsOn, fiscalStartMonth), [today, weekStartsOn, fiscalStartMonth]);
-  const yearSummary = useQuery(api.workspace.dashboardSummary, yearRange);
-  const trailingSevenRange = useMemo(() => { const from = new Date(`${today}T00:00:00.000Z`); from.setUTCDate(from.getUTCDate() - 6); const to = new Date(`${today}T00:00:00.000Z`); to.setUTCDate(to.getUTCDate() + 1); return { from: from.toISOString().slice(0, 10), toExclusive: to.toISOString().slice(0, 10) }; }, [today]);
-  const trailingSevenSummary = useQuery(api.workspace.dashboardSummary, screen?.title === "Daily Report" ? trailingSevenRange : "skip");
-
+  const yearSummary = useQuery(api.workspace.dashboardSummary, needsYearSummary ? yearRange : "skip");
+  const trailingSevenRange = useMemo(() => {
+    const from = new Date(`${today}T00:00:00.000Z`);
+    from.setUTCDate(from.getUTCDate() - 6);
+    const to = new Date(`${today}T00:00:00.000Z`);
+    to.setUTCDate(to.getUTCDate() + 1);
+    return { from: from.toISOString().slice(0, 10), toExclusive: to.toISOString().slice(0, 10) };
+  }, [today]);
+  const trailingSevenSummary = useQuery(api.workspace.dashboardSummary, needsDailyHistory ? trailingSevenRange : "skip");
+  const voidEntry = useMutation(api.workspace.voidEntry);
+  const correctEntry = useMutation(api.workspace.correctEntry);
+  const [entryActionFeedback, setEntryActionFeedback] = useState("");
 
   if (!screen) return <WorkspaceTitle eyebrow="MylesNet" title="Page not found" description="Choose a section from the navigation." />;
-  const requiredPermission: Record<string, string> = {
-    dashboard: "dashboard.view", analytics: "analytics.view", sales: "sales.view", expenses: "expenses.view",
-    movements: "movements.view", savings: "savings.view", loans: "loans.view", "daily-report": "dailyReport.view",
-    "monthly-pnl": "monthlyPnl.view", partners: "partners.view", bills: "bills.view", reconcile: "reconcile.view",
-    issues: "audit.view", "settings/finance": "settings.view", "settings/rules": "settings.view",
-    "settings/data": "data.export", "settings/access": "access.view", "settings/releases": "settings.view",
-  };
-  const permission = requiredPermission[route];
-  if (access?.access === "pending") return <><WorkspaceTitle eyebrow={screen.eyebrow} title={screen.title} description={screen.description} /><Card><p className="muted-note">Your workspace access is pending approval. An administrator can assign your role from the Access settings.</p></Card></>;
-  if (access?.access === "ready" && permission && !access.permissions.includes(permission)) return <><WorkspaceTitle eyebrow={screen.eyebrow} title={screen.title} description={screen.description} /><Card><p className="muted-note">Your role does not include access to this feature. Ask a workspace administrator to review your permissions.</p></Card></>;
+  if (settings?.access === "ready" && settings.role === "finance_approver" && screen.title !== "Partners") return <><WorkspaceTitle eyebrow="Access limited" title="Distribution review" description="Finance approver access is scoped to independent partner distribution review." /><div className="notice-banner notice-info" role="status">Open Partners to review pending distribution requests. Business records, reports, and workspace settings are not available to this role.</div></>;
 
   const stats = summary?.access === "ready" ? summary : null;
   const yearDays = yearSummary?.access === "ready" ? yearSummary.days : undefined;
   const weekDays = trailingSevenSummary?.access === "ready" ? trailingSevenSummary.days : undefined;
-  const rangeDayCount = Math.max(1, (Date.parse(`${range.toExclusive}T00:00:00.000Z`) - Date.parse(`${range.from}T00:00:00.000Z`)) / 86_400_000);
   const metricValues: Record<string, string> = {
     Sales: fmt(stats?.salesUgx),
-    "Best day": stats ? fmt(Math.max(0, ...stats.days.map((day) => screen?.title === "Expenses" ? day.expensesUgx : day.salesUgx))) : "—",
-    "Days recorded": stats ? `${stats.days.filter((day) => screen?.title === "Expenses" ? day.expensesUgx > 0 : day.salesUgx > 0).length}` : "—",
+    "Best day": stats ? fmt(Math.max(0, ...stats.days.map((day) => day.salesUgx))) : "—",
+    "Days recorded": stats ? `${stats.days.filter((day) => day.salesUgx + day.expensesUgx > 0).length}` : "—",
     "Expense ratio": stats ? `${stats.salesUgx ? Math.round(stats.expensesUgx / stats.salesUgx * 100) : 0}%` : "—",
-    "Average daily expenses": stats ? fmt(Math.round(stats.expensesUgx / rangeDayCount)) : "—",
+    "Average daily expenses": stats ? fmt(Math.round(stats.expensesUgx / Math.max(1, stats.days.length))) : "—",
     "Net margin": stats ? `${stats.salesUgx ? Math.round((stats.salesUgx - stats.expensesUgx) / stats.salesUgx * 100) : 0}%` : "—",
     "Cash on hand": fmt(stats?.cashBalanceUgx),
     "Mobile money": fmt(stats?.mobileMoneyBalanceUgx),
     "Sales today": stats ? fmt(stats.days.find((day) => day.day === today)?.salesUgx ?? 0) : "—",
-    "Sales this period": fmt(stats?.salesUgx),
-    "This month expenses": fmt(stats?.expensesUgx),
-    "Year to date": fmt(yearSummary?.access === "ready" ? yearSummary.expensesUgx : undefined),
-    "Sales year to date": fmt(yearSummary?.access === "ready" ? yearSummary.salesUgx : undefined),
     "Expenses": fmt(stats?.expensesUgx),
     "Average per day": stats ? fmt(Math.round((screen?.title === "Expenses" ? stats.expensesUgx : stats.salesUgx) / Math.max(1, stats.days.length))) : "—",
     "Entry basis": "Recorded",
     "Approval queue": "—",
     "Sales YTD": fmt(yearSummary?.access === "ready" ? yearSummary.salesUgx : undefined),
-    "Operating costs": fmt(stats?.expensesUgx),
-    "Operating profit": stats ? fmt(stats.salesUgx - stats.expensesUgx) : "—",
     "Total expenses": fmt(stats?.expensesUgx),
     "Cashbook net": stats ? fmt(stats.salesUgx - stats.expensesUgx) : "—",
     // A net profit figure is withheld until equipment and other adjustments are modeled.
     "Balance difference": "—",
     Currency: currency,
   };
-  const selectedEntries = entries?.filter((entry) => entry.state === "posted");
+  const selectedEntries = entries;
   const hasRecordData = selectedEntries && selectedEntries.length > 0;
+  const canVoidEntries = settings?.access === "ready" && settings.role === "owner";
+
+  async function requestEntryVoid(entryId: string) {
+    const reason = window.prompt("Reason for voiding this entry (at least 3 characters):") ?? "";
+    if (reason.trim().length < 3) return;
+    setEntryActionFeedback("");
+    try {
+      if (settings?.access !== "ready") throw new Error("Workspace is still loading.");
+      await voidEntry({ businessId: settings.businessId, entryId: entryId as Id<"entries">, reason });
+      setEntryActionFeedback("Entry voided. Its account balance and daily totals were reversed and the reason was recorded.");
+    } catch (error) {
+      setEntryActionFeedback(error instanceof Error ? error.message : "Could not void this entry.");
+    }
+  }
+  async function requestEntryCorrection(entry: NonNullable<typeof entries>[number]) {
+    if (settings?.access !== "ready") return;
+    const rawAmount = window.prompt(`Corrected amount in ${currency}:`, String(entry.amountUgx / currencyScale));
+    if (rawAmount === null) return;
+    const scaledAmount = Number(rawAmount) * currencyScale;
+    const amountUgx = Math.round(scaledAmount);
+    if (!Number.isFinite(scaledAmount) || amountUgx <= 0 || !Number.isSafeInteger(amountUgx) || Math.abs(scaledAmount - amountUgx) > 1e-7) { window.alert("Enter a positive amount using the currency's supported decimal places."); return; }
+    const occurredOn = window.prompt("Corrected date (YYYY-MM-DD):", entry.occurredOn);
+    if (occurredOn === null) return;
+    const accountChoice = window.prompt("Corrected account: enter cash or mobile_money.", entry.account === "unallocated" ? "cash" : entry.account);
+    if (accountChoice === null) return;
+    if (accountChoice !== "cash" && accountChoice !== "mobile_money") { window.alert("Choose cash or mobile_money."); return; }
+    const category = window.prompt("Corrected category:", entry.category);
+    if (category === null) return;
+    const note = window.prompt("Corrected description:", entry.note);
+    if (note === null) return;
+    const reason = window.prompt("Reason for correcting this entry (at least 5 characters):") ?? "";
+    if (reason.trim().length < 5) return;
+    const idempotencyKey = crypto.randomUUID();
+    const args = { businessId: settings.businessId, entryId: entry._id, amountUgx, occurredOn, account: accountChoice, category, note, reason, idempotencyKey } as const;
+    setEntryActionFeedback("");
+    const overrides: { confirmNegativeBalance?: boolean; confirmPossibleDuplicate?: boolean } = {};
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        await correctEntry({ ...args, ...overrides });
+        setEntryActionFeedback("Entry corrected. The original is retained, the replacement is linked, and account and daily totals were updated.");
+        return;
+      } catch (error) {
+        const details = error instanceof ConvexError ? error.data as { code?: string; message?: string } : null;
+        if (details?.code === "CONFIRM_NEGATIVE" && !overrides.confirmNegativeBalance && window.confirm(`${details.message ?? "This correction may create a negative balance."} Continue and record this override?`)) { overrides.confirmNegativeBalance = true; continue; }
+        if (details?.code === "CONFIRM_DUPLICATE" && !overrides.confirmPossibleDuplicate && window.confirm(`${details.message ?? "This correction resembles another entry."} Continue and record this override?`)) { overrides.confirmPossibleDuplicate = true; continue; }
+        setEntryActionFeedback(details?.message ?? (error instanceof Error ? error.message : "Could not correct this entry."));
+        return;
+      }
+    }
+  }
   const operationalScreen = ["Movements", "Savings", "Loans", "Partners", "Bills", "Reconcile"].includes(screen.title);
+  const hasAnalyticsActivity = stats?.days.some((day) => day.salesUgx > 0 || day.expensesUgx > 0) ?? false;
 
   async function shareReport() {
     try {
@@ -345,46 +388,55 @@ function BoardRouteContent({ route }: { route: string }) {
     />
     {screen.settings && <SettingsNav current={`/${route}`} />}
     <div className="board-toolbar no-print">
+      <ConvexLiveStatus />
       <span className="toolbar-range">{fmtDate(range.from)} — {fmtDate(rangeLastDay.toISOString().slice(0, 10))}</span>
       <button className="button" type="button" onClick={() => window.print()}><Printer size={14} />Print</button>
-      <button className="button" type="button" onClick={() => window.print()}><Download size={14} />Export PDF</button>
+      <button className="button" type="button" onClick={() => window.print()}><Download size={14} />Print / Save PDF</button>
       <button className="button button-dark" type="button" onClick={() => void shareReport()}><Share2 size={14} />Share report</button>
-      {(screen.entryKind || operationalScreen) && <AddRecordButton label={screen.entryKind ? (screen.entryKind === "sale" ? "Add sale" : "Add expense") : screen.title === "Movements" ? "Add movement" : screen.title === "Savings" ? "Add savings record" : screen.title === "Loans" ? "Add loan" : screen.title === "Bills" ? "Add bill" : screen.title === "Partners" ? "Add partner" : "Add account count"} />}
       {shareFeedback && <span className="form-feedback" role="status">{shareFeedback}</span>}
     </div>
     {summary?.access === "restricted" && <div className="notice-banner notice-info" role="status">Partner-specific reporting is being prepared. Business-wide totals are hidden from partner accounts.</div>}
-    {summary?.access === "pending" && <div className="notice-banner notice-warning" role="status">Workspace access is pending. Ask an owner to invite this account.</div>}
-    {!operationalScreen && screen.title !== "Analytics" && <div className="metric-grid board-metric-grid">
+    {summary?.access === "pending" && <div className="notice-banner notice-warning" role="status">Workspace access is pending. Ask an owner to invite this Google account.</div>}
+    {!operationalScreen && <div className="metric-grid board-metric-grid">
       {screen.metrics.map((label, index) => <Card className="metric-card board-metric-card" key={label}>
         <div className="card-heading"><span className="eyebrow">{label}</span><span className="entry-icon">{index % 2 === 0 ? <ArrowUpRight size={15} /> : <ArrowDownRight size={15} />}</span></div>
         <div className="metric-value">{metricValues[label] ?? "—"}</div>
         <div className="metric-note">{metricValues[label] === undefined ? "Available when this record type is configured" : "Based on saved workspace records"}</div>
       </Card>)}
     </div>}
-    {screen.title === "Analytics" ? <AnalyticsInsights range={range} today={today} currency={currency} scale={currencyScale} locale={locale} /> : screen.title === "Needs attention" ? <AnalyticsInsights range={range} today={today} currency={currency} scale={currencyScale} locale={locale} issuesOnly /> : operationalScreen ? <OperationsWorkspace screen={screen.title as "Movements" | "Savings" | "Loans" | "Partners" | "Bills" | "Reconcile"} currency={currency} scale={currencyScale} locale={locale} timezone={timezone} dateFormat={dateFormat} range={range} /> : <div className={`board-grid ${screen.entryKind ? "board-grid-cashbook" : ""} ${screen.title === "Sales" ? "board-grid-sales" : ""}`}>
-      {screen.entryKind && <RecordFormDisclosure id={screen.title === "Sales" ? "sales-entry-form" : undefined} title={screen.entryKind === "sale" ? "Add a sale" : "Add an expense"} description="Saved values update the cashbook and account balance.">
-        <Card className="board-feature-card"><EntryForm kind={screen.entryKind} /></Card>
-      </RecordFormDisclosure>}
-      {screen.sections.map((section) => <Card className={`board-section-card${section.kind === "table" ? " board-table-card" : ""}${screen.title === "Sales" && section.title.startsWith("Daily sales") ? " board-sales-daily-table" : ""}`} key={section.title}>
-        <div className="card-heading"><div><h2 className="card-title">{section.title}</h2><p className="card-subtitle">{section.detail}</p></div></div>
-        {section.kind === "table" && screen.title === "Sales" && section.title.startsWith("Daily sales") ? <RecentEntryTable days={stats?.days} rangeStart={range.from} rangeEnd={range.toExclusive} loading={summary === undefined} formatDay={fmtDate} formatMoney={fmt} />
-        : section.kind === "table" && screen.title === "Expenses" && section.title.includes("category") ? <CashbookCategoryBreakdown entries={selectedEntries} loading={entries === undefined} formatMoney={fmt} capped={entries?.length === entryLimit} />
-        : section.kind === "table" && screen.title === "Daily Report" ? <DailyHistoryTable days={weekDays} today={today} loading={trailingSevenSummary === undefined} formatDay={fmtDate} formatMoney={fmt} />
-        : section.kind === "table" && screen.title === "Monthly P&L" ? <MonthlyPnlTable days={yearDays} loading={yearSummary === undefined} locale={locale} formatMoney={fmt} />
+    {screen.title === "Analytics" ? <AnalyticsInsights range={range} today={today} currency={currency} scale={currencyScale} locale={locale} /> : screen.title === "Needs attention" ? <AnalyticsInsights range={range} today={today} currency={currency} scale={currencyScale} locale={locale} issuesOnly /> : operationalScreen ? <OperationsWorkspace screen={screen.title as "Movements" | "Savings" | "Loans" | "Partners" | "Bills" | "Reconcile"} currency={currency} scale={currencyScale} locale={locale} timezone={timezone} dateFormat={dateFormat} range={range} /> : <div className="board-grid">
+      {screen.entryKind && <Card className="board-feature-card">
+        <div className="card-heading"><div><h2 className="card-title">{screen.entryKind === "sale" ? "Add a sale" : "Add an expense"}</h2><p className="card-subtitle">Saved values update the cashbook and account balance.</p></div></div>
+        <EntryForm kind={screen.entryKind} />
+      </Card>}
+      {screen.sections.map((section) => <Card className="board-section-card" key={section.title}>
+        <div className="card-heading"><div><h2 className="card-title">{section.title}</h2><p className="card-subtitle">{section.detail}</p></div>{section.kind === "table" && section.title === (entryKind === "sale" ? "Daily sales · last 14 days" : "Expenses by category") && entryKind && access?.access === "ready" && access.permissions.includes("data.export") && <EntryCsvExportControl businessId={access.businessId} kind={entryKind} from={range.from} toExclusive={range.toExclusive} currency={currency} scale={currencyScale} />}</div>
+        {section.kind === "table" && section.title === "Expenses by category" ? <CategoryBreakdown entries={selectedEntries} kind="expense" formatMoney={fmt} truncated={selectedEntries?.length === entryLimit} />
         : section.kind === "table" && (screen.title === "Sales" || screen.title === "Expenses") ? (
-          hasRecordData ? <div className="table-scroll"><table className="data-table"><thead><tr><th>Date</th><th>Type</th><th>Category</th><th>Account</th><th>Amount</th><th>Status</th></tr></thead><tbody>{selectedEntries.map((entry) => <tr key={entry._id}><td>{fmtDate(entry.occurredOn)}</td><td>{entry.kind}</td><td>{entry.category}</td><td>{accountLabel(entry.account)}</td><td>{fmt(entry.amountUgx)}</td><td><span className={`status-chip ${entry.state === "posted" ? "status-ok" : "status-warning"}`}>{entry.state}</span></td></tr>)}</tbody></table></div> : <EmptyPanel message="No entries yet." next="Add an entry to populate this view. The design preview figures are examples, not live business data." />
-        ) : section.kind === "chart" && screen.title === "Sales" && section.title.includes("income type") ? <CashbookCategoryBreakdown entries={selectedEntries} loading={entries === undefined} formatMoney={fmt} capped={entries?.length === entryLimit} />
+          hasRecordData ? <div className="table-scroll"><table className="data-table"><thead><tr><th>Date</th><th>Type</th><th>Category</th><th>Account</th><th>Amount</th><th>Status</th><th>Actions</th></tr></thead><tbody>{selectedEntries.map((entry) => <tr key={entry._id}><td>{fmtDate(entry.occurredOn)}</td><td>{entry.kind}</td><td>{entry.category}</td><td>{accountLabel(entry.account)}</td><td>{fmt(entry.amountUgx)}</td><td><span className={`status-chip ${entry.state === "posted" ? "status-ok" : "status-warning"}`}>{entry.state}</span></td><td>{canVoidEntries && entry.state === "posted" && entry.canCorrect && <button className="button" type="button" onClick={() => void requestEntryCorrection(entry)}>Correct…</button>} {canVoidEntries && entry.state === "posted" && entry.canVoid && <button className="button" type="button" onClick={() => void requestEntryVoid(entry._id)}>Void…</button>}</td></tr>)}</tbody></table></div> : <EmptyPanel message="No entries yet." next="Add an entry to populate this view. The design preview figures are examples, not live business data." />
+        ) : section.kind === "table" && screen.title === "Daily Report" ? <DailyHistoryTable days={weekDays} today={today} loading={trailingSevenSummary === undefined} formatDay={fmtDate} formatMoney={fmt} />
+          : section.kind === "table" && screen.title === "Monthly P&L" ? <MonthlyPnlTable days={yearDays} loading={yearSummary === undefined} locale={locale} formatMoney={fmt} />
+          : section.kind === "chart" && section.title === "Sales by income type" ? <CategoryBreakdown entries={selectedEntries} kind="sale" formatMoney={fmt} truncated={selectedEntries?.length === entryLimit} />
           : section.kind === "chart" ? <ChartPanel summary={stats} title={section.title} message={section.detail} currency={currency} scale={currencyScale} locale={locale} />
           : section.kind === "workflow" ? <WorkflowPanel screen={screen} section={section.title} currency={currency} scale={currencyScale} businessDay={today} />
-            : <EmptyPanel message={hasRecordData ? "Live records are available for the selected period." : "No records yet."} next={section.detail} />}
+            : <EmptyPanel
+              message={screen.title === "Analytics"
+                ? hasAnalyticsActivity
+                  ? "Recorded activity is reflected in the metrics and charts above."
+                  : "No saved activity exists in the selected period."
+                : hasRecordData
+                  ? "Live records are available for the selected period."
+                  : "No records yet."}
+              next={section.detail}
+            />}
       </Card>)}
-      {screen.title === "Sales" || screen.title === "Expenses" ? <Card className={`board-section-card${screen.title === "Sales" ? " board-sales-entry-list" : ""}`}>
+      {screen.title === "Sales" || screen.title === "Expenses" ? <Card className="board-section-card">
         <div className="card-heading"><div><h2 className="card-title">Recent cashbook entries</h2><p className="card-subtitle">Latest saved records in this workspace.</p></div></div>
-        {hasRecordData ? <div className="entry-list">{selectedEntries.map((entry) => <div className="entry-row" key={entry._id}><div className="entry-main"><span className="entry-icon">{entry.kind === "sale" ? <ArrowUpRight size={15} /> : <ArrowDownRight size={15} />}</span><div><div className="entry-description">{entry.note || entry.category}</div><div className="entry-meta">{fmtDate(entry.occurredOn)} · {entry.category} · {accountLabel(entry.account)}</div></div></div><span className={`entry-amount ${entry.kind === "sale" ? "amount-positive" : "amount-negative"}`}>{entry.kind === "sale" ? "+" : "−"}{fmt(entry.amountUgx)}</span></div>)}</div> : <EmptyPanel message="No posted entries in this batch." next="Voided entries remain available in the audit history." />}
-        {entries?.length === entryLimit && entryLimit < 500 && <button className="button" type="button" onClick={() => setEntryLimit(limit => Math.min(limit + 100, 500))}>Load more entries</button>}{entries?.length === 500 && <p className="muted-note">Showing the latest 500 matching records. Narrow the date range to review older entries.</p>}
+        {entryActionFeedback && <p className="form-feedback" role="status">{entryActionFeedback}</p>}
+        {hasRecordData ? <><div className="entry-list">{selectedEntries.map((entry) => <div className="entry-row" key={entry._id}><div className="entry-main"><span className="entry-icon">{entry.kind === "sale" ? <ArrowUpRight size={15} /> : <ArrowDownRight size={15} />}</span><div><div className="entry-description">{entry.note || entry.category}</div><div className="entry-meta">{fmtDate(entry.occurredOn)} · {entry.category} · {accountLabel(entry.account)} · {entry.state}</div></div></div><span className={`entry-amount ${entry.kind === "sale" ? "amount-positive" : "amount-negative"}`}>{entry.kind === "sale" ? "+" : "−"}{fmt(entry.amountUgx)}</span>{canVoidEntries && entry.state === "posted" && entry.canCorrect && <button className="button" type="button" onClick={() => void requestEntryCorrection(entry)}>Correct…</button>}{canVoidEntries && entry.state === "posted" && entry.canVoid && <button className="button" type="button" onClick={() => void requestEntryVoid(entry._id)}>Void…</button>}</div>)}</div>{entries?.length === entryLimit && entryLimit < 500 && <button className="button" type="button" onClick={() => setEntryLimit(limit => Math.min(limit + 100, 500))}>Load more entries</button>}{entries?.length === 500 && <p className="muted-note">Showing the latest 500 matching records. Narrow the date range to review older entries.</p>}</> : <EmptyPanel message="No entries have been recorded." next="Use the form to save the first entry." />}
       </Card> : null}
     </div>}
-    <div className="board-source-note">{screen.source} · Values shown here come from authorized workspace records. Sample values from the design references are not loaded into the workspace.</div>
+    <div className="board-source-note">{screen.source} · Values shown here come from authorized Convex records. Sample values from the design references are not loaded into the workspace.</div>
   </>;
 }
 
@@ -392,37 +444,49 @@ function EmptyPanel({ message, next }: { message: string; next: string }) {
   return <div className="empty-state compact-empty"><strong>{message}</strong><span>{next}</span></div>;
 }
 
-type CashbookEntry = { _id: string; kind: "sale" | "expense"; amountUgx: number; occurredOn: string; account: "cash" | "mobile_money" | "unallocated"; category: string; note: string; state: "posted" | "void" };
+function EntryCsvExportControl({ businessId, kind, from, toExclusive, currency, scale }: { businessId: Id<"businesses">; kind: "sale" | "expense"; from: string; toExclusive: string; currency: string; scale: number }) {
+  const convex = useConvex();
+  const [exporting, setExporting] = useState(false);
+  const [message, setMessage] = useState("");
+  async function exportCsv() {
+    setExporting(true);
+    setMessage("");
+    try {
+      let cursor: string | null = null;
+      const results: Array<{ entryId: Id<"entries">; kind: "sale" | "expense"; amountUgx: number; occurredOn: string; account: "cash" | "mobile_money" | "unallocated"; category: string; note: string; state: "posted" | "void"; source: "manual" | "import" | "webhook" | "google_form"; createdAt: number; createdBy: Id<"users"> }> = [];
+      let done = false;
+      while (!done) {
+        const page: { page: typeof results; isDone: boolean; continueCursor: string } = await convex.query(api.workspace.entriesForExport, { businessId, kind, from, toExclusive, paginationOpts: { numItems: 100, cursor } });
+        if (results.length + page.page.length > EXPORT_ENTRY_LIMIT || (results.length + page.page.length === EXPORT_ENTRY_LIMIT && !page.isDone)) {
+          setMessage("This range contains more than 10,000 entries. Narrow the date range before exporting.");
+          return;
+        }
+        results.push(...page.page);
+        cursor = page.continueCursor;
+        done = page.isDone;
+      }
+    const headers = ["Date", "Type", "Category", "Account", `Amount (${currency})`, "Currency", "Status", "Source", "Entry ID", "Created at (UTC)", "Actor ID", "Description"];
+    const escape = (value: string) => {
+      const spreadsheetSafe = /^[\s\uFEFF]*[=+\-@]/u.test(value) ? `'${value}` : value;
+      return `"${spreadsheetSafe.replaceAll('"', '""')}"`;
+    };
+    const rows = results.map(row => [row.occurredOn, row.kind, row.category, accountLabel(row.account), String(row.amountUgx / scale), currency, row.state, row.source, row.entryId, new Date(row.createdAt).toISOString(), row.createdBy, row.note]);
+    const csv = [headers, ...rows].map(row => row.map(escape).join(",")).join("\r\n");
+    const url = URL.createObjectURL(new Blob([`\uFEFF${csv}`], { type: "text/csv;charset=utf-8" }));
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `mylesnet-${kind}-${from}-to-${toExclusive}.csv`;
+    anchor.click();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+    setMessage(`${rows.length.toLocaleString()} ${kind} entries exported.`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Could not export this range.");
+    } finally {
+      setExporting(false);
+    }
+  }
 
-function CashbookCategoryBreakdown({ entries, loading, formatMoney, capped }: { entries: CashbookEntry[] | undefined; loading: boolean; formatMoney: (amount: number) => string; capped: boolean }) {
-  if (!entries) return <EmptyPanel message={loading ? "Loading category totals…" : "Category totals are not available."} next="Totals come from authorized saved cashbook records." />;
-  const posted = entries.filter(entry => entry.state === "posted");
-  const totals = new Map<string, number>();
-  for (const entry of posted) totals.set(entry.category, (totals.get(entry.category) ?? 0) + entry.amountUgx);
-  const rows = [...totals.entries()].sort((a, b) => b[1] - a[1]);
-  const total = rows.reduce((sum, [, amount]) => sum + amount, 0);
-  if (rows.length === 0) return <EmptyPanel message="No saved category activity yet." next="Category totals will appear as entries are recorded." />;
-  return <><div className="category-breakdown-list">{rows.map(([category, amount]) => <div className="category-breakdown-row" key={category}><span>{category}</span><span className="category-breakdown-track"><i style={{ width: `${total ? amount / total * 100 : 0}%` }} /></span><strong>{formatMoney(amount)}</strong><small>{total ? Math.round(amount / total * 100) : 0}%</small></div>)}</div>{capped && <p className="muted-note">Category totals use the latest loaded entries and may be incomplete. Load more entries or narrow the period for a complete view.</p>}</>;
-}
-
-function RecentEntryTable({ days, rangeStart, rangeEnd, loading, formatDay, formatMoney }: { days: DailyTotal[] | undefined; rangeStart: string; rangeEnd: string; loading: boolean; formatDay: (day: string) => string; formatMoney: (amount: number) => string }) {
-  if (!days) return <EmptyPanel message={loading ? "Loading daily activity…" : "Daily activity is not available."} next="Saved cashbook totals update here in real time." />;
-  const rangeEndDate = new Date(`${rangeEnd}T00:00:00.000Z`);
-  rangeEndDate.setUTCDate(rangeEndDate.getUTCDate() - 1);
-  const firstDate = new Date(`${rangeStart}T00:00:00.000Z`);
-  const span = Math.max(1, Math.floor((rangeEndDate.getTime() - firstDate.getTime()) / 86_400_000) + 1);
-  const rowCount = Math.min(14, span);
-  const dateKeys = Array.from({ length: rowCount }, (_, index) => {
-    const date = new Date(rangeEndDate);
-    date.setUTCDate(date.getUTCDate() - (rowCount - 1 - index));
-    return date.toISOString().slice(0, 10);
-  });
-  const byDate = new Map(days.map(day => [day.day, day]));
-  const rows = dateKeys.map(day => ({ day, salesUgx: byDate.get(day)?.salesUgx ?? 0, expensesUgx: byDate.get(day)?.expensesUgx ?? 0 }));
-  return <div className="table-scroll"><table className="data-table"><thead><tr><th>Date</th><th>Sales</th><th>Expenses</th><th>Net</th></tr></thead><tbody>{rows.map(row => {
-    const net = row.salesUgx - row.expensesUgx;
-    return <tr key={row.day}><td>{formatDay(row.day)}</td><td>{formatMoney(row.salesUgx)}</td><td>{formatMoney(row.expensesUgx)}</td><td>{formatMoney(net)}</td></tr>;
-  })}</tbody></table></div>;
+  return <div className="form-actions"><button className="button" type="button" disabled={exporting} onClick={() => void exportCsv()}><Download size={14} />{exporting ? "Preparing CSV…" : "Export CSV"}</button>{message && <span className="muted-note" role="status">{message}</span>}</div>;
 }
 
 type DailyTotal = { day: string; salesUgx: number; expensesUgx: number };
@@ -457,6 +521,19 @@ function MonthlyPnlTable({ days, loading, locale, formatMoney }: { days: DailyTo
   const totals = rows.reduce((result, [, month]) => ({ sales: result.sales + month.sales, expenses: result.expenses + month.expenses }), { sales: 0, expenses: 0 });
   const monthLabel = (month: string) => new Intl.DateTimeFormat(locale, { month: "long", year: "numeric", timeZone: "UTC" }).format(new Date(`${month}-01T00:00:00.000Z`));
   return <div className="table-scroll"><table className="data-table"><thead><tr><th>Month</th><th>Sales</th><th>Total expenses</th><th>Cashbook net</th></tr></thead><tbody>{rows.map(([month, values]) => <tr key={month}><td>{monthLabel(month)}</td><td>{formatMoney(values.sales)}</td><td>{formatMoney(values.expenses)}</td><td>{formatMoney(values.sales - values.expenses)}</td></tr>)}</tbody><tfoot><tr><th>Year to date</th><th>{formatMoney(totals.sales)}</th><th>{formatMoney(totals.expenses)}</th><th>{formatMoney(totals.sales - totals.expenses)}</th></tr></tfoot></table></div>;
+}
+
+function CategoryBreakdown({ entries, kind, formatMoney, truncated = false }: { entries: { kind: "sale" | "expense"; category: string; amountUgx: number; state: "posted" | "void" }[] | undefined; kind: "sale" | "expense"; formatMoney: (amount: number) => string; truncated?: boolean }) {
+  if (!entries) return <EmptyPanel message="Loading saved category totals…" next="Only posted records in this workspace are included." />;
+  const totals = new Map<string, number>();
+  for (const entry of entries) if (entry.kind === kind && entry.state === "posted") totals.set(entry.category, (totals.get(entry.category) ?? 0) + entry.amountUgx);
+  const rows = [...totals].sort((a, b) => b[1] - a[1]);
+  const total = rows.reduce((sum, [, amount]) => sum + amount, 0);
+  return <>
+    {truncated && <p className="notice-banner notice-warning" role="status">Showing category totals from the latest 500 matching entries only. Older entries and categories may be missing; narrow the period to see a complete view.</p>}
+    {!rows.length ? <EmptyPanel message="No saved category activity in the loaded records." next="Category totals will appear when posted entries are recorded." />
+      : <div className="category-breakdown-list">{rows.map(([category, amount]) => <div className="category-breakdown-row" key={category}><span>{category}</span><span className="category-breakdown-track"><i style={{ width: `${Math.max(1, amount / total * 100)}%` }} /></span><strong>{formatMoney(amount)}</strong><small>{Math.round(amount / total * 100)}%</small></div>)}</div>}
+  </>;
 }
 
 function ChartPanel({ summary, title, message, currency, scale, locale }: { summary: { days: { day: string; salesUgx: number; expensesUgx: number }[] } | null; title: string; message: string; currency: string; scale: number; locale: string }) {

@@ -47,6 +47,7 @@ export function EntryForm({ kind }: { kind: EntryKind }) {
       const requestKey = idempotencyKey.current ?? crypto.randomUUID();
       idempotencyKey.current = requestKey;
       await createEntry({
+        businessId: access?.access === "ready" ? access.businessId : (() => { throw new Error("Workspace is still loading."); })(),
         kind,
         amountUgx: amountMinor,
         occurredOn: String(values.get("occurredOn")),

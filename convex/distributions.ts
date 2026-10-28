@@ -1,14 +1,14 @@
-import { getAuthUserId } from "@convex-dev/auth/server";
 import { paginationOptsValidator } from "convex/server";
+import { getAuthUserId } from "@convex-dev/auth/server";
 import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
-import type { Id } from "./_generated/dataModel";
-import type { Doc } from "./_generated/dataModel";
-import { hasPermission, permissionsForMembership } from "./accessControl";
+import type { Doc, Id } from "./_generated/dataModel";
+import { getSelectedWorkspace } from "./workspaceContext";
+import { hasPermission } from "./accessControl";
 
 type Ctx = QueryCtx | MutationCtx;
-type ActiveWorkspace = { userId: Id<"users">; membership: Doc<"memberships">; business: { _id: Id<"businesses">; currency: string; timezone: string; createdAt: number } };
+type ActiveWorkspace = { userId: Id<"users">; membership: Doc<"memberships">; business: Doc<"businesses"> };
 
 function safeAdd(a: number, b: number, label: string) {
   const result = a + b;
@@ -36,20 +36,19 @@ function dayAt(timestamp: number, timezone: string) {
   return new Intl.DateTimeFormat("en-CA", { timeZone: timezone, year: "numeric", month: "2-digit", day: "2-digit" }).format(timestamp);
 }
 
-async function workspace(ctx: Ctx): Promise<ActiveWorkspace | null> {
+async function workspace(ctx: Ctx, businessId?: Id<"businesses">): Promise<ActiveWorkspace | null> {
+  if (!businessId) return await getSelectedWorkspace(ctx);
   const userId = await getAuthUserId(ctx);
   if (!userId) return null;
-  const memberships = await ctx.db.query("memberships").withIndex("by_user", q => q.eq("userId", userId)).take(20);
-  const active = memberships.filter(row => row.active);
-  if (memberships.length === 20 || active.length !== 1) return null;
-  const membership = active[0];
-  const business = await ctx.db.get("businesses", membership.businessId);
+  const membership = await ctx.db.query("memberships").withIndex("by_business_and_user", q => q.eq("businessId", businessId).eq("userId", userId)).unique();
+  if (!membership?.active) return null;
+  const business = await ctx.db.get("businesses", businessId);
   return business ? { userId, membership, business } : null;
 }
 
-async function requireManager(ctx: Ctx) {
-  const current = await workspace(ctx);
-  if (!current || current.membership.partnerId || !(await hasPermission(ctx, current.membership, "partners.distributions.manage"))) throw new Error("Your role cannot manage partner distributions.");
+async function requireOwner(ctx: Ctx, businessId: Id<"businesses">) {
+  const current = await workspace(ctx, businessId);
+  if (!current || !(await hasPermission(ctx, current.membership, "partners.distributions.manage"))) throw new Error("Your role cannot prepare distributions or record partner payouts.");
   return current;
 }
 
@@ -85,18 +84,28 @@ function allocation(amount: number, partners: { id: Id<"partners">; name: string
 
 export const setOwnership = mutation({
   args: {
+    businessId: v.id("businesses"),
     effectiveOn: v.string(),
     changes: v.array(v.object({ partnerId: v.id("partners"), ownershipBps: v.number(), legacyEffectiveOn: v.optional(v.string()) })),
     idempotencyKey: v.string(),
   },
   returns: v.null(),
   handler: async (ctx, args) => {
-    const current = await requireManager(ctx);
+    const current = await requireOwner(ctx, args.businessId);
     const today = businessDay(current.business.timezone);
     if (!validDay(args.effectiveOn) || args.effectiveOn < today) throw new Error("Ownership changes can take effect today or later; earlier periods cannot be rewritten.");
     if (args.idempotencyKey.length < 16 || args.idempotencyKey.length > 120) throw new Error("Refresh the ownership form and try again.");
     const prior = await ctx.db.query("partnerOwnershipHistory").withIndex("by_business_and_idempotency", q => q.eq("businessId", current.business._id).eq("idempotencyKey", `${args.idempotencyKey}:batch`)).unique();
-    if (prior) return null;
+    if (prior) {
+      const savedRows = await Promise.all(args.changes.map(async row => {
+        const saved = await ctx.db.query("partnerOwnershipHistory").withIndex("by_business_and_idempotency", q => q.eq("businessId", current.business._id).eq("idempotencyKey", `${args.idempotencyKey}:${row.partnerId}`)).unique();
+        return saved;
+      }));
+      if (prior.effectiveOn !== args.effectiveOn || savedRows.some((saved, index) => saved?.partnerId !== args.changes[index].partnerId || saved.ownershipBps !== args.changes[index].ownershipBps || saved.effectiveOn !== args.effectiveOn)) {
+        throw new Error("This ownership request key was already used for different shares or an effective date.");
+      }
+      return null;
+    }
     const partners = await ctx.db.query("partners").withIndex("by_business_and_active", q => q.eq("businessId", current.business._id).eq("active", true)).take(101);
     if (partners.length === 0 || partners.length > 100) throw new Error("Add or review the active partner records before changing ownership.");
     if (args.changes.length !== partners.length || new Set(args.changes.map(row => row.partnerId)).size !== partners.length) throw new Error("Submit one ownership share for every active partner.");
@@ -127,10 +136,10 @@ export const setOwnership = mutation({
 });
 
 export const create = mutation({
-  args: { periodFrom: v.string(), periodToExclusive: v.string(), distributionUgx: v.number(), reserveUgx: v.number(), minimumPayoutUgx: v.number(), idempotencyKey: v.string() },
+  args: { businessId: v.id("businesses"), periodFrom: v.string(), periodToExclusive: v.string(), distributionUgx: v.number(), reserveUgx: v.number(), minimumPayoutUgx: v.number(), idempotencyKey: v.string() },
   returns: v.id("partnerDistributions"),
   handler: async (ctx, args) => {
-    const current = await requireManager(ctx);
+    const current = await requireOwner(ctx, args.businessId);
     const { business } = current;
     if (!validDay(args.periodFrom) || !validDay(args.periodToExclusive) || args.periodFrom >= args.periodToExclusive) throw new Error("Choose a valid distribution period.");
     const days = (Date.parse(`${args.periodToExclusive}T00:00:00.000Z`) - Date.parse(`${args.periodFrom}T00:00:00.000Z`)) / 86_400_000;
@@ -153,9 +162,9 @@ export const create = mutation({
     const profitUgx = safeAdd(salesUgx, -expensesUgx, "Cashbook net");
     if (profitUgx <= 0) throw new Error("This period has no positive recorded cashbook net available for distribution.");
     if (args.distributionUgx > profitUgx) throw new Error("The proposed distribution cannot exceed positive recorded cashbook net for this period.");
-    const partners = await ctx.db.query("partners").withIndex("by_business_and_active", q => q.eq("businessId", business._id).eq("active", true)).take(101);
-    if (partners.length === 0 || partners.length > 100) throw new Error("Add or review active partner records before preparing a distribution.");
-    const ownership = (await ownershipAt(ctx, business._id, partners, shiftDay(args.periodToExclusive, -1))).filter(row => row.existedAtPeriodEnd);
+    const partnerHistory = await ctx.db.query("partners").withIndex("by_business", q => q.eq("businessId", business._id)).take(501);
+    if (partnerHistory.length === 0 || partnerHistory.length > 500) throw new Error("Review partner history before preparing a distribution; this workspace exceeds the safe historical partner limit.");
+    const ownership = (await ownershipAt(ctx, business._id, partnerHistory, shiftDay(args.periodToExclusive, -1))).filter(row => row.existedAtPeriodEnd && row.ownershipBps > 0);
     const totalBps = ownership.reduce((sum, row) => safeAdd(sum, row.ownershipBps, "Partner ownership"), 0);
     if (totalBps !== 10000) throw new Error(`Active ownership for ${shiftDay(args.periodToExclusive, -1)} must total exactly 100%; it currently totals ${(totalBps / 100).toFixed(2)}%.`);
     const balances = await ctx.db.query("accountBalances").withIndex("by_business_and_account", q => q.eq("businessId", business._id)).take(2);
@@ -173,11 +182,11 @@ export const create = mutation({
 });
 
 export const decide = mutation({
-  args: { distributionId: v.id("partnerDistributions"), decision: v.union(v.literal("approve"), v.literal("reject")), reason: v.optional(v.string()) },
+  args: { businessId: v.id("businesses"), distributionId: v.id("partnerDistributions"), decision: v.union(v.literal("approve"), v.literal("reject")), reason: v.optional(v.string()) },
   returns: v.null(),
   handler: async (ctx, args) => {
-    const current = await workspace(ctx);
-    if (!current || current.membership.partnerId || !(await hasPermission(ctx, current.membership, "partners.distributions.approve"))) throw new Error("Your role cannot review partner distributions.");
+    const current = await workspace(ctx, args.businessId);
+    if (!current || !(await hasPermission(ctx, current.membership, "partners.distributions.approve"))) throw new Error("Your role cannot review a distribution.");
     const row = await ctx.db.get("partnerDistributions", args.distributionId);
     if (!row || row.businessId !== current.business._id || row.status !== "pending_approval") throw new Error("This distribution is not awaiting a decision.");
     if (row.createdBy === current.userId) throw new Error("The person who prepared a distribution cannot approve or reject it.");
@@ -208,10 +217,10 @@ export const decide = mutation({
 });
 
 export const cancel = mutation({
-  args: { distributionId: v.id("partnerDistributions"), reason: v.string() },
+  args: { businessId: v.id("businesses"), distributionId: v.id("partnerDistributions"), reason: v.string() },
   returns: v.null(),
   handler: async (ctx, args) => {
-    const current = await requireManager(ctx);
+    const current = await requireOwner(ctx, args.businessId);
     const row = await ctx.db.get("partnerDistributions", args.distributionId);
     const reason = args.reason.trim();
     if (!row || row.businessId !== current.business._id || row.status !== "pending_approval") throw new Error("Only a pending distribution can be cancelled.");
@@ -223,10 +232,10 @@ export const cancel = mutation({
 });
 
 export const pay = mutation({
-  args: { distributionId: v.id("partnerDistributions"), itemId: v.id("partnerDistributionItems"), amountUgx: v.number(), account: v.union(v.literal("cash"), v.literal("mobile_money")), paidOn: v.string(), note: v.string(), idempotencyKey: v.string() },
+  args: { businessId: v.id("businesses"), distributionId: v.id("partnerDistributions"), itemId: v.id("partnerDistributionItems"), amountUgx: v.number(), account: v.union(v.literal("cash"), v.literal("mobile_money")), paidOn: v.string(), note: v.string(), idempotencyKey: v.string() },
   returns: v.id("partnerPayouts"),
   handler: async (ctx, args) => {
-    const current = await requireManager(ctx);
+    const current = await requireOwner(ctx, args.businessId);
     if (!Number.isSafeInteger(args.amountUgx) || args.amountUgx <= 0 || !validDay(args.paidOn) || args.paidOn > businessDay(current.business.timezone) || args.note.trim().length > 300 || args.idempotencyKey.length < 16 || args.idempotencyKey.length > 120) throw new Error("Enter a valid payout amount, business date, note, and request key.");
     const previous = await ctx.db.query("partnerPayouts").withIndex("by_business_and_idempotency", q => q.eq("businessId", current.business._id).eq("idempotencyKey", args.idempotencyKey)).unique();
     if (previous) {
@@ -259,10 +268,10 @@ export const pay = mutation({
 });
 
 export const reversePayout = mutation({
-  args: { payoutId: v.id("partnerPayouts"), reason: v.string() },
+  args: { businessId: v.id("businesses"), payoutId: v.id("partnerPayouts"), reason: v.string() },
   returns: v.null(),
   handler: async (ctx, args) => {
-    const current = await requireManager(ctx);
+    const current = await requireOwner(ctx, args.businessId);
     const payout = await ctx.db.get("partnerPayouts", args.payoutId);
     const reason = args.reason.trim();
     if (!payout || payout.businessId !== current.business._id || payout.state !== "posted") throw new Error("Choose an unreversed payout in this workspace.");
@@ -287,12 +296,10 @@ export const reversePayout = mutation({
 });
 
 export const overview = query({
-  args: { paginationOpts: paginationOptsValidator },
+  args: { businessId: v.id("businesses"), paginationOpts: paginationOptsValidator },
   handler: async (ctx, args) => {
-    const current = await workspace(ctx);
-    if (!current || current.membership.partnerId || (!(await hasPermission(ctx, current.membership, "partners.distributions.manage")) && !(await hasPermission(ctx, current.membership, "partners.distributions.approve")))) return { access: "restricted" as const };
-    const canManage = await hasPermission(ctx, current.membership, "partners.distributions.manage");
-    const canApprove = await hasPermission(ctx, current.membership, "partners.distributions.approve");
+    const current = await workspace(ctx, args.businessId);
+    if (!current || (!(await hasPermission(ctx, current.membership, "partners.distributions.manage")) && !(await hasPermission(ctx, current.membership, "partners.distributions.approve")))) return { access: "restricted" as const };
     if (args.paginationOpts.numItems > 20) throw new Error("Distribution history pages are limited to 20 records.");
     const page = await ctx.db.query("partnerDistributions").withIndex("by_business_and_period_start", q => q.eq("businessId", current.business._id)).order("desc").paginate(args.paginationOpts);
     const activePartners = await ctx.db.query("partners").withIndex("by_business_and_active", q => q.eq("businessId", current.business._id).eq("active", true)).take(101);
@@ -308,19 +315,25 @@ export const overview = query({
         ctx.db.query("partnerDistributionItems").withIndex("by_business_and_distribution", q => q.eq("businessId", current.business._id).eq("distributionId", row._id)).take(101),
         ctx.db.get("users", row.createdBy),
       ]);
+      const canApprove = await hasPermission(ctx, current.membership, "partners.distributions.approve");
       return { ...row, preparedBy: author?.email ?? "Workspace owner", canDecide: row.createdBy !== current.userId && canApprove, items };
     }));
-    const activeApprovers = await ctx.db.query("memberships").withIndex("by_business_and_user", q => q.eq("businessId", current.business._id)).take(100);
-    const approverChecks = await Promise.all(activeApprovers.filter(row => row.active).map(async row => (await permissionsForMembership(ctx, row)).includes("partners.distributions.approve")));
-    return { access: "ready" as const, role: current.membership.role, canManage, canApprove, distributions, continueCursor: page.continueCursor, isDone: page.isDone, hasFinanceApprover: approverChecks.some(Boolean), ownershipBaselines: ownershipBaselines.filter((row): row is NonNullable<typeof row> => row !== null), currency: current.business.currency };
+    const activeMembers = await ctx.db.query("memberships").withIndex("by_business_and_user", q => q.eq("businessId", current.business._id)).take(100);
+    const approverFlags = await Promise.all(activeMembers.filter(row => row.active).map(row => hasPermission(ctx, row, "partners.distributions.approve")));
+    const hasFinanceApprover = approverFlags.some(Boolean);
+    return { access: "ready" as const, businessId: current.business._id, role: current.membership.role,
+      canManageDistributions: await hasPermission(ctx, current.membership, "partners.distributions.manage"),
+      canApproveDistributions: await hasPermission(ctx, current.membership, "partners.distributions.approve"),
+      canManagePartners: await hasPermission(ctx, current.membership, "partners.manage"),
+      distributions, continueCursor: page.continueCursor, isDone: page.isDone, hasFinanceApprover, ownershipBaselines: ownershipBaselines.filter((row): row is NonNullable<typeof row> => row !== null), currency: current.business.currency };
   },
 });
 
 export const payoutHistory = query({
-  args: { distributionId: v.id("partnerDistributions"), paginationOpts: paginationOptsValidator },
+  args: { businessId: v.id("businesses"), distributionId: v.id("partnerDistributions"), paginationOpts: paginationOptsValidator },
   handler: async (ctx, args) => {
-    const current = await workspace(ctx);
-    if (!current || current.membership.partnerId || (!(await hasPermission(ctx, current.membership, "partners.distributions.manage")) && !(await hasPermission(ctx, current.membership, "partners.distributions.approve")))) return { access: "restricted" as const };
+    const current = await workspace(ctx, args.businessId);
+    if (!current || (!(await hasPermission(ctx, current.membership, "partners.distributions.manage")) && !(await hasPermission(ctx, current.membership, "partners.distributions.approve")))) return { access: "restricted" as const };
     if (args.paginationOpts.numItems > 50) throw new Error("Payout history pages are limited to 50 records.");
     const distribution = await ctx.db.get("partnerDistributions", args.distributionId);
     if (!distribution || distribution.businessId !== current.business._id) return { access: "restricted" as const };
