@@ -12,6 +12,7 @@ import { EntryForm } from "@/components/workspace/EntryForm";
 import { OperationsWorkspace } from "@/components/workspace/OperationsWorkspace";
 import { ConvexLiveStatus } from "@/components/workspace/ConvexLiveStatus";
 import { OperationalRecordForm } from "@/components/workspace/OperationalRecordForm";
+import { RecordFormDisclosure } from "@/components/workspace/RecordFormDisclosure";
 import { formatBusinessDay } from "@/lib/format";
 import { AnalyticsInsights } from "@/components/workspace/AnalyticsInsights";
 
@@ -353,10 +354,9 @@ export function BoardRoute({ route }: { route: string }) {
       </Card>)}
     </div>}
     {screen.title === "Analytics" ? <AnalyticsInsights range={range} today={today} currency={currency} scale={currencyScale} locale={locale} /> : screen.title === "Needs attention" ? <AnalyticsInsights range={range} today={today} currency={currency} scale={currencyScale} locale={locale} issuesOnly /> : operationalScreen ? <OperationsWorkspace screen={screen.title as "Movements" | "Savings" | "Loans" | "Partners" | "Bills" | "Reconcile"} currency={currency} scale={currencyScale} locale={locale} timezone={timezone} dateFormat={dateFormat} range={range} /> : <div className={`board-grid ${screen.entryKind ? "board-grid-cashbook" : ""}`}>
-      {screen.entryKind && <Card className="board-feature-card">
-        <div className="card-heading"><div><h2 className="card-title">{screen.entryKind === "sale" ? "Add a sale" : "Add an expense"}</h2><p className="card-subtitle">Saved values update the cashbook and account balance.</p></div></div>
-        <EntryForm kind={screen.entryKind} />
-      </Card>}
+      {screen.entryKind && <RecordFormDisclosure title={screen.entryKind === "sale" ? "Add a sale" : "Add an expense"} description="Saved values update the cashbook and account balance.">
+        <Card className="board-feature-card"><EntryForm kind={screen.entryKind} /></Card>
+      </RecordFormDisclosure>}
       {screen.sections.map((section) => <Card className="board-section-card" key={section.title}>
         <div className="card-heading"><div><h2 className="card-title">{section.title}</h2><p className="card-subtitle">{section.detail}</p></div></div>
         {section.kind === "table" && screen.title === "Sales" && section.title.startsWith("Daily sales") ? <RecentEntryTable days={stats?.days} rangeStart={range.from} rangeEnd={range.toExclusive} loading={summary === undefined} formatDay={fmtDate} formatMoney={fmt} />
