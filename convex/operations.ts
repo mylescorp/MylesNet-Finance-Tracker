@@ -110,8 +110,8 @@ async function reverseLinkedExpense(ctx: MutationCtx, current: NonNullable<Await
   await ctx.db.insert("auditEvents", { businessId: current.business._id, actorId: current.userId, action: `${operationSource}.reversed`, entityType: "entry", entityId: entry._id, occurredAt: now, summary: reason });
 }
 
-async function audit(ctx: MutationCtx, current: NonNullable<Awaited<ReturnType<typeof workspace>>>, action: string, entityType: string, entityId: string, summary: string) {
-  await ctx.db.insert("auditEvents", { businessId: current.business._id, actorId: current.userId, action, entityType, entityId, occurredAt: Date.now(), summary });
+async function audit(ctx: MutationCtx, current: NonNullable<Awaited<ReturnType<typeof workspace>>>, action: string, entityType: string, entityId: string, summary: string, details?: string) {
+  await ctx.db.insert("auditEvents", { businessId: current.business._id, actorId: current.userId, action, entityType, entityId, occurredAt: Date.now(), summary, details });
 }
 
 const accountV = v.union(v.literal("cash"), v.literal("mobile_money"));
@@ -131,7 +131,7 @@ export const overview = query({
       loanRepayments: v.array(v.object({ _id: v.id("loanRepayments"), lender: v.string(), amountUgx: v.number(), principalUgx: v.number(), interestUgx: v.number(), account: accountV, paidOn: v.string(), state: v.union(v.literal("posted"), v.literal("void")), voidReason: v.optional(v.string()) })),
       bills: v.array(v.object({ _id: v.id("bills"), name: v.string(), category: v.string(), amountUgx: v.number(), account: accountV, recurrence: v.union(v.literal("weekly"), v.literal("monthly"), v.literal("quarterly"), v.literal("yearly")), nextDueOn: v.string(), active: v.boolean() })),
       billPayments: v.array(v.object({ _id: v.id("billPayments"), billName: v.string(), amountUgx: v.number(), account: v.optional(accountV), paidOn: v.string(), state: v.union(v.literal("posted"), v.literal("void")), voidReason: v.optional(v.string()), canReverse: v.boolean() })),
-      reconciliations: v.array(v.object({ _id: v.id("reconciliations"), account: accountV, asOfDate: v.string(), bookBalanceUgx: v.number(), countedBalanceUgx: v.number(), varianceUgx: v.number(), status: v.union(v.literal("matched"), v.literal("open"), v.literal("explained")), note: v.string(), explanation: v.optional(v.string()) })),
+      reconciliations: v.array(v.object({ _id: v.id("reconciliations"), account: accountV, asOfDate: v.string(), bookBalanceUgx: v.number(), countedBalanceUgx: v.number(), varianceUgx: v.number(), status: v.union(v.literal("matched"), v.literal("open"), v.literal("explained"), v.literal("superseded")), note: v.string(), explanation: v.optional(v.string()), supersedesId: v.optional(v.id("reconciliations")) })),
       partners: v.array(v.object({ _id: v.id("partners"), name: v.string(), ownershipBps: v.number(), active: v.boolean() })),
     }),
   ),
@@ -178,7 +178,7 @@ export const overview = query({
       loanRepayments: loanRepayments.map(row => ({ _id: row._id, lender: loanById.get(row.loanId) ?? "Loan", amountUgx: row.amountUgx, principalUgx: row.principalUgx, interestUgx: row.interestUgx, account: row.account, paidOn: row.paidOn, state: row.state ?? "posted", voidReason: row.voidReason })),
       bills: bills.map(row => ({ _id: row._id, name: row.name, category: row.category, amountUgx: row.amountUgx, account: row.account, recurrence: row.recurrence, nextDueOn: row.nextDueOn, active: row.active })),
       billPayments: billPayments.map(row => { const bill = billById.get(row.billId); return { _id: row._id, billName: bill?.name ?? "Inactive bill", amountUgx: row.amountUgx, account: row.account, paidOn: row.paidOn, state: row.state ?? "posted", voidReason: row.voidReason, canReverse: row.state !== "void" && !!row.priorNextDueOn && !!row.nextDueOnAfter && bill?.nextDueOn === row.nextDueOnAfter }; }),
-      reconciliations: reconciliations.map(row => ({ _id: row._id, account: row.account, asOfDate: row.asOfDate, bookBalanceUgx: row.bookBalanceUgx, countedBalanceUgx: row.countedBalanceUgx, varianceUgx: row.varianceUgx, status: row.status, note: row.note, explanation: row.explanation })),
+      reconciliations: reconciliations.map(row => ({ _id: row._id, account: row.account, asOfDate: row.asOfDate, bookBalanceUgx: row.bookBalanceUgx, countedBalanceUgx: row.countedBalanceUgx, varianceUgx: row.varianceUgx, status: row.status, note: row.note, explanation: row.explanation, supersedesId: row.supersedesId })),
       partners: currentPartnerShares.map(row => ({ _id: row._id, name: row.name, ownershipBps: row.ownershipBps, active: row.active })),
     };
   },
@@ -717,6 +717,41 @@ export const createReconciliation = mutation({
     const status = varianceUgx === 0 ? "matched" as const : "open" as const;
     const reconciliationId = await ctx.db.insert("reconciliations", { businessId: current.business._id, account: args.account, asOfDate: args.asOfDate, bookBalanceUgx, countedBalanceUgx: args.countedBalanceUgx, varianceUgx, status, note: args.note.trim(), idempotencyKey: args.idempotencyKey, createdBy: current.userId, createdAt: Date.now() });
     await audit(ctx, current, "reconciliation.recorded", "reconciliation", reconciliationId, `${args.account} count · book ${bookBalanceUgx} · count ${args.countedBalanceUgx} · variance ${varianceUgx}`);
+    return reconciliationId;
+  },
+});
+
+export const supersedeReconciliation = mutation({
+  args: { reconciliationId: v.id("reconciliations"), countedBalanceUgx: v.number(), note: v.string(), idempotencyKey: v.string() },
+  returns: v.id("reconciliations"),
+  handler: async (ctx, args) => {
+    const current = await workspace(ctx);
+    if (!current || current.membership.role !== "owner") throw new Error("Only a workspace owner can correct a reconciliation count.");
+    const note = args.note.trim();
+    if (!Number.isSafeInteger(args.countedBalanceUgx) || args.countedBalanceUgx < 0 || note.length < 5 || note.length > 300 || args.idempotencyKey.length < 16 || args.idempotencyKey.length > 120) throw new Error("Enter a valid count and a correction reason of 5 to 300 characters.");
+    const duplicate = await ctx.db.query("reconciliations").withIndex("by_business_and_idempotency", q => q.eq("businessId", current.business._id).eq("idempotencyKey", args.idempotencyKey)).unique();
+    if (duplicate) {
+      assertSameRequest(duplicate.supersedesId === args.reconciliationId && duplicate.countedBalanceUgx === args.countedBalanceUgx && duplicate.note === note);
+      return duplicate._id;
+    }
+    const previous = await ctx.db.get("reconciliations", args.reconciliationId);
+    if (!previous || previous.businessId !== current.business._id || previous.status === "superseded") throw new Error("This reconciliation is unavailable or already superseded.");
+    const today = dayInZone(Date.now(), current.business.timezone);
+    if (previous.asOfDate !== today) throw new Error("Only today's count can be corrected because the ledger does not reconstruct historical account balances.");
+    const priorCorrection = await ctx.db.query("reconciliations").withIndex("by_business_and_supersedes", q => q.eq("businessId", current.business._id).eq("supersedesId", previous._id)).first();
+    if (priorCorrection) throw new Error("This count already has a correction. Correct the latest count instead.");
+    const account = await accountBalance(ctx, current.business._id, previous.account);
+    const bookBalanceUgx = account?.balanceUgx ?? 0;
+    const varianceUgx = safeAdd(args.countedBalanceUgx, -bookBalanceUgx, "Reconciliation variance");
+    const now = Date.now();
+    const reconciliationId = await ctx.db.insert("reconciliations", {
+      businessId: current.business._id, account: previous.account, asOfDate: today, bookBalanceUgx,
+      countedBalanceUgx: args.countedBalanceUgx, varianceUgx, status: varianceUgx === 0 ? "matched" : "open",
+      note, supersedesId: previous._id, idempotencyKey: args.idempotencyKey, createdBy: current.userId, createdAt: now,
+    });
+    await ctx.db.patch("reconciliations", previous._id, { status: "superseded" });
+    await audit(ctx, current, "reconciliation.superseded", "reconciliation", previous._id, `Count corrected by a superseding record: ${note}`, JSON.stringify({ replacementId: reconciliationId, priorCountedBalanceUgx: previous.countedBalanceUgx, correctedCountedBalanceUgx: args.countedBalanceUgx, previousStatus: previous.status }));
+    await audit(ctx, current, "reconciliation.correction_recorded", "reconciliation", reconciliationId, `${previous.account} count corrected · book ${bookBalanceUgx} · count ${args.countedBalanceUgx} · variance ${varianceUgx}`);
     return reconciliationId;
   },
 });

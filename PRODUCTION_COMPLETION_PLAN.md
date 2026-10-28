@@ -31,7 +31,7 @@ This plan tracks every gap found in the production-readiness audit. Financial re
 - [ ] Loans: edit unposted terms, archive/void eligible loans, and reverse repayments. Owner-only repayment reversal now restores principal/account and voids linked interest history; loan lifecycle and focused verification remain.
 - [ ] Bills: edit/cancel/archive schedules. Owner-only edit/archive/restore is now available for schedules, with a paginated archive view. Schedule edits use a stale-date guard and preserve recurrence anchors; payment reversal restores due date/account and voids linked expense history. Focused lifecycle verification remains.
 - [ ] Partners: update/archive partner records with effective-dated ownership history and membership-link safeguards.
-- [ ] Reconciliation: correct counts through superseding records, reopen explained differences where authorized, and retain immutable count history.
+- [ ] Reconciliation: correct counts through superseding records, reopen explained differences where authorized, and retain immutable count history. Owner-only correction of today's count now creates a superseding record with a reason and audit trail; correction of older counts and a separate reopen workflow remain.
 
 ### D. Distribution controls
 - [ ] Preserve the existing second-person approval, minimum payout, reserve, ownership snapshots, payout ledger, cancellation, and reversal rules.
@@ -66,6 +66,7 @@ This plan tracks every gap found in the production-readiness audit. Financial re
 ## Current working branch evidence
 
 - Owner-only movement reversal is implemented for transfers, withdrawals, deposits, and partner contributions. It reverses account effects, updates partner capital where applicable, voids the generated withdrawal-fee entry and daily expense totals, and writes an audit reason.
+- Reconciliation count corrections now preserve the original record as superseded and create a new immutable count with the updated book comparison, reason, idempotency key, and audit events. Corrections are limited to the current business day because the ledger does not reconstruct historical balances.
 - Owner-only cashbook entry void controls are available on Sales and Expenses. Savings flow, loan repayment, and bill payment reversals now update linked balances, records, and daily expense totals atomically, with owner-only UI actions and audit reasons.
 - Savings holdings and recurring bill schedules now support owner-only edit, archive, and restore actions with validation and audit events. Archived records remain visible in their history sections; savings holdings cannot be archived while a balance remains.
 - Archive lists are paginated; payment histories resolve their bill record independently from the currently loaded archive page. Bill rename/archive/restore no longer resets recurrence anchors or overwrites a payment date saved after the edit screen was opened.
