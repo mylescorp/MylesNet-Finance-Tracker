@@ -1,4 +1,5 @@
 import { paginationOptsValidator } from "convex/server";
+import { getAuthUserId } from "@convex-dev/auth/server";
 import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
@@ -34,12 +35,18 @@ function dayAt(timestamp: number, timezone: string) {
   return new Intl.DateTimeFormat("en-CA", { timeZone: timezone, year: "numeric", month: "2-digit", day: "2-digit" }).format(timestamp);
 }
 
-async function workspace(ctx: Ctx): Promise<ActiveWorkspace | null> {
-  return await getSelectedWorkspace(ctx);
+async function workspace(ctx: Ctx, businessId?: Id<"businesses">): Promise<ActiveWorkspace | null> {
+  if (!businessId) return await getSelectedWorkspace(ctx);
+  const userId = await getAuthUserId(ctx);
+  if (!userId) return null;
+  const membership = await ctx.db.query("memberships").withIndex("by_business_and_user", q => q.eq("businessId", businessId).eq("userId", userId)).unique();
+  if (!membership?.active) return null;
+  const business = await ctx.db.get("businesses", businessId);
+  return business ? { userId, membership, business } : null;
 }
 
-async function requireOwner(ctx: Ctx) {
-  const current = await workspace(ctx);
+async function requireOwner(ctx: Ctx, businessId: Id<"businesses">) {
+  const current = await workspace(ctx, businessId);
   if (!current || current.membership.role !== "owner") throw new Error("Only a workspace owner can prepare or record partner payouts.");
   return current;
 }
@@ -76,13 +83,14 @@ function allocation(amount: number, partners: { id: Id<"partners">; name: string
 
 export const setOwnership = mutation({
   args: {
+    businessId: v.id("businesses"),
     effectiveOn: v.string(),
     changes: v.array(v.object({ partnerId: v.id("partners"), ownershipBps: v.number(), legacyEffectiveOn: v.optional(v.string()) })),
     idempotencyKey: v.string(),
   },
   returns: v.null(),
   handler: async (ctx, args) => {
-    const current = await requireOwner(ctx);
+    const current = await requireOwner(ctx, args.businessId);
     const today = businessDay(current.business.timezone);
     if (!validDay(args.effectiveOn) || args.effectiveOn < today) throw new Error("Ownership changes can take effect today or later; earlier periods cannot be rewritten.");
     if (args.idempotencyKey.length < 16 || args.idempotencyKey.length > 120) throw new Error("Refresh the ownership form and try again.");
@@ -118,10 +126,10 @@ export const setOwnership = mutation({
 });
 
 export const create = mutation({
-  args: { periodFrom: v.string(), periodToExclusive: v.string(), distributionUgx: v.number(), reserveUgx: v.number(), minimumPayoutUgx: v.number(), idempotencyKey: v.string() },
+  args: { businessId: v.id("businesses"), periodFrom: v.string(), periodToExclusive: v.string(), distributionUgx: v.number(), reserveUgx: v.number(), minimumPayoutUgx: v.number(), idempotencyKey: v.string() },
   returns: v.id("partnerDistributions"),
   handler: async (ctx, args) => {
-    const current = await requireOwner(ctx);
+    const current = await requireOwner(ctx, args.businessId);
     const { business } = current;
     if (!validDay(args.periodFrom) || !validDay(args.periodToExclusive) || args.periodFrom >= args.periodToExclusive) throw new Error("Choose a valid distribution period.");
     const days = (Date.parse(`${args.periodToExclusive}T00:00:00.000Z`) - Date.parse(`${args.periodFrom}T00:00:00.000Z`)) / 86_400_000;
@@ -164,10 +172,10 @@ export const create = mutation({
 });
 
 export const decide = mutation({
-  args: { distributionId: v.id("partnerDistributions"), decision: v.union(v.literal("approve"), v.literal("reject")), reason: v.optional(v.string()) },
+  args: { businessId: v.id("businesses"), distributionId: v.id("partnerDistributions"), decision: v.union(v.literal("approve"), v.literal("reject")), reason: v.optional(v.string()) },
   returns: v.null(),
   handler: async (ctx, args) => {
-    const current = await workspace(ctx);
+    const current = await workspace(ctx, args.businessId);
     if (!current || (current.membership.role !== "owner" && current.membership.role !== "finance_approver")) throw new Error("Only an owner or finance approver can review a distribution.");
     const row = await ctx.db.get("partnerDistributions", args.distributionId);
     if (!row || row.businessId !== current.business._id || row.status !== "pending_approval") throw new Error("This distribution is not awaiting a decision.");
@@ -199,10 +207,10 @@ export const decide = mutation({
 });
 
 export const cancel = mutation({
-  args: { distributionId: v.id("partnerDistributions"), reason: v.string() },
+  args: { businessId: v.id("businesses"), distributionId: v.id("partnerDistributions"), reason: v.string() },
   returns: v.null(),
   handler: async (ctx, args) => {
-    const current = await requireOwner(ctx);
+    const current = await requireOwner(ctx, args.businessId);
     const row = await ctx.db.get("partnerDistributions", args.distributionId);
     const reason = args.reason.trim();
     if (!row || row.businessId !== current.business._id || row.status !== "pending_approval") throw new Error("Only a pending distribution can be cancelled.");
@@ -214,10 +222,10 @@ export const cancel = mutation({
 });
 
 export const pay = mutation({
-  args: { distributionId: v.id("partnerDistributions"), itemId: v.id("partnerDistributionItems"), amountUgx: v.number(), account: v.union(v.literal("cash"), v.literal("mobile_money")), paidOn: v.string(), note: v.string(), idempotencyKey: v.string() },
+  args: { businessId: v.id("businesses"), distributionId: v.id("partnerDistributions"), itemId: v.id("partnerDistributionItems"), amountUgx: v.number(), account: v.union(v.literal("cash"), v.literal("mobile_money")), paidOn: v.string(), note: v.string(), idempotencyKey: v.string() },
   returns: v.id("partnerPayouts"),
   handler: async (ctx, args) => {
-    const current = await requireOwner(ctx);
+    const current = await requireOwner(ctx, args.businessId);
     if (!Number.isSafeInteger(args.amountUgx) || args.amountUgx <= 0 || !validDay(args.paidOn) || args.paidOn > businessDay(current.business.timezone) || args.note.trim().length > 300 || args.idempotencyKey.length < 16 || args.idempotencyKey.length > 120) throw new Error("Enter a valid payout amount, business date, note, and request key.");
     const previous = await ctx.db.query("partnerPayouts").withIndex("by_business_and_idempotency", q => q.eq("businessId", current.business._id).eq("idempotencyKey", args.idempotencyKey)).unique();
     if (previous) {
@@ -250,10 +258,10 @@ export const pay = mutation({
 });
 
 export const reversePayout = mutation({
-  args: { payoutId: v.id("partnerPayouts"), reason: v.string() },
+  args: { businessId: v.id("businesses"), payoutId: v.id("partnerPayouts"), reason: v.string() },
   returns: v.null(),
   handler: async (ctx, args) => {
-    const current = await requireOwner(ctx);
+    const current = await requireOwner(ctx, args.businessId);
     const payout = await ctx.db.get("partnerPayouts", args.payoutId);
     const reason = args.reason.trim();
     if (!payout || payout.businessId !== current.business._id || payout.state !== "posted") throw new Error("Choose an unreversed payout in this workspace.");
@@ -300,7 +308,7 @@ export const overview = query({
       return { ...row, preparedBy: author?.email ?? "Workspace owner", canDecide: row.createdBy !== current.userId && (current.membership.role === "owner" || current.membership.role === "finance_approver"), items };
     }));
     const activeApprovers = await ctx.db.query("memberships").withIndex("by_business_and_user", q => q.eq("businessId", current.business._id)).take(100);
-    return { access: "ready" as const, role: current.membership.role, distributions, continueCursor: page.continueCursor, isDone: page.isDone, hasFinanceApprover: activeApprovers.some(row => row.active && row.role === "finance_approver"), ownershipBaselines: ownershipBaselines.filter((row): row is NonNullable<typeof row> => row !== null), currency: current.business.currency };
+    return { access: "ready" as const, businessId: current.business._id, role: current.membership.role, distributions, continueCursor: page.continueCursor, isDone: page.isDone, hasFinanceApprover: activeApprovers.some(row => row.active && row.role === "finance_approver"), ownershipBaselines: ownershipBaselines.filter((row): row is NonNullable<typeof row> => row !== null), currency: current.business.currency };
   },
 });
 
