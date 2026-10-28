@@ -41,7 +41,7 @@ export default function DashboardPage() {
   const [customFrom, setCustomFrom] = useState(todayKey("Africa/Kampala"));
   const [customTo, setCustomTo] = useState(todayKey("Africa/Kampala"));
   const [shareFeedback, setShareFeedback] = useState("");
-  const settings = useQuery(api.settings.overview, {});
+  const settings = useQuery(api.settings.runtimeContext, {});
   const access = useQuery(api.workspace.currentAccess, {});
   const preferences = settings;
   const timezone = settings?.access === "ready" ? settings.timezone : "Africa/Kampala";

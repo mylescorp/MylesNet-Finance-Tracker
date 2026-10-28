@@ -16,7 +16,7 @@ export function EntryForm({ kind }: { kind: EntryKind }) {
   const setDrawerBusy = useRecordEntryBusy();
   const createEntry = useMutation(api.workspace.createEntry);
   const access = useQuery(api.workspace.currentAccess, {});
-  const context = useQuery(api.settings.overview, {});
+  const context = useQuery(api.settings.runtimeContext, {});
   const timezone = context?.access === "ready" ? context.timezone : "Africa/Kampala";
   const currency = context?.access === "ready" ? context.currency : "UGX";
   const currencyScale = 10 ** (context?.access === "ready" ? context.currencyMinorDigits : 0);

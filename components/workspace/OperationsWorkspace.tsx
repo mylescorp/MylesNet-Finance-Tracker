@@ -124,7 +124,7 @@ export function OperationsWorkspace({ screen, currency, scale, locale, timezone,
 
   if (!data) return <div className="empty-state" role="status"><strong>Loading workspace records…</strong><span>These views use live, authorized Convex data.</span></div>;
   if (data.access === "pending") return <div className="notice-banner notice-warning" role="status">Workspace access is pending. Ask an owner to invite this account.</div>;
-  if (data.access === "restricted" && screen === "Partners" && distributionAccess?.access === "ready" && distributionAccess.role === "finance_approver") return <PartnerDistributions range={range} currency={currency} scale={scale} locale={locale} dateFormat={dateFormat} partners={[]} today={businessDate(timezone)} />;
+  if (data.access === "restricted" && screen === "Partners" && distributionAccess?.access === "ready" && distributionAccess.canApproveDistributions) return <PartnerDistributions range={range} currency={currency} scale={scale} locale={locale} dateFormat={dateFormat} partners={[]} today={businessDate(timezone)} />;
   if (data.access === "restricted" && screen === "Partners") {
     if (!partnerStatement) return <div className="empty-state" role="status"><strong>Loading partner statement…</strong><span>Only your linked partner account can read this statement.</span></div>;
     if (partnerStatement.access !== "ready") return <div className="notice-banner notice-info" role="status">This partner login is not linked to an active partner record. Ask the workspace owner to link it in Settings → Access.</div>;

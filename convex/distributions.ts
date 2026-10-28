@@ -318,8 +318,14 @@ export const overview = query({
       const canApprove = await hasPermission(ctx, current.membership, "partners.distributions.approve");
       return { ...row, preparedBy: author?.email ?? "Workspace owner", canDecide: row.createdBy !== current.userId && canApprove, items };
     }));
-    const activeApprovers = await ctx.db.query("memberships").withIndex("by_business_and_user", q => q.eq("businessId", current.business._id)).take(100);
-    return { access: "ready" as const, businessId: current.business._id, role: current.membership.role, distributions, continueCursor: page.continueCursor, isDone: page.isDone, hasFinanceApprover: activeApprovers.some(row => row.active && row.role === "finance_approver"), ownershipBaselines: ownershipBaselines.filter((row): row is NonNullable<typeof row> => row !== null), currency: current.business.currency };
+    const activeMembers = await ctx.db.query("memberships").withIndex("by_business_and_user", q => q.eq("businessId", current.business._id)).take(100);
+    const approverFlags = await Promise.all(activeMembers.filter(row => row.active).map(row => hasPermission(ctx, row, "partners.distributions.approve")));
+    const hasFinanceApprover = approverFlags.some(Boolean);
+    return { access: "ready" as const, businessId: current.business._id, role: current.membership.role,
+      canManageDistributions: await hasPermission(ctx, current.membership, "partners.distributions.manage"),
+      canApproveDistributions: await hasPermission(ctx, current.membership, "partners.distributions.approve"),
+      canManagePartners: await hasPermission(ctx, current.membership, "partners.manage"),
+      distributions, continueCursor: page.continueCursor, isDone: page.isDone, hasFinanceApprover, ownershipBaselines: ownershipBaselines.filter((row): row is NonNullable<typeof row> => row !== null), currency: current.business.currency };
   },
 });
 

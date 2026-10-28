@@ -122,7 +122,8 @@ export const receive = internalMutation({
     if (existing?.status === "posted") return { status: "duplicate" as const };
     const submitter = input.submittedByEmail ? await ctx.db.query("users").withIndex("email", q => q.eq("email", input.submittedByEmail)).first() : null;
     const member = submitter ? await ctx.db.query("memberships").withIndex("by_business_and_user", q => q.eq("businessId", business._id).eq("userId", submitter._id)).first() : null;
-    const authorizedSubmitter = submitter && member?.active && (member.role === "owner" || member.role === "cashier") ? submitter : null;
+    const submissionPermission = input.kind === "sale" ? "sales.create" : input.kind === "expense" ? "expenses.create" : null;
+    const authorizedSubmitter = submitter && member?.active && submissionPermission && await hasPermission(ctx, member, submissionPermission) ? submitter : null;
     const prefs = await ctx.db.query("workspacePreferences").withIndex("by_business", q => q.eq("businessId", business._id)).unique();
     const digits = 0; // The legacy Google Form labels its finance amounts in UGX.
     const now = Date.now();

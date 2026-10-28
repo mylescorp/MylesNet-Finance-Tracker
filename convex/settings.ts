@@ -130,6 +130,27 @@ export const overview = query({
   },
 });
 
+// Non-sensitive regional and formatting context needed by entry screens.
+export const runtimeContext = query({
+  args: {},
+  returns: v.union(v.object({ access: v.literal("pending") }), v.object({
+    access: v.literal("ready"), businessName: v.string(), countryCode: v.string(), currency: v.string(),
+    currencyMinorDigits: v.number(), timezone: v.string(), weekStartsOn: v.union(v.literal("monday"), v.literal("sunday")),
+    locale: v.string(), dateFormat: v.union(v.literal("DD/MM/YYYY"), v.literal("MM/DD/YYYY"), v.literal("YYYY-MM-DD")),
+    fiscalYearStartMonth: v.number(), incomeCategories: v.array(v.string()), expenseCategories: v.array(v.string()),
+  })),
+  handler: async (ctx) => {
+    const current = await activeWorkspace(ctx);
+    if (!current) return { access: "pending" as const };
+    const prefs = await ctx.db.query("workspacePreferences").withIndex("by_business", q => q.eq("businessId", current.business._id)).unique();
+    return { access: "ready" as const, businessName: current.business.name, countryCode: current.business.countryCode ?? "UG",
+      currency: current.business.currency, currencyMinorDigits: currencyMinorDigits(current.business.currency), timezone: current.business.timezone,
+      weekStartsOn: current.business.weekStartsOn ?? "monday", locale: prefs?.locale ?? "en-UG", dateFormat: prefs?.dateFormat ?? "DD/MM/YYYY",
+      fiscalYearStartMonth: prefs?.fiscalYearStartMonth ?? 1, incomeCategories: prefs?.incomeCategories ?? defaults().incomeCategories,
+      expenseCategories: prefs?.expenseCategories ?? defaults().expenseCategories };
+  },
+});
+
 export const update = mutation({
   args: {
     businessId: v.id("businesses"),
@@ -285,7 +306,7 @@ export const monthlyTargets = query({
   args: { from: v.string(), toExclusive: v.string() },
   handler: async (ctx, args) => {
     const current = await activeWorkspace(ctx);
-    if (!current || !(await hasPermission(ctx, current.membership, "analytics.view"))) return { access: "restricted" as const };
+    if (!current || !(await hasPermission(ctx, current.membership, "reports.view"))) return { access: "restricted" as const };
     const prefs = await ctx.db.query("workspacePreferences").withIndex("by_business", q => q.eq("businessId", current.business._id)).unique();
     const days = await ctx.db.query("dailyTotals").withIndex("by_business_and_day", q => q.eq("businessId", current.business._id).gte("day", args.from).lt("day", args.toExclusive)).take(40);
     return {
@@ -410,7 +431,7 @@ export const updateMember = mutation({
     } else if (args.role === "partner") {
       partnerId = args.partnerId ?? member.partnerId;
     } else if (args.partnerId) throw new Error("Only partner accounts can be linked to a partner record.");
-    await ctx.db.patch("memberships", args.membershipId, { role: args.role, partnerId, active: args.active });
+    await ctx.db.patch("memberships", args.membershipId, { role: args.role, roleId: undefined, partnerId, active: args.active });
     await ctx.db.insert("auditEvents", { businessId: current.business._id, actorId: current.userId, action: "member.access.updated", entityType: "membership", entityId: args.membershipId, occurredAt: Date.now(), summary: `Changed a member to ${args.role}${partnerId ? ` linked to ${partnerId}` : ""} (${args.active ? "active" : "inactive"}).` });
     return null;
   },
@@ -431,8 +452,8 @@ export const transferOwnership = mutation({
     const reason = args.reason.trim();
     if (reason.length < 5 || reason.length > 300) throw new Error("Enter a transfer reason between 5 and 300 characters.");
     const now = Date.now();
-    await ctx.db.patch("memberships", target._id, { role: "owner", partnerId: undefined });
-    await ctx.db.patch("memberships", current.membership._id, { role: "cashier", partnerId: undefined });
+    await ctx.db.patch("memberships", target._id, { role: "owner", roleId: undefined, partnerId: undefined });
+    await ctx.db.patch("memberships", current.membership._id, { role: "cashier", roleId: undefined, partnerId: undefined });
     await ctx.db.insert("auditEvents", { businessId: current.business._id, actorId: current.userId, action: "workspace.owner_transferred", entityType: "membership", entityId: target._id, occurredAt: now, summary: `Workspace ownership transferred to ${actualEmail}; prior owner retained cashier access.`, details: JSON.stringify({ previousOwnerMembershipId: current.membership._id, newOwnerMembershipId: target._id, targetEmail: actualEmail, reason }) });
     return null;
   },
@@ -457,16 +478,13 @@ export const acceptInvite = mutation({
     }
     const existing = await ctx.db.query("memberships").withIndex("by_business_and_user", q => q.eq("businessId", invite.businessId).eq("userId", userId)).unique();
     if (existing?.active) throw new Error("You already have access to this workspace.");
-    const currentMemberships = await ctx.db.query("memberships").withIndex("by_user", q => q.eq("userId", userId)).take(20);
-    if (currentMemberships.length === 20) throw new Error("This account has too many workspace memberships to activate another. Contact an owner for help.");
-    if (currentMemberships.some(membership => membership.active && membership.businessId !== invite.businessId)) {
-      throw new Error("This account already has an active workspace. Sign in with another account or ask the current workspace owner to deactivate your access first.");
-    }
+    const currentMemberships = await ctx.db.query("memberships").withIndex("by_user", q => q.eq("userId", userId)).take(1001);
+    if (currentMemberships.length > 1000) throw new Error("This account has reached the workspace membership limit. Contact support for help.");
     if (invite.partnerId) {
       const linkedMember = await ctx.db.query("memberships").withIndex("by_business_and_partner_and_active", q => q.eq("businessId", invite.businessId).eq("partnerId", invite.partnerId).eq("active", true)).first();
       if (linkedMember && linkedMember.userId !== userId) throw new Error("This partner account is already linked. Ask the workspace owner to review access.");
     }
-    if (existing) await ctx.db.patch("memberships", existing._id, { active: true, role: invite.role, partnerId: invite.partnerId });
+    if (existing) await ctx.db.patch("memberships", existing._id, { active: true, role: invite.role, roleId: undefined, partnerId: invite.partnerId });
     else await ctx.db.insert("memberships", { businessId: invite.businessId, userId, role: invite.role, partnerId: invite.partnerId, active: true, createdAt: Date.now() });
     await ctx.db.patch("invitations", invite._id, { active: false, acceptedAt: Date.now() });
     await ctx.db.insert("auditEvents", { businessId: invite.businessId, actorId: userId, action: "invitation.accepted", entityType: "invitation", entityId: invite._id, occurredAt: Date.now(), summary: `${user.email} accepted a workspace invitation.` });

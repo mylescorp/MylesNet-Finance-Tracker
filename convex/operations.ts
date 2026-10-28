@@ -148,6 +148,9 @@ export const overview = query({
       hasPermission(ctx, current.membership, "reconcile.view"),
       hasPermission(ctx, current.membership, "partners.view"),
     ]);
+    // A linked partner gets only the scoped statement, and the finance approver
+    // role must enter its separate distribution-review screen.
+    if (current.membership.partnerId || (canViewPartners && ![canViewMovements, canViewSavings, canViewLoans, canViewBills, canViewReconciliation].some(Boolean))) return { access: "restricted" as const };
     if (![canViewMovements, canViewSavings, canViewLoans, canViewBills, canViewReconciliation, canViewPartners].some(Boolean)) return { access: "restricted" as const };
     const businessId = current.business._id;
     const [movements, savings, savingsFlows, loans, loanRepayments, bills, billPayments, reconciliations, partners] = await Promise.all([

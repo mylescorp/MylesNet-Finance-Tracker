@@ -394,9 +394,14 @@ export const dashboardSummary = query({
       const businesses = await ctx.db.query("businesses").take(1);
       return { access: businesses.length === 0 ? "setup" as const : "pending" as const };
     }
-    // Partner statement data is not yet linked to partner-specific ledger rows.
-    // Hide business-wide finance totals until that scope is implemented.
-    if (!(await hasPermission(ctx, current.membership, "analytics.view"))) return { access: "restricted" as const };
+    const [canViewDashboard, canViewReports, canViewAnalytics] = await Promise.all([
+      hasPermission(ctx, current.membership, "dashboard.view"),
+      hasPermission(ctx, current.membership, "reports.view"),
+      hasPermission(ctx, current.membership, "analytics.view"),
+    ]);
+    const assignedRole = current.membership.roleId ? await ctx.db.get("workspaceRoles", current.membership.roleId) : null;
+    const partnerScoped = Boolean(current.membership.partnerId) || current.membership.role === "partner" || assignedRole?.builtIn === "partner";
+    if (partnerScoped || !(canViewDashboard || canViewReports || canViewAnalytics)) return { access: "restricted" as const };
     const days = await ctx.db
       .query("dailyTotals")
       .withIndex("by_business_and_day", (q) =>
@@ -467,7 +472,13 @@ export const balanceOverview = query({
       const businesses = await ctx.db.query("businesses").take(1);
       return { access: businesses.length === 0 ? "setup" as const : "pending" as const };
     }
-    if (!(await hasPermission(ctx, current.membership, "analytics.view"))) return { access: "restricted" as const };
+    const [canViewDashboard, canViewReports, canViewAnalytics] = await Promise.all([
+      hasPermission(ctx, current.membership, "dashboard.view"),
+      hasPermission(ctx, current.membership, "reports.view"),
+      hasPermission(ctx, current.membership, "analytics.view"),
+    ]);
+    const assignedRole = current.membership.roleId ? await ctx.db.get("workspaceRoles", current.membership.roleId) : null;
+    if (current.membership.partnerId || current.membership.role === "partner" || assignedRole?.builtIn === "partner" || !(canViewDashboard || canViewReports || canViewAnalytics)) return { access: "restricted" as const };
     const [day, balances, dailyEntries] = await Promise.all([
       ctx.db.query("dailyTotals").withIndex("by_business_and_day", q => q.eq("businessId", current.business._id).eq("day", args.day)).unique(),
       ctx.db.query("accountBalances").withIndex("by_business_and_account", q => q.eq("businessId", current.business._id)).take(2),
