@@ -331,7 +331,8 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .app-footer a { color:var(--mn-muted); text-decoration:underline; text-decoration-color:var(--mn-line-strong); text-underline-offset:3px; transition:color var(--mn-dur-fast); }
 .app-footer a:hover { color:var(--mn-accent); }
 .page-title-row { display:flex; align-items:flex-end; justify-content:space-between; gap:20px; margin-bottom:24px; }
-.page-title { margin:4px 0 0; font-family:var(--font-instrument-serif),Georgia,serif; font-size:32px; line-height:1.08; font-weight:400; letter-spacing:-.025em; }
+.page-title { margin:4px 0 0; font-family:var(--mn-font-serif); font-size:32px; line-height:1.08; font-weight:400; letter-spacing:-.025em; }
+.page-title-accent { color:var(--mn-accent); }
 .changelog-list { position:relative; display:grid; gap:22px; max-width:1040px; }
 .changelog-list::before { position:absolute; top:12px; bottom:12px; left:143px; width:2px; border-radius:999px; background:color-mix(in srgb,var(--mn-accent) 28%,var(--mn-line)); content:""; }
 .changelog-entry { position:relative; display:grid; grid-template-columns:132px 22px minmax(0, 1fr); align-items:start; gap:0; }
@@ -356,7 +357,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .dashboard-banner { height:176px; overflow:hidden; border-radius:var(--mn-radius-xl); background:#1a395b; position:relative; margin-bottom:18px; }
 .dashboard-welcome { position:relative; min-height:190px; display:flex; align-items:center; justify-content:space-between; gap:24px; overflow:hidden; margin:0 0 20px; padding:28px 32px; border:1px solid var(--mn-line); border-radius:var(--mn-radius-xl); background:linear-gradient(115deg,var(--mn-card) 0%,var(--mn-card) 62%,color-mix(in srgb,var(--mn-accent) 8%,var(--mn-card)) 100%); }
 .dashboard-welcome-copy { min-width:0; max-width:720px; }
-.dashboard-welcome h1 { margin:12px 0 0; font-family:var(--font-instrument-serif),Georgia,serif; font-size:clamp(29px,3vw,42px); font-weight:400; line-height:1.1; letter-spacing:-.025em; }
+.dashboard-welcome h1 { margin:12px 0 0; font-family:var(--mn-font-serif); font-size:clamp(29px,3vw,42px); font-weight:400; line-height:1.1; letter-spacing:-.025em; }
 .dashboard-welcome h1 span { color:var(--mn-accent); }
 .dashboard-welcome-subtitle { margin:10px 0 0; color:var(--mn-muted); line-height:1.5; }
 .dashboard-daily-quote { display:flex; align-items:center; gap:8px; margin:18px 0 0; color:var(--mn-muted); font-family:var(--font-instrument-serif),Georgia,serif; font-size:16px; font-style:italic; }
