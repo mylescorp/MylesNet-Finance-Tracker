@@ -345,8 +345,8 @@ export const dashboardSummary = query({
       salesUgx: v.number(),
       expensesUgx: v.number(),
       netUgx: v.number(),
-      cashBalanceUgx: v.union(v.number(), v.null()),
-      mobileMoneyBalanceUgx: v.union(v.number(), v.null()),
+      cashBalanceUgx: v.number(),
+      mobileMoneyBalanceUgx: v.number(),
       days: v.array(
         v.object({
           day: v.string(),
@@ -407,7 +407,8 @@ export const dashboardSummary = query({
       (sum, day) => addSafeInteger(sum, day.expensesUgx, "Expenses total"),
       0,
     );
-    const balances = canViewDashboard || canViewReports || canViewDailyReport ? await ctx.db
+    const canViewBalances = canViewDashboard || canViewReports || canViewDailyReport;
+    const balances = canViewBalances ? await ctx.db
       .query("accountBalances")
       .withIndex("by_business_and_account", (q) =>
         q.eq("businessId", current.business._id),
@@ -422,8 +423,8 @@ export const dashboardSummary = query({
       salesUgx,
       expensesUgx,
       netUgx: salesUgx - expensesUgx,
-      cashBalanceUgx: canViewDashboard ? cashBalanceUgx : null,
-      mobileMoneyBalanceUgx: canViewDashboard ? mobileMoneyBalanceUgx : null,
+      cashBalanceUgx: canViewBalances ? cashBalanceUgx : 0,
+      mobileMoneyBalanceUgx: canViewBalances ? mobileMoneyBalanceUgx : 0,
       days: days.map(({ day, salesUgx, expensesUgx }) => ({
         day,
         salesUgx,

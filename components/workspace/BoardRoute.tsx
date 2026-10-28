@@ -263,7 +263,7 @@ function BoardRouteContent({ route }: { route: string }) {
   const currency = preferences?.access === "ready" ? preferences.currency : "UGX";
   const currencyScale = 10 ** (preferences?.access === "ready" ? (preferences.currencyMinorDigits ?? 0) : 0);
   const locale = preferences?.access === "ready" ? preferences.locale : "en-UG";
-  const fmt = (value: number | undefined) => formatMoney(value, currency, currencyScale, locale);
+  const fmt = (value: number | null | undefined) => value == null ? "—" : formatMoney(value, currency, currencyScale, locale);
   const dateFormat = preferences?.access === "ready" ? preferences.dateFormat : "DD/MM/YYYY";
   const fmtDate = (value: string) => formatBusinessDay(value, dateFormat);
   const today = businessDate(timezone);
