@@ -207,7 +207,10 @@ export const partnerArchive = query({
   handler: async (ctx, args) => {
     const current = await workspace(ctx, args.businessId);
     if (!current || current.membership.role !== "owner") throw new Error("Archived partner records are available to workspace owners only.");
-    return await ctx.db.query("partners").withIndex("by_business_and_active", q => q.eq("businessId", current.business._id).eq("active", false)).order("desc").paginate(args.paginationOpts);
+    const page = await ctx.db.query("partners").withIndex("by_business_and_active", q => q.eq("businessId", current.business._id).eq("active", false)).order("desc").paginate(args.paginationOpts);
+    const today = dayInZone(Date.now(), current.business.timezone);
+    const results = await Promise.all(page.page.map(async partner => ({ ...partner, ownershipBps: await ownershipAtDay(ctx, current.business._id, partner, today) })));
+    return { ...page, page: results };
   },
 });
 
