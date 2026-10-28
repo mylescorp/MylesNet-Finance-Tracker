@@ -528,7 +528,25 @@ export const acceptInvite = mutation({
     if (invite.email.toLowerCase() !== user.email.toLowerCase()) throw new Error("Sign in using the invited email address.");
     const templates = invite.roleId ? [] : await ctx.db.query("workspaceRoles").withIndex("by_business", q => q.eq("businessId", invite.businessId)).take(100);
     const legacyRole = invite.role.toLowerCase();
-    const role = invite.roleId ? await ctx.db.get("workspaceRoles", invite.roleId) : templates.find(r => r.builtIn === legacyRole || r.name.toLowerCase() === legacyRole) ?? null;
+    let role = invite.roleId ? await ctx.db.get("workspaceRoles", invite.roleId) : templates.find(r => r.builtIn === legacyRole || r.name.toLowerCase() === legacyRole) ?? null;
+    if (!invite.roleId && !role) {
+      const legacyTemplate = legacyRole === "cashier" ? {
+        name: "Cashier", builtIn: "cashier" as const,
+        permissions: ["dashboard.view", "sales.view", "sales.create", "expenses.view", "expenses.create", "reports.view"],
+        description: "Record sales and expenses and view standard reports.",
+      } : legacyRole === "partner" ? {
+        name: "Partner", builtIn: "partner" as const, permissions: ["dashboard.view", "partners.view"],
+        description: "View partner area only; financial totals are not exposed.",
+      } : legacyRole === "finance_approver" || legacyRole === "finance approver" ? {
+        name: "Finance Approver", builtIn: "finance_approver" as const, permissions: ["partners.view", "partners.distributions.approve"],
+        description: "Review partner distributions without workspace-wide finance access.",
+      } : null;
+      if (legacyTemplate) {
+        const now = Date.now();
+        const roleId = await ctx.db.insert("workspaceRoles", { businessId: invite.businessId, ...legacyTemplate, active: true, createdBy: userId, createdAt: now, updatedAt: now });
+        role = await ctx.db.get("workspaceRoles", roleId);
+      }
+    }
     if (invite.roleId && (!role || !role.active || role.businessId !== invite.businessId)) throw new Error("This invitation role is no longer available. Ask the workspace owner for a new invitation.");
     if (invite.partnerId) {
       const partner = await ctx.db.get("partners", invite.partnerId);
