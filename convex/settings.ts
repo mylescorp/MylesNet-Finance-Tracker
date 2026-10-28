@@ -309,7 +309,7 @@ export const accessOverview = query({
     const partnerNames = new Map(partners.map(partner => [partner._id, partner.name]));
     const members = await Promise.all(memberships.map(async m => {
       const user = await ctx.db.get("users", m.userId);
-      return { id: m._id, role: m.role, partnerId: m.partnerId, partnerName: m.partnerId ? partnerNames.get(m.partnerId) : undefined, active: m.active, email: user?.email ?? "Signed-in user", createdAt: m.createdAt };
+      return { id: m._id, role: m.role, partnerId: m.partnerId, partnerName: m.partnerId ? partnerNames.get(m.partnerId) : undefined, active: m.active, email: user?.email ?? "Signed-in user", emailVerified: typeof user?.emailVerificationTime === "number", createdAt: m.createdAt };
     }));
     return { access: "ready" as const, members, partners: partners.map(({ _id, name }) => ({ id: _id, name })), invitations: invitations.map(i => ({ id: i._id, email: i.email, role: i.role, partnerName: i.partnerId ? partnerNames.get(i.partnerId) : undefined, expiresAt: i.expiresAt })), audit: audit.map(a => ({ id: a._id, action: a.action, summary: a.summary, occurredAt: a.occurredAt })) };
   },
@@ -379,6 +379,28 @@ export const updateMember = mutation({
     } else if (args.partnerId) throw new Error("Only partner accounts can be linked to a partner record.");
     await ctx.db.patch("memberships", args.membershipId, { role: args.role, partnerId, active: args.active });
     await ctx.db.insert("auditEvents", { businessId: current.business._id, actorId: current.userId, action: "member.access.updated", entityType: "membership", entityId: args.membershipId, occurredAt: Date.now(), summary: `Changed a member to ${args.role}${partnerId ? ` linked to ${partnerId}` : ""} (${args.active ? "active" : "inactive"}).` });
+    return null;
+  },
+});
+
+export const transferOwnership = mutation({
+  args: { membershipId: v.id("memberships"), expectedEmail: v.string(), reason: v.string() },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const current = await activeWorkspace(ctx);
+    if (!current || current.membership.role !== "owner") throw new Error("Only the current workspace owner can transfer ownership.");
+    const target = await ctx.db.get("memberships", args.membershipId);
+    if (!target || target.businessId !== current.business._id || !target.active || target.role === "owner" || target.role === "partner" || target.userId === current.userId) throw new Error("Choose another active cashier or finance approver.");
+    const targetUser = await ctx.db.get("users", target.userId);
+    const actualEmail = targetUser?.email?.trim().toLowerCase();
+    if (!actualEmail || typeof targetUser?.emailVerificationTime !== "number") throw new Error("Ownership can only be transferred to an account with a verified email address.");
+    if (args.expectedEmail.trim().toLowerCase() !== actualEmail) throw new Error("The confirmed email does not match this member's verified account.");
+    const reason = args.reason.trim();
+    if (reason.length < 5 || reason.length > 300) throw new Error("Enter a transfer reason between 5 and 300 characters.");
+    const now = Date.now();
+    await ctx.db.patch("memberships", target._id, { role: "owner", partnerId: undefined });
+    await ctx.db.patch("memberships", current.membership._id, { role: "cashier", partnerId: undefined });
+    await ctx.db.insert("auditEvents", { businessId: current.business._id, actorId: current.userId, action: "workspace.owner_transferred", entityType: "membership", entityId: target._id, occurredAt: now, summary: `Workspace ownership transferred to ${actualEmail}; prior owner retained cashier access.`, details: JSON.stringify({ previousOwnerMembershipId: current.membership._id, newOwnerMembershipId: target._id, targetEmail: actualEmail, reason }) });
     return null;
   },
 });
