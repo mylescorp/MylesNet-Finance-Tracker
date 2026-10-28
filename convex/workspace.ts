@@ -29,6 +29,7 @@ const accessResult = v.union(
   v.object({
     access: v.literal("ready"),
     businessId: v.id("businesses"),
+    userId: v.id("users"),
     businessName: v.string(),
     role: v.string(),
     permissions: v.array(v.string()),
@@ -147,6 +148,7 @@ export const currentAccess = query({
     return {
       access: "ready" as const,
       businessId: current.business._id,
+      userId: current.userId,
       businessName: current.business.name,
       role: current.membership.role,
       permissions,
