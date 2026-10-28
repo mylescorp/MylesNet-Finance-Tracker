@@ -29,9 +29,9 @@ type BoardSpec = {
 const specs: Record<string, BoardSpec> = {
   sales: {
     title: "Sales", eyebrow: "Cashbook", description: "Record and review income from approved sources.", source: "03 · Sales", entryKind: "sale",
-    metrics: ["Sales today", "Sales", "Best day", "Days recorded", "Entry basis"],
+    metrics: ["Sales today", "Sales this period", "Sales year to date", "Best day", "Entry basis"],
     sections: [
-      { title: "Daily sales · last 14 days", detail: "Recorded entries by date, account, and amount. Estimated split is shown only when an imported estimate exists.", kind: "table" },
+      { title: "Daily sales · last 14 days", detail: "Recorded daily sales, expenses, and net cashbook activity for the latest dates in this period.", kind: "table" },
       { title: "Sales by income type", detail: "Category breakdown uses saved entries; no mock amounts are loaded.", kind: "chart" },
       { title: "Best days and weekday pattern", detail: "Strongest sales days are calculated from the selected period.", kind: "chart" },
       { title: "Imports and data checks", detail: "Import history will be available after a source mapping and staging import are approved.", kind: "table" },
@@ -247,7 +247,7 @@ function formatMoney(value: number | undefined, currency = "UGX", scale = 1, loc
 export function BoardRoute({ route }: { route: string }) {
   const screen = specs[route];
   const [period, setPeriod] = useState<(typeof periods)[number]>("Month");
-  const [entryLimit, setEntryLimit] = useState(100);
+  const [entryLimit, setEntryLimit] = useState(500);
   const [shareFeedback, setShareFeedback] = useState("");
   const settings = useQuery(api.workspace.businessSettings, {});
   const preferences = useQuery(api.settings.overview, {});
@@ -264,7 +264,7 @@ export function BoardRoute({ route }: { route: string }) {
   const range = useMemo(() => rangeFor(period, today, weekStartsOn, fiscalStartMonth), [period, today, weekStartsOn, fiscalStartMonth]);
   const rangeLastDay = new Date(`${range.toExclusive}T00:00:00.000Z`); rangeLastDay.setUTCDate(rangeLastDay.getUTCDate() - 1);
   const needsSummary = screen?.entryKind !== undefined || ["Analytics", "Daily Report", "Monthly P&L", "Movements"].includes(screen?.title ?? "");
-  const needsYearSummary = screen?.title === "Monthly P&L";
+  const needsYearSummary = screen?.title === "Monthly P&L" || screen?.title === "Expenses" || screen?.title === "Sales";
   const needsDailyHistory = screen?.title === "Daily Report";
   const summary = useQuery(api.workspace.dashboardSummary, needsSummary ? range : "skip");
   const entryKind = screen?.title === "Sales" ? "sale" : screen?.title === "Expenses" ? "expense" : undefined;
@@ -286,18 +286,23 @@ export function BoardRoute({ route }: { route: string }) {
   const stats = summary?.access === "ready" ? summary : null;
   const yearDays = yearSummary?.access === "ready" ? yearSummary.days : undefined;
   const weekDays = trailingSevenSummary?.access === "ready" ? trailingSevenSummary.days : undefined;
+  const rangeDayCount = Math.max(1, (Date.parse(`${range.toExclusive}T00:00:00.000Z`) - Date.parse(`${range.from}T00:00:00.000Z`)) / 86_400_000);
   const metricValues: Record<string, string> = {
     Sales: fmt(stats?.salesUgx),
-    "Best day": stats ? fmt(Math.max(0, ...stats.days.map((day) => day.salesUgx))) : "—",
-    "Days recorded": stats ? `${stats.days.filter((day) => day.salesUgx + day.expensesUgx > 0).length}` : "—",
+    "Best day": stats ? fmt(Math.max(0, ...stats.days.map((day) => screen?.title === "Expenses" ? day.expensesUgx : day.salesUgx))) : "—",
+    "Days recorded": stats ? `${stats.days.filter((day) => screen?.title === "Expenses" ? day.expensesUgx > 0 : day.salesUgx > 0).length}` : "—",
     "Expense ratio": stats ? `${stats.salesUgx ? Math.round(stats.expensesUgx / stats.salesUgx * 100) : 0}%` : "—",
-    "Average daily expenses": stats ? fmt(Math.round(stats.expensesUgx / Math.max(1, stats.days.length))) : "—",
+    "Average daily expenses": stats ? fmt(Math.round(stats.expensesUgx / rangeDayCount)) : "—",
     "Net margin": stats ? `${stats.salesUgx ? Math.round((stats.salesUgx - stats.expensesUgx) / stats.salesUgx * 100) : 0}%` : "—",
     "Cash on hand": fmt(stats?.cashBalanceUgx),
     "Mobile money": fmt(stats?.mobileMoneyBalanceUgx),
     "Sales today": stats ? fmt(stats.days.find((day) => day.day === today)?.salesUgx ?? 0) : "—",
+    "Sales this period": fmt(stats?.salesUgx),
+    "This month expenses": fmt(stats?.expensesUgx),
+    "Year to date": fmt(yearSummary?.access === "ready" ? yearSummary.expensesUgx : undefined),
+    "Sales year to date": fmt(yearSummary?.access === "ready" ? yearSummary.salesUgx : undefined),
     "Expenses": fmt(stats?.expensesUgx),
-    "Average per day": stats ? fmt(Math.round((screen?.title === "Expenses" ? stats.expensesUgx : stats.salesUgx) / Math.max(1, stats.days.length))) : "—",
+    "Average per day": stats ? fmt(Math.round((screen?.title === "Expenses" ? stats.expensesUgx : stats.salesUgx) / rangeDayCount)) : "—",
     "Entry basis": "Recorded",
     "Approval queue": "—",
     "Sales YTD": fmt(yearSummary?.access === "ready" ? yearSummary.salesUgx : undefined),
@@ -340,24 +345,27 @@ export function BoardRoute({ route }: { route: string }) {
     </div>
     {summary?.access === "restricted" && <div className="notice-banner notice-info" role="status">Partner-specific reporting is being prepared. Business-wide totals are hidden from partner accounts.</div>}
     {summary?.access === "pending" && <div className="notice-banner notice-warning" role="status">Workspace access is pending. Ask an owner to invite this Google account.</div>}
-    {!operationalScreen && <div className="metric-grid board-metric-grid">
+    {!operationalScreen && screen.title !== "Analytics" && <div className="metric-grid board-metric-grid">
       {screen.metrics.map((label, index) => <Card className="metric-card board-metric-card" key={label}>
         <div className="card-heading"><span className="eyebrow">{label}</span><span className="entry-icon">{index % 2 === 0 ? <ArrowUpRight size={15} /> : <ArrowDownRight size={15} />}</span></div>
         <div className="metric-value">{metricValues[label] ?? "—"}</div>
         <div className="metric-note">{metricValues[label] === undefined ? "Available when this record type is configured" : "Based on saved workspace records"}</div>
       </Card>)}
     </div>}
-    {screen.title === "Analytics" ? <AnalyticsInsights range={range} today={today} currency={currency} scale={currencyScale} locale={locale} /> : screen.title === "Needs attention" ? <AnalyticsInsights range={range} today={today} currency={currency} scale={currencyScale} locale={locale} issuesOnly /> : operationalScreen ? <OperationsWorkspace screen={screen.title as "Movements" | "Savings" | "Loans" | "Partners" | "Bills" | "Reconcile"} currency={currency} scale={currencyScale} locale={locale} timezone={timezone} dateFormat={dateFormat} range={range} /> : <div className="board-grid">
+    {screen.title === "Analytics" ? <AnalyticsInsights range={range} today={today} currency={currency} scale={currencyScale} locale={locale} /> : screen.title === "Needs attention" ? <AnalyticsInsights range={range} today={today} currency={currency} scale={currencyScale} locale={locale} issuesOnly /> : operationalScreen ? <OperationsWorkspace screen={screen.title as "Movements" | "Savings" | "Loans" | "Partners" | "Bills" | "Reconcile"} currency={currency} scale={currencyScale} locale={locale} timezone={timezone} dateFormat={dateFormat} range={range} /> : <div className={`board-grid ${screen.entryKind ? "board-grid-cashbook" : ""}`}>
       {screen.entryKind && <Card className="board-feature-card">
         <div className="card-heading"><div><h2 className="card-title">{screen.entryKind === "sale" ? "Add a sale" : "Add an expense"}</h2><p className="card-subtitle">Saved values update the cashbook and account balance.</p></div></div>
         <EntryForm kind={screen.entryKind} />
       </Card>}
       {screen.sections.map((section) => <Card className="board-section-card" key={section.title}>
         <div className="card-heading"><div><h2 className="card-title">{section.title}</h2><p className="card-subtitle">{section.detail}</p></div></div>
-        {section.kind === "table" && (screen.title === "Sales" || screen.title === "Expenses") ? (
+        {section.kind === "table" && screen.title === "Sales" && section.title.startsWith("Daily sales") ? <RecentEntryTable days={stats?.days} rangeStart={range.from} rangeEnd={range.toExclusive} loading={summary === undefined} formatDay={fmtDate} formatMoney={fmt} />
+        : section.kind === "table" && screen.title === "Expenses" && section.title.includes("category") ? <CashbookCategoryBreakdown entries={selectedEntries} loading={entries === undefined} formatMoney={fmt} capped={entries?.length === 500} />
+        : section.kind === "table" && (screen.title === "Sales" || screen.title === "Expenses") ? (
           hasRecordData ? <div className="table-scroll"><table className="data-table"><thead><tr><th>Date</th><th>Type</th><th>Category</th><th>Account</th><th>Amount</th><th>Status</th></tr></thead><tbody>{selectedEntries.map((entry) => <tr key={entry._id}><td>{fmtDate(entry.occurredOn)}</td><td>{entry.kind}</td><td>{entry.category}</td><td>{accountLabel(entry.account)}</td><td>{fmt(entry.amountUgx)}</td><td><span className={`status-chip ${entry.state === "posted" ? "status-ok" : "status-warning"}`}>{entry.state}</span></td></tr>)}</tbody></table></div> : <EmptyPanel message="No entries yet." next="Add an entry to populate this view. The design preview figures are examples, not live business data." />
         ) : section.kind === "table" && screen.title === "Daily Report" ? <DailyHistoryTable days={weekDays} today={today} loading={trailingSevenSummary === undefined} formatDay={fmtDate} formatMoney={fmt} />
           : section.kind === "table" && screen.title === "Monthly P&L" ? <MonthlyPnlTable days={yearDays} loading={yearSummary === undefined} locale={locale} formatMoney={fmt} />
+          : section.kind === "chart" && ((screen.title === "Sales" && section.title.includes("income type")) || (screen.title === "Expenses" && section.title.includes("category"))) ? <CashbookCategoryBreakdown entries={selectedEntries} loading={entries === undefined} formatMoney={fmt} capped={entries?.length === 500} />
           : section.kind === "chart" ? <ChartPanel summary={stats} title={section.title} message={section.detail} currency={currency} scale={currencyScale} locale={locale} />
           : section.kind === "workflow" ? <WorkflowPanel screen={screen} section={section.title} currency={currency} scale={currencyScale} businessDay={today} />
             : <EmptyPanel
@@ -382,6 +390,39 @@ export function BoardRoute({ route }: { route: string }) {
 
 function EmptyPanel({ message, next }: { message: string; next: string }) {
   return <div className="empty-state compact-empty"><strong>{message}</strong><span>{next}</span></div>;
+}
+
+type CashbookEntry = { _id: string; kind: "sale" | "expense"; amountUgx: number; occurredOn: string; account: "cash" | "mobile_money" | "unallocated"; category: string; note: string; state: "posted" | "void" };
+
+function CashbookCategoryBreakdown({ entries, loading, formatMoney, capped }: { entries: CashbookEntry[] | undefined; loading: boolean; formatMoney: (amount: number) => string; capped: boolean }) {
+  if (!entries) return <EmptyPanel message={loading ? "Loading category totals…" : "Category totals are not available."} next="Totals come from authorized saved cashbook records." />;
+  const posted = entries.filter(entry => entry.state === "posted");
+  const totals = new Map<string, number>();
+  for (const entry of posted) totals.set(entry.category, (totals.get(entry.category) ?? 0) + entry.amountUgx);
+  const rows = [...totals.entries()].sort((a, b) => b[1] - a[1]);
+  const total = rows.reduce((sum, [, amount]) => sum + amount, 0);
+  if (rows.length === 0) return <EmptyPanel message="No saved category activity yet." next="Category totals will appear as entries are recorded." />;
+  return <><div className="category-breakdown-list">{rows.map(([category, amount]) => <div className="category-breakdown-row" key={category}><span>{category}</span><span className="category-breakdown-track"><i style={{ width: `${total ? amount / total * 100 : 0}%` }} /></span><strong>{formatMoney(amount)}</strong><small>{total ? Math.round(amount / total * 100) : 0}%</small></div>)}</div>{capped && <p className="muted-note">Based on the latest 500 matching entries; narrow the period for complete category totals.</p>}</>;
+}
+
+function RecentEntryTable({ days, rangeStart, rangeEnd, loading, formatDay, formatMoney }: { days: DailyTotal[] | undefined; rangeStart: string; rangeEnd: string; loading: boolean; formatDay: (day: string) => string; formatMoney: (amount: number) => string }) {
+  if (!days) return <EmptyPanel message={loading ? "Loading daily activity…" : "Daily activity is not available."} next="Saved cashbook totals update here in real time." />;
+  const rangeEndDate = new Date(`${rangeEnd}T00:00:00.000Z`);
+  rangeEndDate.setUTCDate(rangeEndDate.getUTCDate() - 1);
+  const firstDate = new Date(`${rangeStart}T00:00:00.000Z`);
+  const span = Math.max(1, Math.floor((rangeEndDate.getTime() - firstDate.getTime()) / 86_400_000) + 1);
+  const rowCount = Math.min(14, span);
+  const dateKeys = Array.from({ length: rowCount }, (_, index) => {
+    const date = new Date(rangeEndDate);
+    date.setUTCDate(date.getUTCDate() - (rowCount - 1 - index));
+    return date.toISOString().slice(0, 10);
+  });
+  const byDate = new Map(days.map(day => [day.day, day]));
+  const rows = dateKeys.map(day => ({ day, salesUgx: byDate.get(day)?.salesUgx ?? 0, expensesUgx: byDate.get(day)?.expensesUgx ?? 0 }));
+  return <div className="table-scroll"><table className="data-table"><thead><tr><th>Date</th><th>Sales</th><th>Expenses</th><th>Net</th></tr></thead><tbody>{rows.map(row => {
+    const net = row.salesUgx - row.expensesUgx;
+    return <tr key={row.day}><td>{formatDay(row.day)}</td><td>{formatMoney(row.salesUgx)}</td><td>{formatMoney(row.expensesUgx)}</td><td>{formatMoney(net)}</td></tr>;
+  })}</tbody></table></div>;
 }
 
 type DailyTotal = { day: string; salesUgx: number; expensesUgx: number };
