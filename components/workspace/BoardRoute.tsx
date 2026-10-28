@@ -411,12 +411,12 @@ export function BoardRoute({ route }: { route: string }) {
       </Card>}
       {screen.sections.map((section) => <Card className="board-section-card" key={section.title}>
         <div className="card-heading"><div><h2 className="card-title">{section.title}</h2><p className="card-subtitle">{section.detail}</p></div>{section.kind === "table" && section.title === (entryKind === "sale" ? "Daily sales · last 14 days" : "Expenses by category") && entryKind && access?.access === "ready" && access.permissions.includes("data.export") && <EntryCsvExportControl businessId={access.businessId} kind={entryKind} from={range.from} toExclusive={range.toExclusive} currency={currency} scale={currencyScale} />}</div>
-        {section.kind === "table" && section.title === "Expenses by category" ? <CategoryBreakdown entries={selectedEntries} kind="expense" formatMoney={fmt} />
+        {section.kind === "table" && section.title === "Expenses by category" ? <CategoryBreakdown entries={selectedEntries} kind="expense" formatMoney={fmt} truncated={selectedEntries?.length === 500} />
         : section.kind === "table" && (screen.title === "Sales" || screen.title === "Expenses") ? (
           hasRecordData ? <div className="table-scroll"><table className="data-table"><thead><tr><th>Date</th><th>Type</th><th>Category</th><th>Account</th><th>Amount</th><th>Status</th><th>Actions</th></tr></thead><tbody>{selectedEntries.map((entry) => <tr key={entry._id}><td>{fmtDate(entry.occurredOn)}</td><td>{entry.kind}</td><td>{entry.category}</td><td>{accountLabel(entry.account)}</td><td>{fmt(entry.amountUgx)}</td><td><span className={`status-chip ${entry.state === "posted" ? "status-ok" : "status-warning"}`}>{entry.state}</span></td><td>{canVoidEntries && entry.state === "posted" && entry.canCorrect && <button className="button" type="button" onClick={() => void requestEntryCorrection(entry)}>Correct…</button>} {canVoidEntries && entry.state === "posted" && entry.canVoid && <button className="button" type="button" onClick={() => void requestEntryVoid(entry._id)}>Void…</button>}</td></tr>)}</tbody></table></div> : <EmptyPanel message="No entries yet." next="Add an entry to populate this view. The design preview figures are examples, not live business data." />
         ) : section.kind === "table" && screen.title === "Daily Report" ? <DailyHistoryTable days={weekDays} today={today} loading={trailingSevenSummary === undefined} formatDay={fmtDate} formatMoney={fmt} />
           : section.kind === "table" && screen.title === "Monthly P&L" ? <MonthlyPnlTable days={yearDays} loading={yearSummary === undefined} locale={locale} formatMoney={fmt} />
-          : section.kind === "chart" && section.title === "Sales by income type" ? <CategoryBreakdown entries={selectedEntries} kind="sale" formatMoney={fmt} />
+          : section.kind === "chart" && section.title === "Sales by income type" ? <CategoryBreakdown entries={selectedEntries} kind="sale" formatMoney={fmt} truncated={selectedEntries?.length === 500} />
           : section.kind === "chart" ? <ChartPanel summary={stats} title={section.title} message={section.detail} currency={currency} scale={currencyScale} locale={locale} />
           : section.kind === "workflow" ? <WorkflowPanel screen={screen} section={section.title} currency={currency} scale={currencyScale} businessDay={today} />
             : <EmptyPanel
@@ -523,14 +523,17 @@ function MonthlyPnlTable({ days, loading, locale, formatMoney }: { days: DailyTo
   return <div className="table-scroll"><table className="data-table"><thead><tr><th>Month</th><th>Sales</th><th>Total expenses</th><th>Cashbook net</th></tr></thead><tbody>{rows.map(([month, values]) => <tr key={month}><td>{monthLabel(month)}</td><td>{formatMoney(values.sales)}</td><td>{formatMoney(values.expenses)}</td><td>{formatMoney(values.sales - values.expenses)}</td></tr>)}</tbody><tfoot><tr><th>Year to date</th><th>{formatMoney(totals.sales)}</th><th>{formatMoney(totals.expenses)}</th><th>{formatMoney(totals.sales - totals.expenses)}</th></tr></tfoot></table></div>;
 }
 
-function CategoryBreakdown({ entries, kind, formatMoney }: { entries: { kind: "sale" | "expense"; category: string; amountUgx: number; state: "posted" | "void" }[] | undefined; kind: "sale" | "expense"; formatMoney: (amount: number) => string }) {
+function CategoryBreakdown({ entries, kind, formatMoney, truncated = false }: { entries: { kind: "sale" | "expense"; category: string; amountUgx: number; state: "posted" | "void" }[] | undefined; kind: "sale" | "expense"; formatMoney: (amount: number) => string; truncated?: boolean }) {
   if (!entries) return <EmptyPanel message="Loading saved category totals…" next="Only posted records in this workspace are included." />;
   const totals = new Map<string, number>();
   for (const entry of entries) if (entry.kind === kind && entry.state === "posted") totals.set(entry.category, (totals.get(entry.category) ?? 0) + entry.amountUgx);
   const rows = [...totals].sort((a, b) => b[1] - a[1]);
   const total = rows.reduce((sum, [, amount]) => sum + amount, 0);
-  if (!rows.length) return <EmptyPanel message="No saved category activity in this period." next="Category totals will appear when posted entries are recorded." />;
-  return <div className="category-breakdown-list">{rows.map(([category, amount]) => <div className="category-breakdown-row" key={category}><span>{category}</span><span className="category-breakdown-track"><i style={{ width: `${Math.max(1, amount / total * 100)}%` }} /></span><strong>{formatMoney(amount)}</strong><small>{Math.round(amount / total * 100)}%</small></div>)}</div>;
+  return <>
+    {truncated && <p className="notice-banner notice-warning" role="status">Showing category totals from the latest 500 matching entries only. Older entries and categories may be missing; narrow the period to see a complete view.</p>}
+    {!rows.length ? <EmptyPanel message="No saved category activity in the loaded records." next="Category totals will appear when posted entries are recorded." />
+      : <div className="category-breakdown-list">{rows.map(([category, amount]) => <div className="category-breakdown-row" key={category}><span>{category}</span><span className="category-breakdown-track"><i style={{ width: `${Math.max(1, amount / total * 100)}%` }} /></span><strong>{formatMoney(amount)}</strong><small>{Math.round(amount / total * 100)}%</small></div>)}</div>}
+  </>;
 }
 
 function ChartPanel({ summary, title, message, currency, scale, locale }: { summary: { days: { day: string; salesUgx: number; expensesUgx: number }[] } | null; title: string; message: string; currency: string; scale: number; locale: string }) {
