@@ -50,8 +50,8 @@ export function readChangelog(): ChangelogEntry[] {
 }
 
 export function readChangelogSummary() {
-  const source = readChangelogSource();
-  const contentHash = createHash("sha256").update(source).digest("hex");
   const entries = readChangelog();
-  return { contentHash, totalChanges: entries.length };
+  const entryIds = entries.map(entry => createHash("sha256").update(JSON.stringify(entry)).digest("hex"));
+  const contentHash = createHash("sha256").update(JSON.stringify(entryIds)).digest("hex");
+  return { contentHash, entryIds, totalChanges: entryIds.length };
 }
