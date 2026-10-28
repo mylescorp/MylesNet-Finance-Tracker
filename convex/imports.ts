@@ -105,6 +105,8 @@ export const beginBatch = mutation({
         await ctx.db.insert("auditEvents", { businessId: business._id, actorId: userId, action: "import.resumed", entityType: "import", entityId: duplicate._id, occurredAt: Date.now(), summary: `Resumed import ${duplicate.fileName} from row ${duplicate.progressRows + 1}.` });
         return { batchId: duplicate._id, status: "in_progress" as const, progressRows: duplicate.progressRows, importedCount: duplicate.importedCount, skippedCount: duplicate.skippedCount };
       }
+      if (duplicate.status === "reversing") throw new ConvexError("This import is currently being reversed. Resume or review it in import history before starting another import.");
+      if (duplicate.status === "reversed") throw new ConvexError("This source file was already reversed. Review the import history before importing changed data.");
       return { batchId: duplicate._id, status: duplicate.status, progressRows: duplicate.progressRows, importedCount: duplicate.importedCount, skippedCount: duplicate.skippedCount };
     }
     const { reportSummary, ...batchArgs } = args;
@@ -123,6 +125,7 @@ export const completeBatch = mutation({
     const batch = await ctx.db.get("importBatches", args.batchId);
     if (!batch || batch.businessId !== business._id) throw new ConvexError("Import batch not found.");
     if (batch.status === "completed") return null;
+    if (batch.status !== "in_progress") throw new ConvexError("Only an active import can be completed.");
     if (batch.progressRows !== batch.totalRows) throw new ConvexError("Import still has rows to process.");
     await ctx.db.patch("importBatches", batch._id, { status: "completed" });
     await ctx.db.insert("auditEvents", { businessId: business._id, actorId: userId, action: "import.completed", entityType: "import", entityId: batch._id, occurredAt: Date.now(), summary: `Imported ${batch.importedCount} rows from ${batch.fileName}; ${batch.skippedCount} duplicates skipped.` });
@@ -143,12 +146,84 @@ export const cancelBatch = mutation({
   },
 });
 
+export const startBatchReversal = mutation({
+  args: { batchId: v.id("importBatches"), reason: v.string() },
+  returns: v.object({ status: v.union(v.literal("reversing"), v.literal("reversed")), rollbackProgressRows: v.number(), cursor: v.union(v.string(), v.null()) }),
+  handler: async (ctx, args) => {
+    const { userId, business } = await ownerContext(ctx);
+    const batch = await ctx.db.get("importBatches", args.batchId);
+    if (!batch || batch.businessId !== business._id) throw new ConvexError("Import batch not found.");
+    if (batch.status === "reversed") return { status: "reversed" as const, rollbackProgressRows: batch.rollbackProgressRows ?? 0, cursor: null };
+    if (batch.status === "reversing") return { status: "reversing" as const, rollbackProgressRows: batch.rollbackProgressRows ?? 0, cursor: batch.rollbackCursor ?? null };
+    if (batch.status !== "completed" && batch.status !== "cancelled") throw new ConvexError("Cancel an in-progress import before reversing its saved rows.");
+    if (batch.importedCount <= 0 || batch.progressRows <= 0) throw new ConvexError("This batch has no imported ledger rows to reverse.");
+    const reason = args.reason.trim();
+    if (reason.length < 5 || reason.length > 300) throw new ConvexError("Enter a reversal reason between 5 and 300 characters.");
+    const now = Date.now();
+    await ctx.db.patch("importBatches", batch._id, { status: "reversing", rollbackCursor: undefined, rollbackProgressRows: 0, rollbackReason: reason, rollbackStartedAt: now, rollbackCompletedAt: undefined });
+    await ctx.db.insert("auditEvents", { businessId: business._id, actorId: userId, action: "import.reversal_started", entityType: "import", entityId: batch._id, occurredAt: now, summary: `Started reversing ${batch.fileName}: ${reason}` });
+    return { status: "reversing" as const, rollbackProgressRows: 0, cursor: null };
+  },
+});
+
+export const reverseBatchChunk = mutation({
+  args: { batchId: v.id("importBatches"), cursor: v.union(v.string(), v.null()) },
+  returns: v.object({ status: v.union(v.literal("reversing"), v.literal("reversed")), rollbackProgressRows: v.number(), cursor: v.union(v.string(), v.null()), processedRows: v.number() }),
+  handler: async (ctx, args) => {
+    const { userId, business } = await ownerContext(ctx);
+    const batch = await ctx.db.get("importBatches", args.batchId);
+    if (!batch || batch.businessId !== business._id) throw new ConvexError("Import batch not found.");
+    if (batch.status === "reversed") return { status: "reversed" as const, rollbackProgressRows: batch.rollbackProgressRows ?? 0, cursor: null, processedRows: 0 };
+    if (batch.status !== "reversing") throw new ConvexError("Start the import reversal before processing its rows.");
+    if (args.cursor !== (batch.rollbackCursor ?? null)) throw new ConvexError("The reversal cursor is stale. Reload import history and continue from its current progress.");
+    const prefix = `csv:${batch.sourceHash}:`;
+    const result = await ctx.db.query("entries")
+      .withIndex("by_business_and_idempotency", q => q.eq("businessId", business._id).gte("idempotencyKey", prefix).lt("idempotencyKey", `${prefix}\uffff`))
+      .order("asc")
+      .paginate({ numItems: 25, cursor: args.cursor });
+    const reason = batch.rollbackReason ?? "Import batch reversal";
+    const now = Date.now();
+    let reversedNow = 0;
+    for (const entry of result.page) {
+      if (!entry.idempotencyKey.startsWith(prefix) || entry.source !== "import") throw new ConvexError("The batch contains a row that is not a matching imported cashbook entry.");
+      if (entry.state === "void") continue;
+      if (entry.operationSource) throw new ConvexError("An imported row is linked to an operation and cannot be safely reversed with this batch.");
+      const day = await ctx.db.query("dailyTotals").withIndex("by_business_and_day", q => q.eq("businessId", business._id).eq("day", entry.occurredOn)).unique();
+      if (!day) throw new ConvexError(`Daily totals for ${entry.occurredOn} are missing; reconcile them before reversing this import.`);
+      const isSale = entry.kind === "sale";
+      if (isSale && (day.salesUgx < entry.amountUgx || day.saleCount < 1)) throw new ConvexError(`Daily sales totals for ${entry.occurredOn} need reconciliation before reversing this import.`);
+      if (!isSale && (day.expensesUgx < entry.amountUgx || day.expenseCount < 1)) throw new ConvexError(`Daily expense totals for ${entry.occurredOn} need reconciliation before reversing this import.`);
+      await ctx.db.patch("dailyTotals", day._id, {
+        salesUgx: isSale ? safeAdd(day.salesUgx, -entry.amountUgx, "Daily sales") : day.salesUgx,
+        expensesUgx: isSale ? day.expensesUgx : safeAdd(day.expensesUgx, -entry.amountUgx, "Daily expenses"),
+        saleCount: isSale ? safeAdd(day.saleCount, -1, "Daily sale count") : day.saleCount,
+        expenseCount: isSale ? day.expenseCount : safeAdd(day.expenseCount, -1, "Daily expense count"),
+      });
+      if (entry.account === "cash" || entry.account === "mobile_money") {
+        const accountName: "cash" | "mobile_money" = entry.account;
+        const balance = await ctx.db.query("accountBalances").withIndex("by_business_and_account", q => q.eq("businessId", business._id).eq("account", accountName)).unique();
+        const change = isSale ? -entry.amountUgx : entry.amountUgx;
+        if (balance) await ctx.db.patch("accountBalances", balance._id, { balanceUgx: safeAdd(balance.balanceUgx, change, "Account balance"), updatedAt: now });
+        else await ctx.db.insert("accountBalances", { businessId: business._id, account: accountName, balanceUgx: change, updatedAt: now });
+      }
+      await ctx.db.patch("entries", entry._id, { state: "void", voidedAt: now, voidedBy: userId, voidReason: reason });
+      await ctx.db.insert("auditEvents", { businessId: business._id, actorId: userId, action: "entry.import_reversed", entityType: "entry", entityId: entry._id, occurredAt: now, summary: `Reversed imported ${entry.kind} · ${entry.occurredOn} · ${entry.category}.`, details: JSON.stringify({ batchId: batch._id, reason, amountUgx: entry.amountUgx, account: entry.account }) });
+      reversedNow++;
+    }
+    const status = result.isDone ? "reversed" as const : "reversing" as const;
+    const rollbackProgressRows = safeAdd(batch.rollbackProgressRows ?? 0, reversedNow, "Import reversal progress");
+    await ctx.db.patch("importBatches", batch._id, { status, rollbackProgressRows, rollbackCursor: result.isDone ? undefined : result.continueCursor, rollbackCompletedAt: result.isDone ? now : undefined });
+    if (result.isDone) await ctx.db.insert("auditEvents", { businessId: business._id, actorId: userId, action: "import.reversed", entityType: "import", entityId: batch._id, occurredAt: now, summary: `Reversed ${rollbackProgressRows} imported ledger entries from ${batch.fileName}.`, details: JSON.stringify({ reason, importedCount: batch.importedCount, progressRows: batch.progressRows }) });
+    return { status, rollbackProgressRows, cursor: result.isDone ? null : result.continueCursor, processedRows: result.page.length };
+  },
+});
+
 export const history = query({
   args: { paginationOpts: paginationOptsValidator },
   handler: async (ctx, args) => {
     const { business } = await ownerContext(ctx);
     const result = await ctx.db.query("importBatches").withIndex("by_business_and_created", q => q.eq("businessId", business._id)).order("desc").paginate(args.paginationOpts);
-    return { ...result, page: result.page.map(({ _id, fileName, importType, totalRows, importedCount, skippedCount, progressRows, status, createdAt }) => ({ _id, fileName, importType, totalRows, importedCount, skippedCount, progressRows, status, createdAt })) };
+    return { ...result, page: result.page.map(({ _id, fileName, importType, totalRows, importedCount, skippedCount, progressRows, status, rollbackProgressRows, createdAt }) => ({ _id, fileName, importType, totalRows, importedCount, skippedCount, progressRows, status, rollbackProgressRows: rollbackProgressRows ?? 0, createdAt })) };
   },
 });
 

@@ -16,6 +16,8 @@ export function CsvImportPanel() {
   const beginBatch = useMutation(api.imports.beginBatch);
   const completeBatch = useMutation(api.imports.completeBatch);
   const cancelBatch = useMutation(api.imports.cancelBatch);
+  const startBatchReversal = useMutation(api.imports.startBatchReversal);
+  const reverseBatchChunk = useMutation(api.imports.reverseBatchChunk);
   const [fileName, setFileName] = useState("");
   const [fileText, setFileText] = useState("");
   const [csvRows, setCsvRows] = useState<CsvRow[]>([]);
@@ -107,6 +109,29 @@ export function CsvImportPanel() {
     finally { setBusy(false); }
   }
 
+  async function runBatchReversal(batchId: Id<"importBatches">, currentStatus: string) {
+    const reason = currentStatus === "reversing"
+      ? "Resume previously approved import reversal"
+      : window.prompt("Why are you reversing this import? This will void its saved entries and update balances.");
+    if (reason === null) return;
+    setBusy(true); setError(""); setMessage("");
+    try {
+      const state = await startBatchReversal({ batchId, reason });
+      let cursor = state.cursor;
+      let progress = state.rollbackProgressRows;
+      let status = state.status;
+      setMessage(`Reversal in progress: ${progress} entries reversed…`);
+      while (status === "reversing") {
+        const chunk = await reverseBatchChunk({ batchId, cursor });
+        cursor = chunk.cursor;
+        progress = chunk.rollbackProgressRows;
+        status = chunk.status;
+        setMessage(status === "reversed" ? `Reversal complete. ${progress} imported entries were voided and their totals adjusted.` : `Reversal in progress: ${progress} entries reversed…`);
+      }
+    } catch (e) { setError(e instanceof Error ? e.message : "The import reversal failed."); }
+    finally { setBusy(false); }
+  }
+
   function select(label: string, field: keyof Mapping, optional = false) {
     return <label className="field" key={field}><span>{label}</span><select value={mapping[field]} onChange={e => setMapping(current => ({ ...current, [field]: Number(e.target.value) }))}><option value={-1}>{optional ? "Not mapped" : "Choose a column"}</option>{headers.map((header, index) => <option value={index} key={`${header}-${index}`}>{header || `Column ${index + 1}`}</option>)}</select></label>;
   }
@@ -140,7 +165,7 @@ export function CsvImportPanel() {
     {error && <p className="form-feedback form-error" role="alert">{error}</p>}{message && <p className="form-feedback form-success" role="status">{message}</p>}
     <div className="form-actions"><button type="button" className="button button-accent" disabled={busy || !fileName || !settings || settings.access !== "ready" || (looksCentipid && !report)} onClick={() => void runImport()}>{busy ? "Importing…" : "Import rows"}</button>{settings?.access === "ready" && <span className="muted-note">All amounts are stored as safe integers in {settings.currency}.</span>}</div>
     <div className="card-heading" style={{ marginTop: 18 }}><div><h3 className="card-title">Import history</h3><p className="card-subtitle">Owner-visible import batches, loaded 20 at a time.</p></div></div>
-    {!history.results.length ? <p className="muted-note">No imports yet.</p> : <div className="table-scroll"><table className="data-table"><thead><tr><th>File</th><th>Type</th><th>Progress</th><th>Imported</th><th>Skipped</th><th>When</th><th>Report data</th><th>Action</th></tr></thead><tbody>{history.results.map(item => <tr key={item._id}><td>{item.fileName}</td><td>{item.importType === "centipid_analytics" ? "Centipid analytics" : "Cashbook"}</td><td>{item.status === "completed" ? "Completed" : item.status === "cancelled" ? "Cancelled" : `${item.progressRows} / ${item.totalRows}`}</td><td>{item.importedCount}</td><td>{item.skippedCount}</td><td>{new Date(item.createdAt).toLocaleString()}</td><td>{item.importType === "centipid_analytics" ? <button type="button" className="button" onClick={() => setReportBatchId(current => current === item._id ? null : item._id)}>{reportBatchId === item._id ? "Hide report" : "View report"}</button> : "—"}</td><td>{item.status === "in_progress" ? <button type="button" className="button" onClick={() => { if (window.confirm("Cancel this import? Rows already imported remain saved.")) void cancelBatch({ batchId: item._id }); }}>Cancel import</button> : "—"}</td></tr>)}</tbody></table></div>}{history.status === "CanLoadMore" && <button type="button" className="button" onClick={() => history.loadMore(20)}>Load older imports</button>}
+    {!history.results.length ? <p className="muted-note">No imports yet.</p> : <div className="table-scroll"><table className="data-table"><thead><tr><th>File</th><th>Type</th><th>Progress</th><th>Imported</th><th>Skipped</th><th>When</th><th>Report data</th><th>Action</th></tr></thead><tbody>{history.results.map(item => <tr key={item._id}><td>{item.fileName}</td><td>{item.importType === "centipid_analytics" ? "Centipid analytics" : "Cashbook"}</td><td>{item.status === "completed" ? "Completed" : item.status === "cancelled" ? "Cancelled" : item.status === "reversing" ? `Reversing · ${item.rollbackProgressRows} entries` : item.status === "reversed" ? `Reversed · ${item.rollbackProgressRows} entries` : `${item.progressRows} / ${item.totalRows}`}</td><td>{item.importedCount}</td><td>{item.skippedCount}</td><td>{new Date(item.createdAt).toLocaleString()}</td><td>{item.importType === "centipid_analytics" ? <button type="button" className="button" onClick={() => setReportBatchId(current => current === item._id ? null : item._id)}>{reportBatchId === item._id ? "Hide report" : "View report"}</button> : "—"}</td><td>{item.status === "in_progress" ? <button type="button" className="button" onClick={() => { if (window.confirm("Cancel this import? Rows already imported remain saved.")) void cancelBatch({ batchId: item._id }); }}>Cancel import</button> : item.importedCount > 0 && (item.status === "completed" || item.status === "cancelled" || item.status === "reversing") ? <button type="button" className="button" disabled={busy} onClick={() => void runBatchReversal(item._id, item.status)}>{item.status === "reversing" ? "Continue reversal" : "Reverse import"}</button> : "—"}</td></tr>)}</tbody></table></div>}{history.status === "CanLoadMore" && <button type="button" className="button" onClick={() => history.loadMore(20)}>Load older imports</button>}
     {reportBatchId && <div className="notice-banner notice-info"><strong>Retained Centipid report</strong>{reportDetails === undefined ? <p>Loading report data…</p> : reportDetails ? <><button type="button" className="button" onClick={downloadReport}>Download report JSON</button><pre style={{ maxHeight: 360, overflow: "auto", whiteSpace: "pre-wrap" }}>{JSON.stringify(JSON.parse(reportDetails), null, 2)}</pre></> : <p>Report details are not available.</p>}</div>}
   </section>;
 }
