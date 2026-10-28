@@ -14,7 +14,7 @@ function money(amountMinor: number, scale: number, locale: string) {
 export function GlobalSearch() {
   const [term, setTerm] = useState("");
   const [open, setOpen] = useState(false);
-  const settings = useQuery(api.settings.overview, {});
+  const settings = useQuery(api.settings.runtimeContext, {});
   const results = useQuery(api.workspace.searchEntries, term.trim().length >= 2 ? { term: term.trim(), limit: 8 } : "skip");
   const showResults = open && term.trim().length >= 2;
 

@@ -13,12 +13,11 @@ function businessDate(timezone: string) {
 export function EntryForm({ kind }: { kind: EntryKind }) {
   const createEntry = useMutation(api.workspace.createEntry);
   const access = useQuery(api.workspace.currentAccess, {});
-  const settings = useQuery(api.workspace.businessSettings, {});
-  const preferences = useQuery(api.settings.overview, {});
-  const timezone = settings?.access === "ready" ? settings.timezone : "Africa/Kampala";
-  const currency = settings?.access === "ready" ? settings.currency : "UGX";
-  const currencyScale = 10 ** (preferences?.access === "ready" ? (preferences.currencyMinorDigits ?? 0) : 0);
-  const categories = preferences?.access === "ready" ? (kind === "sale" ? preferences.incomeCategories : preferences.expenseCategories) : [kind === "sale" ? "Product sales" : "Other expense"];
+  const context = useQuery(api.settings.runtimeContext, {});
+  const timezone = context?.access === "ready" ? context.timezone : "Africa/Kampala";
+  const currency = context?.access === "ready" ? context.currency : "UGX";
+  const currencyScale = 10 ** (context?.access === "ready" ? context.currencyMinorDigits : 0);
+  const categories = context?.access === "ready" ? (kind === "sale" ? context.incomeCategories : context.expenseCategories) : [kind === "sale" ? "Product sales" : "Other expense"];
   const [account, setAccount] = useState<"cash" | "mobile_money">("cash");
   const [occurredOn, setOccurredOn] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);

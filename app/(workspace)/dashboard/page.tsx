@@ -39,8 +39,8 @@ export default function DashboardPage() {
   const [customFrom, setCustomFrom] = useState(todayKey("Africa/Kampala"));
   const [customTo, setCustomTo] = useState(todayKey("Africa/Kampala"));
   const [shareFeedback, setShareFeedback] = useState("");
-  const settings = useQuery(api.workspace.businessSettings, {});
-  const preferences = useQuery(api.settings.overview, {});
+  const settings = useQuery(api.settings.runtimeContext, {});
+  const preferences = settings;
   const timezone = settings?.access === "ready" ? settings.timezone : "Africa/Kampala";
   const weekStartsOn = settings?.access === "ready" ? settings.weekStartsOn : "monday";
   const currency = settings?.access === "ready" ? settings.currency : "UGX";

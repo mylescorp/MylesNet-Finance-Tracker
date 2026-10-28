@@ -35,7 +35,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const { signOut } = useAuthActions();
   const access = useQuery(api.workspace.currentAccess, {});
-  const preferences = useQuery(api.settings.overview, {});
+  const context = useQuery(api.settings.runtimeContext, {});
   const [mobileOpen, setMobileOpen] = useState(false);
   const accountLabel = access?.access === "ready" ? access.businessName : "My account";
   const permissions = access?.access === "ready" ? access.permissions ?? [] : null;
@@ -79,7 +79,7 @@ export function AppShell({ children }: { children: ReactNode }) {
       </nav>
       {access?.access === "pending" && <div className="access-pending" role="status"><strong>Workspace access pending</strong><span>Your account is signed in but has no active membership. A workspace owner can approve it or send you an invitation.</span></div>}
       <main className="page-content">{children}</main>
-      <footer className="app-footer"><span>MylesNet Finance Tracker · {preferences?.access === "ready" ? preferences.currency : "UGX"}</span><span>Workspace data is protected by your assigned role.</span></footer>
+      <footer className="app-footer"><span>MylesNet Finance Tracker · {context?.access === "ready" ? context.currency : "UGX"}</span><span>Workspace data is protected by your assigned role.</span></footer>
     </div>
   );
 }

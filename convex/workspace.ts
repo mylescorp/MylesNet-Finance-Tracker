@@ -295,7 +295,7 @@ export const dashboardSummary = query({
     }
     // Partner statement data is not yet linked to partner-specific ledger rows.
     // Hide business-wide finance totals until that scope is implemented.
-    if (!(await hasPermission(ctx, current.membership, "dashboard.view")) || !(await hasPermission(ctx, current.membership, "reports.view"))) return { access: "restricted" as const };
+    if (!(await hasPermission(ctx, current.membership, "dashboard.view")) && !(await hasPermission(ctx, current.membership, "reports.view"))) return { access: "restricted" as const };
     const days = await ctx.db
       .query("dailyTotals")
       .withIndex("by_business_and_day", (q) =>

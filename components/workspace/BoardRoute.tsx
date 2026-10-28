@@ -244,9 +244,9 @@ export function BoardRoute({ route }: { route: string }) {
   const [period, setPeriod] = useState<(typeof periods)[number]>("Month");
   const [entryLimit, setEntryLimit] = useState(100);
   const [shareFeedback, setShareFeedback] = useState("");
-  const settings = useQuery(api.workspace.businessSettings, {});
+  const settings = useQuery(api.settings.runtimeContext, {});
   const access = useQuery(api.workspace.currentAccess, {});
-  const preferences = useQuery(api.settings.overview, {});
+  const preferences = settings;
   const timezone = settings?.access === "ready" ? settings.timezone : "Africa/Kampala";
   const weekStartsOn = settings?.access === "ready" ? settings.weekStartsOn : "monday";
   const currency = preferences?.access === "ready" ? preferences.currency : "UGX";
@@ -353,7 +353,8 @@ export function BoardRoute({ route }: { route: string }) {
       </Card>)}
       {screen.title === "Sales" || screen.title === "Expenses" ? <Card className="board-section-card">
         <div className="card-heading"><div><h2 className="card-title">Recent cashbook entries</h2><p className="card-subtitle">Latest saved records in this workspace.</p></div></div>
-        {hasRecordData ? <><div className="entry-list">{selectedEntries.map((entry) => <div className="entry-row" key={entry._id}><div className="entry-main"><span className="entry-icon">{entry.kind === "sale" ? <ArrowUpRight size={15} /> : <ArrowDownRight size={15} />}</span><div><div className="entry-description">{entry.note || entry.category}</div><div className="entry-meta">{fmtDate(entry.occurredOn)} · {entry.category} · {entry.account === "cash" ? "Cash" : "Mobile money"}</div></div></div><span className={`entry-amount ${entry.kind === "sale" ? "amount-positive" : "amount-negative"}`}>{entry.kind === "sale" ? "+" : "−"}{fmt(entry.amountUgx)}</span></div>)}</div>{entries?.length === entryLimit && entryLimit < 500 && <button className="button" type="button" onClick={() => setEntryLimit(limit => Math.min(limit + 100, 500))}>Load more entries</button>}{entries?.length === 500 && <p className="muted-note">Showing the latest 500 matching records. Narrow the date range to review older entries.</p>}</> : <EmptyPanel message="No entries have been recorded." next="Use the form to save the first entry." />}
+        {hasRecordData ? <div className="entry-list">{selectedEntries.map((entry) => <div className="entry-row" key={entry._id}><div className="entry-main"><span className="entry-icon">{entry.kind === "sale" ? <ArrowUpRight size={15} /> : <ArrowDownRight size={15} />}</span><div><div className="entry-description">{entry.note || entry.category}</div><div className="entry-meta">{fmtDate(entry.occurredOn)} · {entry.category} · {entry.account === "cash" ? "Cash" : "Mobile money"}</div></div></div><span className={`entry-amount ${entry.kind === "sale" ? "amount-positive" : "amount-negative"}`}>{entry.kind === "sale" ? "+" : "−"}{fmt(entry.amountUgx)}</span></div>)}</div> : <EmptyPanel message="No posted entries in this batch." next="Voided entries remain available in the audit history." />}
+        {entries?.length === entryLimit && entryLimit < 500 && <button className="button" type="button" onClick={() => setEntryLimit(limit => Math.min(limit + 100, 500))}>Load more entries</button>}{entries?.length === 500 && <p className="muted-note">Showing the latest 500 matching records. Narrow the date range to review older entries.</p>}
       </Card> : null}
     </div>
     <div className="board-source-note">{screen.source} · Values shown here come from authorized Convex records. Sample values from the design references are not loaded into the workspace.</div>

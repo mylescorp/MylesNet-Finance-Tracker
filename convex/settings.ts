@@ -90,6 +90,35 @@ export const overview = query({
   },
 });
 
+// Operational display context used by active finance screens. It deliberately
+// excludes balances, targets, review rules, and administrative preferences.
+export const runtimeContext = query({
+  args: {},
+  returns: v.union(
+    v.object({ access: v.literal("pending") }),
+    v.object({
+      access: v.literal("ready"), businessName: v.string(), countryCode: v.string(), currency: v.string(),
+      currencyMinorDigits: v.number(), timezone: v.string(), weekStartsOn: v.union(v.literal("monday"), v.literal("sunday")),
+      locale: v.string(), dateFormat: v.union(v.literal("DD/MM/YYYY"), v.literal("MM/DD/YYYY"), v.literal("YYYY-MM-DD")),
+      fiscalYearStartMonth: v.number(), incomeCategories: v.array(v.string()), expenseCategories: v.array(v.string()),
+    }),
+  ),
+  handler: async (ctx) => {
+    const current = await activeWorkspace(ctx);
+    if (!current) return { access: "pending" as const };
+    const prefs = await ctx.db.query("workspacePreferences").withIndex("by_business", q => q.eq("businessId", current.business._id)).unique();
+    return {
+      access: "ready" as const, businessName: current.business.name, countryCode: current.business.countryCode ?? "UG",
+      currency: current.business.currency, currencyMinorDigits: currencyMinorDigits(current.business.currency),
+      timezone: current.business.timezone, weekStartsOn: current.business.weekStartsOn ?? "monday",
+      locale: prefs?.locale ?? "en-UG", dateFormat: prefs?.dateFormat ?? "DD/MM/YYYY",
+      fiscalYearStartMonth: prefs?.fiscalYearStartMonth ?? 1,
+      incomeCategories: prefs?.incomeCategories ?? defaults().incomeCategories,
+      expenseCategories: prefs?.expenseCategories ?? defaults().expenseCategories,
+    };
+  },
+});
+
 export const update = mutation({
   args: {
     expectedSettingsUpdatedAt: v.number(),
@@ -436,10 +465,11 @@ export const acceptInvite = mutation({
     if (invite.email.toLowerCase() !== user.email.toLowerCase()) throw new Error("Sign in using the invited email address.");
     const existing = await ctx.db.query("memberships").withIndex("by_business_and_user", q => q.eq("businessId", invite.businessId).eq("userId", userId)).unique();
     if (existing?.active) throw new Error("You already have access to this workspace.");
-    const role = invite.roleId ? await ctx.db.get("workspaceRoles", invite.roleId) : null;
+    const templates = invite.roleId ? [] : await ctx.db.query("workspaceRoles").withIndex("by_business", q => q.eq("businessId", invite.businessId)).take(100);
+    const role = invite.roleId ? await ctx.db.get("workspaceRoles", invite.roleId) : templates.find(r => r.builtIn === invite.role) ?? null;
     if (invite.roleId && (!role || !role.active || role.businessId !== invite.businessId)) throw new Error("This invitation role is no longer available. Ask the workspace owner for a new invitation.");
     const now = Date.now();
-    if (existing) await ctx.db.patch("memberships", existing._id, { active: true, role: role?.name ?? invite.role, ...(role ? { roleId: role._id } : {}) });
+    if (existing) await ctx.db.patch("memberships", existing._id, { active: true, role: role?.name ?? invite.role, roleId: role?._id });
     else await ctx.db.insert("memberships", { businessId: invite.businessId, userId, role: role?.name ?? invite.role, ...(role ? { roleId: role._id } : {}), active: true, createdAt: now });
     await ctx.db.patch("invitations", invite._id, { active: false, acceptedAt: Date.now() });
     await ctx.db.insert("auditEvents", { businessId: invite.businessId, actorId: userId, action: "invitation.accepted", entityType: "invitation", entityId: invite._id, occurredAt: Date.now(), summary: `${user.email} accepted a workspace invitation.` });
