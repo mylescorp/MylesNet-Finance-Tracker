@@ -360,7 +360,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .dashboard-welcome h1 { margin:12px 0 0; font-family:var(--mn-type-heading-family); font-size:clamp(29px,3vw,42px); font-weight:var(--mn-type-heading-weight); line-height:1.1; letter-spacing:-.025em; }
 .dashboard-welcome h1 span { color:var(--mn-accent); font-family:var(--mn-font-serif); font-weight:400; }
 .dashboard-welcome-subtitle { margin:10px 0 0; color:var(--mn-muted); line-height:1.5; }
-.dashboard-daily-quote { display:flex; align-items:center; gap:8px; margin:18px 0 0; color:var(--mn-muted); font-family:var(--mn-type-serif-italic-family); font-size:var(--mn-type-serif-italic-size); font-weight:var(--mn-type-serif-italic-weight); line-height:var(--mn-type-serif-italic-line); font-style:italic; }
+.dashboard-daily-quote { display:flex; align-items:center; gap:8px; margin:18px 0 0; color:var(--mn-muted); font-family:Georgia, "Times New Roman", serif; font-size:16px; font-weight:400; line-height:1.45; font-style:italic; }
 .dashboard-daily-quote span { color:var(--mn-accent); font-family:var(--mn-font-sans); font-style:normal; }
 .dashboard-welcome-period { position:absolute; top:22px; right:24px; }
 .dashboard-welcome-mark { width:190px; height:72px; display:flex; flex:none; align-items:flex-end; justify-content:space-between; gap:9px; padding:0 2px 7px; border-bottom:1px solid var(--mn-line-strong); opacity:.72; }
