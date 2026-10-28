@@ -20,7 +20,7 @@ This plan tracks every gap found in the production-readiness audit. Financial re
 - [x] Add paginated member, invitation, and audit history; maintain revocation as an auditable inactive state. Owner access screens page members, all invitation outcomes, and audit events; invitation revocation records a timestamp.
 
 ### B. Cashbook and account lifecycle
-- [ ] Add safe correction and reversal screens for sales and expenses; retain originals and reconcile account balance and daily aggregates.
+- [ ] Add safe correction and reversal screens for sales and expenses; retain originals and reconcile account balance and daily aggregates. Owner-only correction of posted manual rows now voids the original, links a replacement, adjusts account/day totals atomically, and records the reason and before/after values; imported rows and generated operational expenses still require their source-specific correction path.
 - [ ] Add linked reversal workflows for movement fees, bill payments, loan interest, and other generated entries.
 - [ ] Add account CRUD (create, rename/update, archive) with safeguards against removing accounts referenced by financial history.
 - [ ] Preserve owner-only balance adjustments with immutable audit history and corrected same-accounting-period behavior.
@@ -72,6 +72,7 @@ This plan tracks every gap found in the production-readiness audit. Financial re
 - Reconciliation count corrections now preserve the original record as superseded and create a new immutable count with the updated book comparison, reason, idempotency key, and audit events. Corrections are limited to the current business day because the ledger does not reconstruct historical balances.
 - Owners can reopen an explained reconciliation with a reason; the resolution fields are cleared while the earlier explanation and reopen reason remain in the audit history.
 - Owner-only cashbook entry void controls are available on Sales and Expenses. Savings flow, loan repayment, and bill payment reversals now update linked balances, records, and daily expense totals atomically, with owner-only UI actions and audit reasons.
+- Manual sale/expense correction now creates a linked replacement while voiding the original and atomically adjusts account balances and daily totals; review still needs to cover imported and source-generated records through their owning workflow.
 - Savings holdings and recurring bill schedules now support owner-only edit, archive, and restore actions with validation and audit events. Archived records remain visible in their history sections; savings holdings cannot be archived while a balance remains.
 - Archive lists are paginated; payment histories resolve their bill record independently from the currently loaded archive page. Bill rename/archive/restore no longer resets recurrence anchors or overwrites a payment date saved after the edit screen was opened.
 - Integration work preserves the existing Centipid webhook URL and request/response contract. Owner-only paginated receipt histories now include attempts and actionable status, and retries reuse source keys to avoid duplicate financial records. Google Form history is paginated and needs-review submissions can be safely reprocessed from a source resend.

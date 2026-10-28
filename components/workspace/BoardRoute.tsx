@@ -1,6 +1,7 @@
 "use client";
 
 import { useMutation, useQuery } from "convex/react";
+import { ConvexError } from "convex/values";
 import { ArrowDownRight, ArrowUpRight, Download, Printer, Share2 } from "lucide-react";
 import Link from "next/link";
 import { useMemo, useState } from "react";
@@ -281,6 +282,7 @@ export function BoardRoute({ route }: { route: string }) {
   }, [today]);
   const trailingSevenSummary = useQuery(api.workspace.dashboardSummary, needsDailyHistory ? trailingSevenRange : "skip");
   const voidEntry = useMutation(api.workspace.voidEntry);
+  const correctEntry = useMutation(api.workspace.correctEntry);
   const [entryActionFeedback, setEntryActionFeedback] = useState("");
 
   if (!screen) return <WorkspaceTitle eyebrow="MylesNet" title="Page not found" description="Choose a section from the navigation." />;
@@ -323,6 +325,40 @@ export function BoardRoute({ route }: { route: string }) {
       setEntryActionFeedback("Entry voided. Its account balance and daily totals were reversed and the reason was recorded.");
     } catch (error) {
       setEntryActionFeedback(error instanceof Error ? error.message : "Could not void this entry.");
+    }
+  }
+  async function requestEntryCorrection(entry: NonNullable<typeof entries>[number]) {
+    if (settings?.access !== "ready") return;
+    const rawAmount = window.prompt(`Corrected amount in ${currency}:`, String(entry.amountUgx / currencyScale));
+    if (rawAmount === null) return;
+    const scaledAmount = Number(rawAmount) * currencyScale;
+    const amountUgx = Math.round(scaledAmount);
+    if (!Number.isFinite(scaledAmount) || amountUgx <= 0 || !Number.isSafeInteger(amountUgx) || Math.abs(scaledAmount - amountUgx) > 1e-7) { window.alert("Enter a positive amount using the currency's supported decimal places."); return; }
+    const occurredOn = window.prompt("Corrected date (YYYY-MM-DD):", entry.occurredOn);
+    if (occurredOn === null) return;
+    const accountChoice = window.prompt("Corrected account: enter cash or mobile_money.", entry.account === "unallocated" ? "cash" : entry.account);
+    if (accountChoice === null) return;
+    if (accountChoice !== "cash" && accountChoice !== "mobile_money") { window.alert("Choose cash or mobile_money."); return; }
+    const category = window.prompt("Corrected category:", entry.category);
+    if (category === null) return;
+    const note = window.prompt("Corrected description:", entry.note);
+    if (note === null) return;
+    const reason = window.prompt("Reason for correcting this entry (at least 5 characters):") ?? "";
+    if (reason.trim().length < 5) return;
+    const idempotencyKey = crypto.randomUUID();
+    const args = { businessId: settings.businessId, entryId: entry._id, amountUgx, occurredOn, account: accountChoice, category, note, reason, idempotencyKey } as const;
+    setEntryActionFeedback("");
+    try {
+      await correctEntry(args);
+      setEntryActionFeedback("Entry corrected. The original is retained, the replacement is linked, and account and daily totals were updated.");
+    } catch (error) {
+      const details = error instanceof ConvexError ? error.data as { code?: string; message?: string } : null;
+      if (details?.code === "CONFIRM_NEGATIVE" && window.confirm(`${details.message ?? "This correction may create a negative balance."} Continue and record this override?`)) {
+        try {
+          await correctEntry({ ...args, confirmNegativeBalance: true });
+          setEntryActionFeedback("Entry corrected with a negative-balance override recorded in the audit trail.");
+        } catch (retryError) { setEntryActionFeedback(retryError instanceof Error ? retryError.message : "Could not correct this entry."); }
+      } else if (!details) setEntryActionFeedback(error instanceof Error ? error.message : "Could not correct this entry.");
     }
   }
   const operationalScreen = ["Movements", "Savings", "Loans", "Partners", "Bills", "Reconcile"].includes(screen.title);
@@ -371,7 +407,7 @@ export function BoardRoute({ route }: { route: string }) {
       {screen.sections.map((section) => <Card className="board-section-card" key={section.title}>
         <div className="card-heading"><div><h2 className="card-title">{section.title}</h2><p className="card-subtitle">{section.detail}</p></div></div>
         {section.kind === "table" && (screen.title === "Sales" || screen.title === "Expenses") ? (
-          hasRecordData ? <div className="table-scroll"><table className="data-table"><thead><tr><th>Date</th><th>Type</th><th>Category</th><th>Account</th><th>Amount</th><th>Status</th><th>Actions</th></tr></thead><tbody>{selectedEntries.map((entry) => <tr key={entry._id}><td>{fmtDate(entry.occurredOn)}</td><td>{entry.kind}</td><td>{entry.category}</td><td>{accountLabel(entry.account)}</td><td>{fmt(entry.amountUgx)}</td><td><span className={`status-chip ${entry.state === "posted" ? "status-ok" : "status-warning"}`}>{entry.state}</span></td><td>{canVoidEntries && entry.state === "posted" && entry.canVoid ? <button className="button" type="button" onClick={() => void requestEntryVoid(entry._id)}>Void…</button> : "—"}</td></tr>)}</tbody></table></div> : <EmptyPanel message="No entries yet." next="Add an entry to populate this view. The design preview figures are examples, not live business data." />
+          hasRecordData ? <div className="table-scroll"><table className="data-table"><thead><tr><th>Date</th><th>Type</th><th>Category</th><th>Account</th><th>Amount</th><th>Status</th><th>Actions</th></tr></thead><tbody>{selectedEntries.map((entry) => <tr key={entry._id}><td>{fmtDate(entry.occurredOn)}</td><td>{entry.kind}</td><td>{entry.category}</td><td>{accountLabel(entry.account)}</td><td>{fmt(entry.amountUgx)}</td><td><span className={`status-chip ${entry.state === "posted" ? "status-ok" : "status-warning"}`}>{entry.state}</span></td><td>{canVoidEntries && entry.state === "posted" && entry.canCorrect && <button className="button" type="button" onClick={() => void requestEntryCorrection(entry)}>Correct…</button>} {canVoidEntries && entry.state === "posted" && entry.canVoid && <button className="button" type="button" onClick={() => void requestEntryVoid(entry._id)}>Void…</button>}</td></tr>)}</tbody></table></div> : <EmptyPanel message="No entries yet." next="Add an entry to populate this view. The design preview figures are examples, not live business data." />
         ) : section.kind === "table" && screen.title === "Daily Report" ? <DailyHistoryTable days={weekDays} today={today} loading={trailingSevenSummary === undefined} formatDay={fmtDate} formatMoney={fmt} />
           : section.kind === "table" && screen.title === "Monthly P&L" ? <MonthlyPnlTable days={yearDays} loading={yearSummary === undefined} locale={locale} formatMoney={fmt} />
           : section.kind === "chart" ? <ChartPanel summary={stats} title={section.title} message={section.detail} currency={currency} scale={currencyScale} locale={locale} />
@@ -390,7 +426,7 @@ export function BoardRoute({ route }: { route: string }) {
       {screen.title === "Sales" || screen.title === "Expenses" ? <Card className="board-section-card">
         <div className="card-heading"><div><h2 className="card-title">Recent cashbook entries</h2><p className="card-subtitle">Latest saved records in this workspace.</p></div></div>
         {entryActionFeedback && <p className="form-feedback" role="status">{entryActionFeedback}</p>}
-        {hasRecordData ? <><div className="entry-list">{selectedEntries.map((entry) => <div className="entry-row" key={entry._id}><div className="entry-main"><span className="entry-icon">{entry.kind === "sale" ? <ArrowUpRight size={15} /> : <ArrowDownRight size={15} />}</span><div><div className="entry-description">{entry.note || entry.category}</div><div className="entry-meta">{fmtDate(entry.occurredOn)} · {entry.category} · {accountLabel(entry.account)} · {entry.state}</div></div></div><span className={`entry-amount ${entry.kind === "sale" ? "amount-positive" : "amount-negative"}`}>{entry.kind === "sale" ? "+" : "−"}{fmt(entry.amountUgx)}</span>{canVoidEntries && entry.state === "posted" && entry.canVoid && <button className="button" type="button" onClick={() => void requestEntryVoid(entry._id)}>Void…</button>}</div>)}</div>{entries?.length === entryLimit && entryLimit < 500 && <button className="button" type="button" onClick={() => setEntryLimit(limit => Math.min(limit + 100, 500))}>Load more entries</button>}{entries?.length === 500 && <p className="muted-note">Showing the latest 500 matching records. Narrow the date range to review older entries.</p>}</> : <EmptyPanel message="No entries have been recorded." next="Use the form to save the first entry." />}
+        {hasRecordData ? <><div className="entry-list">{selectedEntries.map((entry) => <div className="entry-row" key={entry._id}><div className="entry-main"><span className="entry-icon">{entry.kind === "sale" ? <ArrowUpRight size={15} /> : <ArrowDownRight size={15} />}</span><div><div className="entry-description">{entry.note || entry.category}</div><div className="entry-meta">{fmtDate(entry.occurredOn)} · {entry.category} · {accountLabel(entry.account)} · {entry.state}</div></div></div><span className={`entry-amount ${entry.kind === "sale" ? "amount-positive" : "amount-negative"}`}>{entry.kind === "sale" ? "+" : "−"}{fmt(entry.amountUgx)}</span>{canVoidEntries && entry.state === "posted" && entry.canCorrect && <button className="button" type="button" onClick={() => void requestEntryCorrection(entry)}>Correct…</button>}{canVoidEntries && entry.state === "posted" && entry.canVoid && <button className="button" type="button" onClick={() => void requestEntryVoid(entry._id)}>Void…</button>}</div>)}</div>{entries?.length === entryLimit && entryLimit < 500 && <button className="button" type="button" onClick={() => setEntryLimit(limit => Math.min(limit + 100, 500))}>Load more entries</button>}{entries?.length === 500 && <p className="muted-note">Showing the latest 500 matching records. Narrow the date range to review older entries.</p>}</> : <EmptyPanel message="No entries have been recorded." next="Use the form to save the first entry." />}
       </Card> : null}
     </div>}
     <div className="board-source-note">{screen.source} · Values shown here come from authorized Convex records. Sample values from the design references are not loaded into the workspace.</div>

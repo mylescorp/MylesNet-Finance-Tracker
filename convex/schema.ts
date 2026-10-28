@@ -176,6 +176,8 @@ export default defineSchema({
     state: v.union(v.literal("posted"), v.literal("void")),
     operationSource: v.optional(v.union(v.literal("movement_fee"), v.literal("loan_interest"), v.literal("bill_payment"))),
     operationKey: v.optional(v.string()),
+    correctionOf: v.optional(v.id("entries")),
+    correctedBy: v.optional(v.id("entries")),
     createdBy: v.id("users"),
     createdAt: v.number(),
     voidedAt: v.optional(v.number()),

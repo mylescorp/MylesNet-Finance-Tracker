@@ -182,6 +182,7 @@ export const businessSettings = query({
     v.object({ access: v.literal("pending") }),
     v.object({
       access: v.literal("ready"),
+      businessId: v.id("businesses"),
       businessName: v.string(),
       countryCode: v.string(),
       currency: v.string(),
@@ -198,6 +199,7 @@ export const businessSettings = query({
     }
     return {
       access: "ready" as const,
+      businessId: current.business._id,
       businessName: current.business.name,
       countryCode: current.business.countryCode ?? "UG",
       currency: current.business.currency,
@@ -505,6 +507,7 @@ export const recentEntries = query({
       note: v.string(),
       state: v.union(v.literal("posted"), v.literal("void")),
       canVoid: v.boolean(),
+      canCorrect: v.boolean(),
     }),
   ),
   handler: async (ctx, args) => {
@@ -524,7 +527,7 @@ export const recentEntries = query({
           : args.from ? q.eq("businessId", current.business._id).gte("occurredOn", args.from)
           : args.toExclusive ? q.eq("businessId", current.business._id).lt("occurredOn", args.toExclusive)
           : q.eq("businessId", current.business._id)).order("desc").take(limit);
-    return rows.map(({ _id, kind, amountUgx, occurredOn, account, category, note, state, operationSource }) => ({
+    return rows.map(({ _id, kind, amountUgx, occurredOn, account, category, note, state, operationSource, source, correctedBy }) => ({
       _id,
       kind,
       amountUgx,
@@ -534,6 +537,7 @@ export const recentEntries = query({
       note,
       state,
       canVoid: !operationSource,
+      canCorrect: source === "manual" && !operationSource && !correctedBy,
     }));
   },
 });
@@ -846,5 +850,70 @@ export const voidEntry = mutation({
       summary: reason,
     });
     return null;
+  },
+});
+
+export const correctEntry = mutation({
+  args: {
+    businessId: v.id("businesses"), entryId: v.id("entries"), amountUgx: v.number(), occurredOn: v.string(),
+    account: v.union(v.literal("cash"), v.literal("mobile_money")), category: v.string(), note: v.string(),
+    reason: v.string(), idempotencyKey: v.string(), confirmNegativeBalance: v.optional(v.boolean()),
+  },
+  returns: v.id("entries"),
+  handler: async (ctx, args) => {
+    const current = await getMembership(ctx, args.businessId);
+    if (!current || current.membership.role !== "owner") throw new Error("Only a workspace owner can correct a posted entry.");
+    const reason = args.reason.trim();
+    const category = args.category.trim();
+    const note = args.note.trim();
+    if (!Number.isSafeInteger(args.amountUgx) || args.amountUgx <= 0 || !isIsoDay(args.occurredOn) || category.length < 1 || category.length > 80 || note.length > 300 || reason.length < 5 || reason.length > 300 || args.idempotencyKey.length < 16 || args.idempotencyKey.length > 120) throw new Error("Enter valid replacement details and a correction reason of 5 to 300 characters.");
+    const existing = await ctx.db.query("entries").withIndex("by_business_and_idempotency", q => q.eq("businessId", current.business._id).eq("idempotencyKey", args.idempotencyKey)).unique();
+    if (existing) {
+      const same = existing.correctionOf === args.entryId && existing.kind === (await ctx.db.get("entries", args.entryId))?.kind && existing.amountUgx === args.amountUgx && existing.occurredOn === args.occurredOn && existing.account === args.account && existing.category === category && existing.note === note;
+      if (!same) throw new Error("This request key was already used for another correction.");
+      return existing._id;
+    }
+    const original = await ctx.db.get("entries", args.entryId);
+    if (!original || original.businessId !== current.business._id || original.state !== "posted" || original.source !== "manual" || original.operationSource || original.correctedBy) throw new Error("Choose an uncorrected, manually posted entry in this workspace.");
+    const oldDay = await ctx.db.query("dailyTotals").withIndex("by_business_and_day", q => q.eq("businessId", current.business._id).eq("day", original.occurredOn)).unique();
+    if (!oldDay) throw new Error("Daily totals are missing; reconcile before correcting this entry.");
+    const oldIsSale = original.kind === "sale";
+    if (oldIsSale ? oldDay.salesUgx < original.amountUgx || oldDay.saleCount < 1 : oldDay.expensesUgx < original.amountUgx || oldDay.expenseCount < 1) throw new Error("Daily totals need reconciliation before correcting this entry.");
+    const dailyDeltas = new Map<string, { sales: number; expenses: number; saleCount: number; expenseCount: number }>();
+    const addDayDelta = (day: string, kind: "sale" | "expense", amount: number, direction: 1 | -1) => {
+      const delta = dailyDeltas.get(day) ?? { sales: 0, expenses: 0, saleCount: 0, expenseCount: 0 };
+      if (kind === "sale") { delta.sales = addSafeInteger(delta.sales, amount * direction, "Correction sales"); delta.saleCount = addSafeInteger(delta.saleCount, direction, "Correction sale count"); }
+      else { delta.expenses = addSafeInteger(delta.expenses, amount * direction, "Correction expenses"); delta.expenseCount = addSafeInteger(delta.expenseCount, direction, "Correction expense count"); }
+      dailyDeltas.set(day, delta);
+    };
+    addDayDelta(original.occurredOn, original.kind, original.amountUgx, -1);
+    addDayDelta(args.occurredOn, original.kind, args.amountUgx, 1);
+    for (const [day, delta] of dailyDeltas) {
+      const totals = day === original.occurredOn ? oldDay : await ctx.db.query("dailyTotals").withIndex("by_business_and_day", q => q.eq("businessId", current.business._id).eq("day", day)).unique();
+      const salesUgx = addSafeInteger(totals?.salesUgx ?? 0, delta.sales, "Daily sales total");
+      const expensesUgx = addSafeInteger(totals?.expensesUgx ?? 0, delta.expenses, "Daily expenses total");
+      const saleCount = addSafeInteger(totals?.saleCount ?? 0, delta.saleCount, "Daily sale count");
+      const expenseCount = addSafeInteger(totals?.expenseCount ?? 0, delta.expenseCount, "Daily expense count");
+      if (salesUgx < 0 || expensesUgx < 0 || saleCount < 0 || expenseCount < 0) throw new Error(`Daily totals for ${day} need reconciliation before correcting this entry.`);
+      if (totals) await ctx.db.patch("dailyTotals", totals._id, { salesUgx, expensesUgx, saleCount, expenseCount });
+      else await ctx.db.insert("dailyTotals", { businessId: current.business._id, day, salesUgx, expensesUgx, saleCount, expenseCount });
+    }
+    const accountDeltas = new Map<"cash" | "mobile_money", number>();
+    const accountEffect = (kind: "sale" | "expense", amount: number) => kind === "sale" ? amount : -amount;
+    if (original.account !== "unallocated") accountDeltas.set(original.account, addSafeInteger(accountDeltas.get(original.account) ?? 0, -accountEffect(original.kind, original.amountUgx), "Account correction"));
+    accountDeltas.set(args.account, addSafeInteger(accountDeltas.get(args.account) ?? 0, accountEffect(original.kind, args.amountUgx), "Account correction"));
+    const preferences = await ctx.db.query("workspacePreferences").withIndex("by_business", q => q.eq("businessId", current.business._id)).unique();
+    for (const [account, delta] of accountDeltas) {
+      const balance = await ctx.db.query("accountBalances").withIndex("by_business_and_account", q => q.eq("businessId", current.business._id).eq("account", account)).unique();
+      const next = addSafeInteger(balance?.balanceUgx ?? 0, delta, "Account balance");
+      if (next < 0 && preferences?.negativeBalanceWarning !== false && !args.confirmNegativeBalance) throw new ConvexError({ code: "CONFIRM_NEGATIVE", message: `This correction will put ${account === "cash" ? "cash" : "mobile money"} below zero. Review the balance before continuing.` });
+      if (balance) await ctx.db.patch("accountBalances", balance._id, { balanceUgx: next, updatedAt: Date.now() });
+      else await ctx.db.insert("accountBalances", { businessId: current.business._id, account, balanceUgx: next, updatedAt: Date.now() });
+    }
+    const now = Date.now();
+    const replacementId = await ctx.db.insert("entries", { businessId: current.business._id, kind: original.kind, amountUgx: args.amountUgx, occurredOn: args.occurredOn, account: args.account, category, note, source: "manual", idempotencyKey: args.idempotencyKey, state: "posted", correctionOf: original._id, createdBy: current.userId, createdAt: now });
+    await ctx.db.patch("entries", original._id, { state: "void", voidedAt: now, voidedBy: current.userId, voidReason: reason, correctedBy: replacementId });
+    await ctx.db.insert("auditEvents", { businessId: current.business._id, actorId: current.userId, action: "entry.corrected", entityType: "entry", entityId: original._id, occurredAt: now, summary: `Corrected entry: ${reason}`, details: JSON.stringify({ replacementId, negativeBalanceOverride: args.confirmNegativeBalance ?? false, previous: { amountUgx: original.amountUgx, occurredOn: original.occurredOn, account: original.account, category: original.category, note: original.note }, replacement: { amountUgx: args.amountUgx, occurredOn: args.occurredOn, account: args.account, category, note } }) });
+    return replacementId;
   },
 });
