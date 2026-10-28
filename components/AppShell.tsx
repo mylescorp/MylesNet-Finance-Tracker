@@ -2,20 +2,46 @@
 
 import { useMutation, useQuery } from "convex/react";
 import {
-  Activity, ArrowDownUp, BarChart3, Bell, CalendarDays, ChevronDown,
+  Activity, ArrowDownUp, ArrowUpRight, BarChart3, Bell, CalendarDays, ChevronDown,
   ChevronsLeft, ChevronsRight, FileBarChart, HandCoins, LayoutDashboard,
-  Menu, PiggyBank, Receipt, Settings2, UsersRound, Wallet, X,
+  Menu, MessageCircle, Newspaper, PiggyBank, Receipt, Settings2, UsersRound, Wallet, X,
 } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { ReactNode, useCallback, useEffect, useRef, useState } from "react";
-import { ThemeControl } from "@/components/ThemeControl";
 import { AccountDrawer, ProfileAvatar } from "@/components/account/AccountDrawer";
 import { AccountMenu } from "@/components/account/AccountMenu";
 import { GlobalSearch } from "@/components/workspace/GlobalSearch";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
+
+type ChangelogSummary = { contentHash: string; entryIds: string[]; legacyEntryIds?: string[]; totalChanges: number };
+const changelogSeenKey = "mylesnet-changelog-seen-v1";
+
+function readSeenChangelog() {
+  try { return window.localStorage.getItem(changelogSeenKey); }
+  catch { return null; }
+}
+
+function unreadChangelogCount(summary: ChangelogSummary, seenValue: string | null) {
+  if (!seenValue) return summary.totalChanges;
+  try {
+    const seen = JSON.parse(seenValue) as Partial<ChangelogSummary> & { version?: string };
+    if (Array.isArray(seen.entryIds)) {
+      const seenIds = new Set(seen.entryIds.filter((id): id is string => typeof id === "string"));
+      return summary.entryIds.reduce((unread, id, index) => {
+        const legacyId = summary.legacyEntryIds?.[index];
+        return unread + (seenIds.has(id) || (legacyId !== undefined && seenIds.has(legacyId)) ? 0 : 1);
+      }, 0);
+    }
+    const seenHash = seen.contentHash ?? (seen as unknown as { version?: string }).version;
+    if (seenHash === summary.contentHash) return 0;
+    return Math.max(summary.totalChanges - (seen.totalChanges ?? 0), 0);
+  } catch {
+    return summary.totalChanges;
+  }
+}
 
 const navGroups = [
   { label: "Overview", items: [
@@ -46,19 +72,93 @@ export function AppShell({ children }: { children: ReactNode }) {
   const router = useRouter();
   const access = useQuery(api.workspace.currentAccess, {});
   const selectWorkspace = useMutation(api.workspace.selectWorkspace);
-  const businessSettings = useQuery(api.workspace.businessSettings, {});
   const profile = useQuery(api.users.profile, {});
   const requestWorkspaceAccess = useMutation(api.settings.requestWorkspaceAccess);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
   const [accountMenuOpen, setAccountMenuOpen] = useState(false);
+  const [unreadChanges, setUnreadChanges] = useState(0);
+  const [changelogSummary, setChangelogSummary] = useState<ChangelogSummary | null>(null);
+  const changelogSummaryRef = useRef<ChangelogSummary | null>(null);
   const [accountReturnTo, setAccountReturnTo] = useState("/dashboard");
   const [workspaceError, setWorkspaceError] = useState("");
   const [switchingWorkspace, setSwitchingWorkspace] = useState(false);
   const menuButtonRef = useRef<HTMLButtonElement>(null);
   const sidebarCloseRef = useRef<HTMLButtonElement>(null);
+  const searchOpeningRef = useRef(false);
   const accountLabel = access?.access === "ready" ? access.businessName : "My account";
-  const permissions = access?.access === "ready" ? access.permissions : [];
+  const sidebarWorkspaceLabel = /^MylesNet Finance Tracker$/i.test(accountLabel) ? "Finance" : accountLabel;
+  // Keep the shell resilient while a local or preview app reconnects to a
+  // Convex deployment that may still be serving the prior currentAccess shape.
+  const workspaces = access?.access === "ready" && Array.isArray(access.workspaces)
+    ? access.workspaces
+    : [];
+  const selectableWorkspaces = access?.access === "choose_workspace" && Array.isArray(access.workspaces)
+    ? access.workspaces
+    : [];
+  const permissions = access?.access === "ready" && Array.isArray(access.permissions)
+    ? access.permissions
+    : [];
+  const searchScope = access?.access === "ready" && profile?.email
+    ? `${profile.email.trim().toLowerCase()}::${access.businessId}`
+    : null;
+  useEffect(() => {
+    const onSearchOpen = () => {
+      searchOpeningRef.current = true;
+      setMobileOpen(false);
+    };
+    const onSearchClose = () => { searchOpeningRef.current = false; };
+    window.addEventListener("mylesnet:workspace-search-open", onSearchOpen);
+    window.addEventListener("mylesnet:workspace-search-close", onSearchClose);
+    return () => {
+      window.removeEventListener("mylesnet:workspace-search-open", onSearchOpen);
+      window.removeEventListener("mylesnet:workspace-search-close", onSearchClose);
+    };
+  }, []);
+  useEffect(() => {
+    const applyStoredTheme = () => {
+      let theme: string | null = null;
+      try { theme = window.localStorage.getItem("mylesnet-theme"); }
+      catch { return; /* Keep the current appearance if browser storage is unavailable. */ }
+      if (theme === "dark" || theme === "light") document.documentElement.dataset.theme = theme;
+      else if (theme === "system") document.documentElement.removeAttribute("data-theme");
+      else document.documentElement.dataset.theme = "light";
+    };
+    window.addEventListener("mylesnet-theme-change", applyStoredTheme);
+    window.addEventListener("storage", applyStoredTheme);
+    return () => {
+      window.removeEventListener("mylesnet-theme-change", applyStoredTheme);
+      window.removeEventListener("storage", applyStoredTheme);
+    };
+  }, []);
+  useEffect(() => {
+    let active = true;
+    void fetch("/api/changelog/summary", { cache: "no-store" })
+      .then(response => response.ok ? response.json() as Promise<ChangelogSummary> : null)
+      .then(summary => {
+        if (!active || !summary || typeof summary.contentHash !== "string" || !Array.isArray(summary.entryIds) || !Number.isSafeInteger(summary.totalChanges)) return;
+        changelogSummaryRef.current = summary;
+        setChangelogSummary(summary);
+        setUnreadChanges(unreadChangelogCount(summary, readSeenChangelog()));
+      })
+      .catch(() => {});
+    const onStorage = (event: StorageEvent) => {
+      const summary = changelogSummaryRef.current;
+      if (event.key === changelogSeenKey && summary) setUnreadChanges(unreadChangelogCount(summary, event.newValue));
+    };
+    window.addEventListener("storage", onStorage);
+    return () => { active = false; window.removeEventListener("storage", onStorage); };
+  }, []);
+  const markChangelogRead = useCallback(() => {
+    const summary = changelogSummaryRef.current;
+    if (!summary) return;
+    try { window.localStorage.setItem(changelogSeenKey, JSON.stringify(summary)); }
+    catch { /* The current tab still clears the badge when storage is unavailable. */ }
+    setUnreadChanges(0);
+  }, []);
+  useEffect(() => {
+    if (pathname === "/changelog" && changelogSummary) markChangelogRead();
+  }, [changelogSummary, markChangelogRead, pathname]);
   useEffect(() => {
     if (access?.access === "pending") void requestWorkspaceAccess({}).catch(() => {});
   }, [access?.access, requestWorkspaceAccess]);
@@ -76,7 +176,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   };
   const routePageLabel = pathname === "/account" ? "Your account" : pathname === "/staff/access" ? "Staff & access" : pathname === "/audits" ? "Audit log" : pathname === "/add-entry" ? "Add an entry" : activePage?.label
     ?? (pathname.startsWith("/settings/") ? settingsPageLabels[pathname.split("/")[2]] ?? "Settings" : undefined)
-    ?? (pathname === "/issues" ? "Needs attention" : "Workspace");
+    ?? (pathname === "/issues" ? "Needs attention" : pathname === "/changelog" ? "What's new" : "Workspace");
   const closeAccount = useCallback(() => {
     router.replace(accountReturnTo === "/account" ? "/dashboard" : accountReturnTo);
   }, [accountReturnTo, router]);
@@ -121,7 +221,7 @@ export function AppShell({ children }: { children: ReactNode }) {
       document.body.style.overflow = previousOverflow;
       window.removeEventListener("keydown", closeOnEscape);
       media.removeEventListener("change", closeOnDesktop);
-      if (media.matches) menuButton?.focus();
+      if (media.matches && !searchOpeningRef.current) menuButton?.focus();
     };
   }, [mobileOpen]);
 
@@ -139,10 +239,9 @@ export function AppShell({ children }: { children: ReactNode }) {
         </div>
         <div className="sidebar-workspace" aria-label={`Current workspace: ${accountLabel}`} title={accountLabel}>
           <span className="sidebar-workspace-mark" aria-hidden="true">M</span>
-          <span className="sidebar-workspace-copy"><strong>{accountLabel}</strong><small>FINANCE WORKSPACE</small></span>
-          <ChevronDown className="sidebar-workspace-chevron" size={15} aria-hidden="true" />
+          <span className="sidebar-workspace-copy"><strong>{sidebarWorkspaceLabel}</strong></span>
         </div>
-        {access?.access === "ready" && access.workspaces.length > 1 && <label className="workspace-switcher"><span>Switch workspace</span><select aria-label="Switch workspace" value={access.businessId} disabled={switchingWorkspace} onChange={event => void changeWorkspace(event.target.value)}>{access.workspaces.map(workspace => <option key={workspace.businessId} value={workspace.businessId}>{workspace.businessName} · {workspace.role.replaceAll("_", " ")}</option>)}</select></label>}
+        {access?.access === "ready" && workspaces.length > 1 && <label className="workspace-switcher"><span>Switch workspace</span><select aria-label="Switch workspace" value={access.businessId} disabled={switchingWorkspace} onChange={event => void changeWorkspace(event.target.value)}>{workspaces.map(workspace => <option key={workspace.businessId} value={workspace.businessId}>{workspace.businessName} · {workspace.role.replaceAll("_", " ")}</option>)}</select></label>}
         <nav className="sidebar-nav" aria-label="Main navigation">
           {visibleNavGroups.map(group => <section className="sidebar-nav-group" key={group.label} aria-label={group.label}>
             <h2 className="sidebar-group-label">{group.label}</h2>
@@ -157,7 +256,11 @@ export function AppShell({ children }: { children: ReactNode }) {
           </section>)}
         </nav>
         <div className="sidebar-bottom">
-          <div className="sidebar-support"><span className="sidebar-support-dot" /><span><strong>Workspace protected</strong><small>Secure finance access</small></span></div>
+          <Link className={`sidebar-link sidebar-changelog-link${pathname === "/changelog" ? " sidebar-link-active" : ""}`} href="/changelog" aria-current={pathname === "/changelog" ? "page" : undefined} aria-label={unreadChanges ? `What's new, ${unreadChanges} unread changes` : "What's new"} title={collapsed ? "What's new" : undefined} onClick={() => { markChangelogRead(); setMobileOpen(false); }}>
+            <span className="sidebar-link-icon"><Newspaper size={18} strokeWidth={1.9} aria-hidden="true" /></span><span className="sidebar-link-label">What&apos;s new</span>
+            {unreadChanges > 0 && <span className="changelog-unread-count" aria-hidden="true">{unreadChanges > 99 ? "99+" : unreadChanges}</span>}
+            {pathname === "/changelog" && <span className="sidebar-active-indicator" aria-hidden="true" />}
+          </Link>
         </div>
       </aside>
       {mobileOpen && <button className="sidebar-backdrop" type="button" aria-label="Close navigation" onClick={() => setMobileOpen(false)} />}
@@ -166,11 +269,13 @@ export function AppShell({ children }: { children: ReactNode }) {
         <button ref={menuButtonRef} className="button mobile-menu-button" type="button" aria-label={mobileOpen ? "Close navigation" : "Open navigation"} aria-expanded={mobileOpen} aria-controls="workspace-sidebar" onClick={() => setMobileOpen((open) => !open)}>
           {mobileOpen ? <X size={19} /> : <Menu size={19} />}
         </button>
-        <div className="topbar-page-context"><span>MYLESNET</span><strong>{routePageLabel}</strong></div>
+        <div className="topbar-page-context"><strong>{routePageLabel}</strong></div>
+        <div className="topbar-center">
+          {!financeApproverOnly && <GlobalSearch searchScope={searchScope} />}
+        </div>
         <div className="header-actions">
-          {!financeApproverOnly && <GlobalSearch />}
-          <ThemeControl />
           {!financeApproverOnly && permissions.includes("audit.view") && <Link className="utility-link" href="/issues" aria-label="Needs attention"><Bell size={17} /><span>Needs attention</span></Link>}
+          <a className="topbar-support" href="https://wa.me/254743993715" target="_blank" rel="noopener noreferrer" aria-label="Contact support on WhatsApp" title="Contact support on WhatsApp"><MessageCircle size={15} aria-hidden="true" /><span>Support</span><ArrowUpRight size={13} aria-hidden="true" /></a>
           <button className="user-menu" type="button" aria-label="Open your account menu" aria-haspopup="dialog" aria-expanded={accountMenuOpen} title="Manage your account" onClick={() => setAccountMenuOpen(open => !open)}>
             <ProfileAvatar imageUrl={profile?.photoUrl} name={profile?.displayName || accountLabel} />
             <span className="user-menu-label">{profile?.displayName || accountLabel}</span>
@@ -179,9 +284,9 @@ export function AppShell({ children }: { children: ReactNode }) {
         </div>
       </header>
       {access?.access === "pending" && <div className="access-pending" role="status"><strong>Access awaiting invitation</strong><span>Your account is not yet linked to a MylesNet workspace.</span></div>}
-      {access?.access === "choose_workspace" && <section className="access-pending workspace-choice" role="status"><strong>Choose a workspace</strong><span>Your account has access to more than one workspace. Select which workspace to open.</span>{workspaceError && <span role="alert">{workspaceError}</span>}{access.workspaces.map(workspace => <button key={workspace.businessId} className="button" type="button" disabled={switchingWorkspace} onClick={() => { setSwitchingWorkspace(true); setWorkspaceError(""); void selectWorkspace({ businessId: workspace.businessId }).catch(error => setWorkspaceError(error instanceof Error ? error.message : "Could not open this workspace.")).finally(() => setSwitchingWorkspace(false)); }}><strong>{workspace.businessName}</strong><span>{workspace.role.replaceAll("_", " ")}</span></button>)}</section>}
+      {access?.access === "choose_workspace" && <section className="access-pending workspace-choice" role="status"><strong>Choose a workspace</strong><span>Your account has access to more than one workspace. Select which workspace to open.</span>{workspaceError && <span role="alert">{workspaceError}</span>}{selectableWorkspaces.map(workspace => <button key={workspace.businessId} className="button" type="button" disabled={switchingWorkspace} onClick={() => { setSwitchingWorkspace(true); setWorkspaceError(""); void selectWorkspace({ businessId: workspace.businessId }).catch(error => setWorkspaceError(error instanceof Error ? error.message : "Could not open this workspace.")).finally(() => setSwitchingWorkspace(false)); }}><strong>{workspace.businessName}</strong><span>{workspace.role.replaceAll("_", " ")}</span></button>)}</section>}
       <main key={access?.access === "ready" ? access.businessId : access?.access ?? "loading"} className="page-content">{access?.access === "choose_workspace" ? null : children}</main>
-      <footer className="app-footer"><span>MylesNet Finance Tracker · {businessSettings?.access === "ready" ? businessSettings.currency : "UGX"}</span><span>Workspace data is protected by your assigned role.</span></footer>
+      <footer className="app-footer"><span>Powered by <a href="https://mylescorptech.com" target="_blank" rel="noopener noreferrer">MylesCorp Technologies</a></span></footer>
       </div>
       {pathname === "/account" && <AccountDrawer onClose={closeAccount} />}
       {accountMenuOpen && <AccountMenu displayName={profile?.displayName || accountLabel} email={profile?.email} photoUrl={profile?.photoUrl} workspaceName={accountLabel} canManageStaff={permissions.includes("access.view") || permissions.includes("access.manage") || permissions.includes("roles.manage")} canViewAudit={permissions.includes("audit.view")} onClose={closeAccountMenu} onProfile={openProfile} />}
@@ -190,7 +295,11 @@ export function AppShell({ children }: { children: ReactNode }) {
 }
 
 export function WorkspaceTitle({ eyebrow, title, description, action }: { eyebrow?: string; title: string; description?: string; action?: ReactNode }) {
-  return <div className="page-title-row"><div>{eyebrow && <div className="eyebrow">{eyebrow}</div>}<h1 className="page-title">{title}</h1>{description && <p className="page-description">{description}</p>}</div>{action && <div className="page-title-action">{action}</div>}</div>;
+  const titleEnd = title.trimEnd().lastIndexOf(" ");
+  const formattedTitle = titleEnd > 0
+    ? <>{title.slice(0, titleEnd)} <span className="page-title-accent">{title.slice(titleEnd + 1)}</span></>
+    : title;
+  return <div className="page-title-row"><div>{eyebrow && <div className="eyebrow">{eyebrow}</div>}<h1 className="page-title">{formattedTitle}</h1>{description && <p className="page-description">{description}</p>}</div>{action && <div className="page-title-action">{action}</div>}</div>;
 }
 
 export function Card({ children, className = "" }: { children: ReactNode; className?: string }) {

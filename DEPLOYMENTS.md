@@ -27,3 +27,12 @@ Keep `NEXT_PUBLIC_CONVEX_URL` aligned with the environment’s Convex cloud URL.
 - Confirm the app’s webhook contract and decide whether it remains external or is migrated through a compatibility adapter.
 - Set the one-time owner setup code in Convex, establish the owner, then remove the setup code.
 - Configure monitoring, backups, restore instructions, and a rollback target before any live data migration.
+
+## Versioned production releases
+
+- Every user-visible feature, fix, or improvement pull request includes one `.changeset/*.md` file for each distinct user-facing change. A Changeset includes a title, user-benefit description, and `patch`, `minor`, or `major` bump.
+- When Changesets are merged into `main`, GitHub Actions opens or updates a **Prepare production release** pull request. Review this pull request to confirm the app version and its individual What's new cards are correct.
+- Merging the version pull request updates the app version and `CHANGELOG.md` together. Vercel previews remain available for review; the Vercel production release gate deploys a versioned commit to production.
+- The What's new page labels the version from the deployed app package. On Vercel Preview, the current package version is marked **Upcoming**; production shows it as a release.
+- In GitHub repository Settings → Actions → General, enable **Allow GitHub Actions to create and approve pull requests** so the release workflow can open the version pull request.
+- This workflow does not publish an npm package or create Git tags. The production deployment commit is the release record.

@@ -357,6 +357,7 @@ export const dashboardSummary = query({
   args: {
     from: v.string(),
     toExclusive: v.string(),
+    account: v.optional(v.union(v.literal("cash"), v.literal("mobile_money"), v.literal("unallocated"))),
   },
   returns: v.union(
     v.object({ access: v.literal("setup") }),
@@ -369,6 +370,7 @@ export const dashboardSummary = query({
       netUgx: v.number(),
       cashBalanceUgx: v.number(),
       mobileMoneyBalanceUgx: v.number(),
+      accountFilterComplete: v.boolean(),
       days: v.array(
         v.object({
           day: v.string(),
@@ -404,7 +406,7 @@ export const dashboardSummary = query({
     const assignedRole = current.membership.roleId ? await ctx.db.get("workspaceRoles", current.membership.roleId) : null;
     const partnerScoped = Boolean(current.membership.partnerId) || current.membership.role === "partner" || assignedRole?.builtIn === "partner";
     if (partnerScoped || !(canViewDashboard || canViewReports || canViewAnalytics)) return { access: "restricted" as const };
-    const days = await ctx.db
+    const dailyRows = await ctx.db
       .query("dailyTotals")
       .withIndex("by_business_and_day", (q) =>
         q
@@ -413,6 +415,25 @@ export const dashboardSummary = query({
           .lt("day", args.toExclusive),
       )
       .take(370);
+    let days = dailyRows.map(({ day, salesUgx, expensesUgx }) => ({ day, salesUgx, expensesUgx }));
+    let accountFilterComplete = true;
+    if (args.account) {
+      const [sales, expenses] = await Promise.all([
+        ctx.db.query("entries").withIndex("by_business_and_kind_and_date", q => q.eq("businessId", current.business._id).eq("kind", "sale").gte("occurredOn", args.from).lt("occurredOn", args.toExclusive)).take(5001),
+        ctx.db.query("entries").withIndex("by_business_and_kind_and_date", q => q.eq("businessId", current.business._id).eq("kind", "expense").gte("occurredOn", args.from).lt("occurredOn", args.toExclusive)).take(1001),
+      ]);
+      accountFilterComplete = sales.length < 5001 && expenses.length < 1001;
+      const byDay = new Map<string, { salesUgx: number; expensesUgx: number }>();
+      const addEntry = (day: string, kind: "sale" | "expense", amountUgx: number) => {
+        const totals = byDay.get(day) ?? { salesUgx: 0, expensesUgx: 0 };
+        if (kind === "sale") totals.salesUgx = addSafeInteger(totals.salesUgx, amountUgx, "Account-filtered sales total");
+        else totals.expensesUgx = addSafeInteger(totals.expensesUgx, amountUgx, "Account-filtered expense total");
+        byDay.set(day, totals);
+      };
+      for (const entry of sales) if (entry.state === "posted" && entry.account === args.account) addEntry(entry.occurredOn, "sale", entry.amountUgx);
+      for (const entry of expenses) if (entry.state === "posted" && entry.account === args.account) addEntry(entry.occurredOn, "expense", entry.amountUgx);
+      days = [...byDay].map(([day, totals]) => ({ day, ...totals }));
+    }
     const salesUgx = days.reduce(
       (sum, day) => addSafeInteger(sum, day.salesUgx, "Sales total"),
       0,
@@ -427,17 +448,20 @@ export const dashboardSummary = query({
         q.eq("businessId", current.business._id),
       )
       .take(2);
-    const cashBalanceUgx =
-      balances.find((balance) => balance.account === "cash")?.balanceUgx ?? 0;
-    const mobileMoneyBalanceUgx =
-      balances.find((balance) => balance.account === "mobile_money")?.balanceUgx ?? 0;
+    const cashBalanceUgx = !args.account || args.account === "cash"
+      ? balances.find((balance) => balance.account === "cash")?.balanceUgx ?? 0
+      : 0;
+    const mobileMoneyBalanceUgx = !args.account || args.account === "mobile_money"
+      ? balances.find((balance) => balance.account === "mobile_money")?.balanceUgx ?? 0
+      : 0;
     return {
       access: "ready" as const,
       salesUgx,
       expensesUgx,
-      netUgx: salesUgx - expensesUgx,
+      netUgx: addSafeInteger(salesUgx, -expensesUgx, "Cashbook net"),
       cashBalanceUgx,
       mobileMoneyBalanceUgx,
+      accountFilterComplete,
       days: days.map(({ day, salesUgx, expensesUgx }) => ({
         day,
         salesUgx,

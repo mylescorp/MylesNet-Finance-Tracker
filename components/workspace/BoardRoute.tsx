@@ -15,7 +15,11 @@ import { OperationsWorkspace } from "@/components/workspace/OperationsWorkspace"
 import { ConvexLiveStatus } from "@/components/workspace/ConvexLiveStatus";
 import { OperationalRecordForm } from "@/components/workspace/OperationalRecordForm";
 import { formatBusinessDay } from "@/lib/format";
+import type { DateFormat } from "@/lib/format";
 import { AnalyticsInsights } from "@/components/workspace/AnalyticsInsights";
+import { FinancePeriodFilters } from "@/components/workspace/FinancePeriodFilters";
+import { InteractiveFinanceChart } from "@/components/workspace/InteractiveFinanceChart";
+import { financePeriodRange, previousFinanceRange, validateFinanceCustomRange, type FinanceAccount, type FinancePeriod } from "@/lib/finance-period";
 
 type BoardSpec = {
   title: string;
@@ -62,7 +66,7 @@ const specs: Record<string, BoardSpec> = {
       { title: "Projected sales", detail: "Month-to-date run rate, days remaining, required daily sales, and the assumptions behind this estimate.", kind: "chart" },
       { title: "Monthly target and scenarios", detail: "Track the target from Finance settings and compare current pace with recent pace. Scenarios are run-rates, not forecasts." },
       { title: "Month pace and equipment payback", detail: "Cumulative monthly sales and operating-profit recovery. Historical comparisons appear when source data is available.", kind: "chart" },
-      { title: "Sales and expenses · 14 days", detail: "Recorded daily totals with average line and selected-day detail.", kind: "chart" },
+      { title: "Sales and expenses over time", detail: "Recorded daily totals compared with the previous equal-length period. Hover, focus, or tap a date for details.", kind: "chart" },
       { title: "Sales by weekday", detail: "All seven weekdays, strongest day highlighted; switch between total and average." , kind: "chart"},
       { title: "Daily heatmap and anomaly flags", detail: "Missing days and unusually weak days are distinguished from days with zero sales." , kind: "table"},
       { title: "Income type and spending category", detail: "Breakdowns use saved categories and show estimated split provenance where applicable." , kind: "chart"},
@@ -250,6 +254,10 @@ function formatMoney(value: number | undefined, currency = "UGX", scale = 1, loc
 export function BoardRoute({ route }: { route: string }) {
   const screen = specs[route];
   const [period, setPeriod] = useState<(typeof periods)[number]>("Month");
+  const [financePeriod, setFinancePeriod] = useState<FinancePeriod>("monthly");
+  const [financeCustomFrom, setFinanceCustomFrom] = useState(businessDate("Africa/Kampala"));
+  const [financeCustomTo, setFinanceCustomTo] = useState(businessDate("Africa/Kampala"));
+  const [account, setAccount] = useState<FinanceAccount>("all");
   const [entryLimit, setEntryLimit] = useState(100);
   const [shareFeedback, setShareFeedback] = useState("");
   const settings = useQuery(api.workspace.businessSettings, {});
@@ -265,12 +273,21 @@ export function BoardRoute({ route }: { route: string }) {
   const fmtDate = (value: string) => formatBusinessDay(value, dateFormat);
   const today = businessDate(timezone);
   const fiscalStartMonth = preferences?.access === "ready" ? preferences.fiscalYearStartMonth : 1;
-  const range = useMemo(() => rangeFor(period, today, weekStartsOn, fiscalStartMonth), [period, today, weekStartsOn, fiscalStartMonth]);
+  const standardRange = useMemo(() => rangeFor(period, today, weekStartsOn, fiscalStartMonth), [period, today, weekStartsOn, fiscalStartMonth]);
+  const financeRangeError = useMemo(() => financePeriod === "custom" ? validateFinanceCustomRange(financeCustomFrom, financeCustomTo, today) : "", [financePeriod, financeCustomFrom, financeCustomTo, today]);
+  const analyticsRange = useMemo(() => financePeriod === "custom" && financeRangeError
+    ? financePeriodRange("daily", today, weekStartsOn, fiscalStartMonth, financeCustomFrom, financeCustomTo)
+    : financePeriodRange(financePeriod, today, weekStartsOn, fiscalStartMonth, financeCustomFrom, financeCustomTo),
+  [financePeriod, financeRangeError, today, weekStartsOn, fiscalStartMonth, financeCustomFrom, financeCustomTo]);
+  const range = screen?.title === "Analytics" ? analyticsRange : standardRange;
   const rangeLastDay = new Date(`${range.toExclusive}T00:00:00.000Z`); rangeLastDay.setUTCDate(rangeLastDay.getUTCDate() - 1);
+  const accountFilter = screen?.title === "Analytics" && account !== "all" ? { account } : {};
   const needsSummary = screen?.entryKind !== undefined || ["Analytics", "Daily Report", "Monthly P&L", "Movements"].includes(screen?.title ?? "");
   const needsYearSummary = screen?.title === "Monthly P&L";
   const needsDailyHistory = screen?.title === "Daily Report";
-  const summary = useQuery(api.workspace.dashboardSummary, needsSummary ? range : "skip");
+  const summary = useQuery(api.workspace.dashboardSummary, needsSummary && !(screen?.title === "Analytics" && financeRangeError) ? { ...range, ...accountFilter } : "skip");
+  const previousRange = useMemo(() => previousFinanceRange(analyticsRange), [analyticsRange]);
+  const previousSummary = useQuery(api.workspace.dashboardSummary, screen?.title === "Analytics" && !financeRangeError ? { ...previousRange, ...accountFilter } : "skip");
   const entryKind = screen?.title === "Sales" ? "sale" : screen?.title === "Expenses" ? "expense" : undefined;
   const entries = useQuery(api.workspace.recentEntries, entryKind ? { limit: entryLimit, kind: entryKind, from: range.from, toExclusive: range.toExclusive } : "skip");
   const yearRange = useMemo(() => rangeFor("Year", today, weekStartsOn, fiscalStartMonth), [today, weekStartsOn, fiscalStartMonth]);
@@ -290,7 +307,8 @@ export function BoardRoute({ route }: { route: string }) {
   if (!screen) return <WorkspaceTitle eyebrow="MylesNet" title="Page not found" description="Choose a section from the navigation." />;
   if (settings?.access === "ready" && settings.role === "finance_approver" && screen.title !== "Partners") return <><WorkspaceTitle eyebrow="Access limited" title="Distribution review" description="Finance approver access is scoped to independent partner distribution review." /><div className="notice-banner notice-info" role="status">Open Partners to review pending distribution requests. Business records, reports, and workspace settings are not available to this role.</div></>;
 
-  const stats = summary?.access === "ready" ? summary : null;
+  const summaryReady = summary?.access === "ready" ? summary : null;
+  const stats = summaryReady && (screen.title !== "Analytics" || summaryReady.accountFilterComplete) ? summaryReady : null;
   const yearDays = yearSummary?.access === "ready" ? yearSummary.days : undefined;
   const weekDays = trailingSevenSummary?.access === "ready" ? trailingSevenSummary.days : undefined;
   const metricValues: Record<string, string> = {
@@ -384,8 +402,9 @@ export function BoardRoute({ route }: { route: string }) {
       eyebrow={`${screen.eyebrow} · ${screen.source}`}
       title={screen.title}
       description={screen.description}
-      action={<div className="period-control"><span>Period</span><select value={period} onChange={(event) => setPeriod(event.target.value as (typeof periods)[number])} aria-label={`${screen.title} period`}>{periods.map((item) => <option key={item}>{item}</option>)}</select></div>}
+      action={screen.title === "Analytics" ? undefined : <div className="period-control"><span>Period</span><select value={period} onChange={(event) => setPeriod(event.target.value as (typeof periods)[number])} aria-label={`${screen.title} period`}>{periods.map((item) => <option key={item}>{item}</option>)}</select></div>}
     />
+    {screen.title === "Analytics" && <><FinancePeriodFilters period={financePeriod} onPeriodChange={setFinancePeriod} customFrom={financeCustomFrom} customTo={financeCustomTo} onCustomFromChange={setFinanceCustomFrom} onCustomToChange={setFinanceCustomTo} account={account} onAccountChange={setAccount} today={today} />{financeRangeError && <p className="form-feedback form-error finance-range-error" role="alert">{financeRangeError}</p>}</>}
     {screen.settings && <SettingsNav current={`/${route}`} />}
     <div className="board-toolbar no-print">
       <ConvexLiveStatus />
@@ -397,14 +416,15 @@ export function BoardRoute({ route }: { route: string }) {
     </div>
     {summary?.access === "restricted" && <div className="notice-banner notice-info" role="status">Partner-specific reporting is being prepared. Business-wide totals are hidden from partner accounts.</div>}
     {summary?.access === "pending" && <div className="notice-banner notice-warning" role="status">Workspace access is pending. Ask an owner to invite this Google account.</div>}
+    {screen.title === "Analytics" && summaryReady && !summaryReady.accountFilterComplete && <div className="notice-banner notice-warning" role="status">Some account-filtered totals reached the safe record limit. Affected figures are withheld; choose a shorter date range for complete results.</div>}
     {!operationalScreen && <div className="metric-grid board-metric-grid">
       {screen.metrics.map((label, index) => <Card className="metric-card board-metric-card" key={label}>
         <div className="card-heading"><span className="eyebrow">{label}</span><span className="entry-icon">{index % 2 === 0 ? <ArrowUpRight size={15} /> : <ArrowDownRight size={15} />}</span></div>
         <div className="metric-value">{metricValues[label] ?? "—"}</div>
-        <div className="metric-note">{metricValues[label] === undefined ? "Available when this record type is configured" : "Based on saved workspace records"}</div>
+        <div className="metric-note">{screen.title === "Analytics" && summaryReady && !summaryReady.accountFilterComplete ? "Unavailable · narrow the date range" : metricValues[label] === undefined ? "Available when this record type is configured" : "Based on saved workspace records"}</div>
       </Card>)}
     </div>}
-    {screen.title === "Analytics" ? <AnalyticsInsights range={range} today={today} currency={currency} scale={currencyScale} locale={locale} /> : screen.title === "Needs attention" ? <AnalyticsInsights range={range} today={today} currency={currency} scale={currencyScale} locale={locale} issuesOnly /> : operationalScreen ? <OperationsWorkspace screen={screen.title as "Movements" | "Savings" | "Loans" | "Partners" | "Bills" | "Reconcile"} currency={currency} scale={currencyScale} locale={locale} timezone={timezone} dateFormat={dateFormat} range={range} /> : <div className="board-grid">
+    {screen.title === "Analytics" ? financeRangeError ? <Card><div className="empty-state compact-empty"><strong>Choose a valid date range.</strong><span>{financeRangeError}</span></div></Card> : <AnalyticsInsights range={range} today={today} currency={currency} scale={currencyScale} locale={locale} dateFormat={dateFormat} account={account === "all" ? undefined : account} /> : screen.title === "Needs attention" ? <AnalyticsInsights range={range} today={today} currency={currency} scale={currencyScale} locale={locale} issuesOnly /> : operationalScreen ? <OperationsWorkspace screen={screen.title as "Movements" | "Savings" | "Loans" | "Partners" | "Bills" | "Reconcile"} currency={currency} scale={currencyScale} locale={locale} timezone={timezone} dateFormat={dateFormat} range={range} /> : <div className="board-grid">
       {screen.entryKind && <Card className="board-feature-card">
         <div className="card-heading"><div><h2 className="card-title">{screen.entryKind === "sale" ? "Add a sale" : "Add an expense"}</h2><p className="card-subtitle">Saved values update the cashbook and account balance.</p></div></div>
         <EntryForm kind={screen.entryKind} />
@@ -417,7 +437,7 @@ export function BoardRoute({ route }: { route: string }) {
         ) : section.kind === "table" && screen.title === "Daily Report" ? <DailyHistoryTable days={weekDays} today={today} loading={trailingSevenSummary === undefined} formatDay={fmtDate} formatMoney={fmt} />
           : section.kind === "table" && screen.title === "Monthly P&L" ? <MonthlyPnlTable days={yearDays} loading={yearSummary === undefined} locale={locale} formatMoney={fmt} />
           : section.kind === "chart" && section.title === "Sales by income type" ? <CategoryBreakdown entries={selectedEntries} kind="sale" formatMoney={fmt} truncated={selectedEntries?.length === entryLimit} />
-          : section.kind === "chart" ? <ChartPanel summary={stats} title={section.title} message={section.detail} currency={currency} scale={currencyScale} locale={locale} />
+          : section.kind === "chart" ? <ChartPanel summary={screen.title === "Analytics" ? summaryReady : stats} previous={previousSummary?.access === "ready" ? previousSummary : null} range={range} previousRange={previousRange} interactive={screen.title === "Analytics" && section.title.toLowerCase().includes("sales and expenses over time")} account={account} dateFormat={dateFormat} title={section.title} message={section.detail} currency={currency} scale={currencyScale} locale={locale} />
           : section.kind === "workflow" ? <WorkflowPanel screen={screen} section={section.title} currency={currency} scale={currencyScale} businessDay={today} />
             : <EmptyPanel
               message={screen.title === "Analytics"
@@ -536,10 +556,27 @@ function CategoryBreakdown({ entries, kind, formatMoney, truncated = false }: { 
   </>;
 }
 
-function ChartPanel({ summary, title, message, currency, scale, locale }: { summary: { days: { day: string; salesUgx: number; expensesUgx: number }[] } | null; title: string; message: string; currency: string; scale: number; locale: string }) {
+function ChartPanel({ summary, previous, range, previousRange, interactive, account, dateFormat, title, message, currency, scale, locale }: { summary: { days: { day: string; salesUgx: number; expensesUgx: number }[]; accountFilterComplete?: boolean } | null; previous: { days: { day: string; salesUgx: number; expensesUgx: number }[]; accountFilterComplete?: boolean } | null; range: { from: string; toExclusive: string }; previousRange: { from: string; toExclusive: string }; interactive: boolean; account: FinanceAccount; dateFormat: DateFormat; title: string; message: string; currency: string; scale: number; locale: string }) {
+  if (summary?.accountFilterComplete === false || previous?.accountFilterComplete === false) return <p className="notice-banner notice-warning" role="status">Chart values are unavailable because the account scan reached its safe limit. Narrow the date range for complete results.</p>;
   const weekday = title.toLowerCase().includes("weekday") || title.toLowerCase().includes("best days");
   const daily = title.toLowerCase().includes("14 days") || title.toLowerCase().includes("daily");
   if (!weekday && !daily) return <EmptyPanel message="This chart is not available yet." next="The selected comparison needs categorized or workflow-specific records that are not stored in the cashbook yet." />;
+  if (interactive) {
+    const length = Math.max(1, (Date.parse(`${range.toExclusive}T00:00:00.000Z`) - Date.parse(`${range.from}T00:00:00.000Z`)) / 86_400_000);
+    const currentDays = new Map((summary?.days ?? []).map(day => [day.day, day]));
+    const previousDays = new Map((previous?.days ?? []).map(day => [day.day, day]));
+    const points = Array.from({ length }, (_, index) => {
+      const currentDate = new Date(`${range.from}T00:00:00.000Z`);
+      currentDate.setUTCDate(currentDate.getUTCDate() + index);
+      const day = currentDate.toISOString().slice(0, 10);
+      const previousDate = new Date(`${previousRange.from}T00:00:00.000Z`);
+      previousDate.setUTCDate(previousDate.getUTCDate() + index);
+      const prior = previousDays.get(previousDate.toISOString().slice(0, 10));
+      const current = currentDays.get(day);
+      return { day, salesUgx: current?.salesUgx ?? 0, expensesUgx: current?.expensesUgx ?? 0, netUgx: (current?.salesUgx ?? 0) - (current?.expensesUgx ?? 0), previousSalesUgx: prior?.salesUgx ?? 0 };
+    });
+    return <InteractiveFinanceChart points={points} currency={currency} scale={scale} locale={locale} dateFormat={dateFormat} accountFiltered={account !== "all"} complete />;
+  }
   const days = summary?.days.slice(-14) ?? [];
   const bars = weekday ? Array.from({ length: 7 }, (_, weekdayIndex) => {
     const matching = (summary?.days ?? []).filter(day => new Date(`${day.day}T00:00:00.000Z`).getUTCDay() === weekdayIndex);

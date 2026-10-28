@@ -1,5 +1,9 @@
 # MylesNet Finance Tracker
 
+## Product updates
+
+The signed-in workspace changelog is available from **What's new** at the bottom of the sidebar. Its unread badge counts changes since the last visit on this browser and clears when opened. For each distinct user-visible change, add a `.changeset/*.md` file following the [Changeset instructions](./.changeset/README.md). Pull requests that change application code must include a Changeset. Do not edit `CHANGELOG.md` for ordinary feature pull requests; the release workflow updates it when preparing a versioned release.
+
 Responsive finance workspace built with Next.js App Router, Convex, Convex Auth (Google OAuth), and Vercel. The approved design package is preserved in [`design-reference/`](./design-reference/).
 
 ## Local setup

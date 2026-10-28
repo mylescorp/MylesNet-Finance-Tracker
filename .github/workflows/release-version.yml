@@ -1,0 +1,33 @@
+name: Prepare production release
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: prepare-production-release-main
+  cancel-in-progress: false
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - uses: changesets/action@v1
+        with:
+          version: npm run release:version
+          title: Prepare production release
+          commit: Prepare production release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
