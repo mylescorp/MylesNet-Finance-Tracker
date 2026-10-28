@@ -23,8 +23,8 @@ export function OperationsWorkspace({ screen, currency, scale, locale, timezone,
   const canSeeArchived = data?.access === "ready" && (data.role === "owner" || data.role === "cashier");
   const savingsArchive = usePaginatedQuery(api.operations.savingsArchive, screen === "Savings" && canSeeArchived && data?.access === "ready" ? { businessId: data.businessId } : "skip", { initialNumItems: 20 });
   const billArchive = usePaginatedQuery(api.operations.billArchive, screen === "Bills" && canSeeArchived && data?.access === "ready" ? { businessId: data.businessId } : "skip", { initialNumItems: 20 });
-  const distributionAccess = useQuery(api.distributions.overview, screen === "Partners" && data?.access === "ready" ? { businessId: data.businessId, paginationOpts: { numItems: 20, cursor: null } } : "skip");
-  const partnerStatement = useQuery(api.operations.partnerStatement, screen === "Partners" && data?.access === "ready" ? { businessId: data.businessId, ...range } : "skip");
+  const distributionAccess = useQuery(api.distributions.overview, screen === "Partners" && access?.access === "ready" ? { businessId: access.businessId, paginationOpts: { numItems: 20, cursor: null } } : "skip");
+  const partnerStatement = useQuery(api.operations.partnerStatement, screen === "Partners" && access?.access === "ready" ? { businessId: access.businessId, ...range } : "skip");
   const createMovement = useMutation(api.operations.createMovement);
   const reverseMovement = useMutation(api.operations.reverseMovement);
   const createSavingsHolding = useMutation(api.operations.createSavingsHolding);
