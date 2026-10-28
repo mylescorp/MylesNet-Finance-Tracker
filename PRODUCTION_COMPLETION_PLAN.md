@@ -38,8 +38,8 @@ This plan tracks every gap found in the production-readiness audit. Financial re
 - [ ] Add safe amendment flow for pending proposals (or cancel and recreate with reason); verify review permissions and history pagination.
 
 ### E. Imports and external ingress
-- [ ] Add preview, completed-batch reversal, partial-batch recovery, and row-level correction while keeping source hashes/idempotency stable.
-- [ ] Add paginated import history and exportable import reports.
+- [ ] Add preview, completed-batch reversal, partial-batch recovery, and row-level correction while keeping source hashes/idempotency stable. Preview, source-hash idempotency, and partial-batch resume/cancel are present; completed-batch reversal and row-level correction remain.
+- [ ] Add paginated import history and exportable import reports. Import history now paginates in the owner settings screen, and retained Centipid metadata downloads as JSON; standardized CSV/PDF reports remain.
 - [ ] Add integration receipt history, actionable failures, and safe idempotent retry/reprocess for Google Forms and Centipid. Receipt histories are now paginated; Centipid processing failures are recorded with safe retry counts; Google Form needs-review submissions can be retried with the same source key. Owner-triggered reprocessing and downloadable receipt exports remain.
 - [ ] Preserve the existing webhook URL and payload contract; run documented staging parity before any caller cutover.
 

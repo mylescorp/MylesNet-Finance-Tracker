@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { useMutation, useQuery } from "convex/react";
+import { useMutation, usePaginatedQuery, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { parseAmount, parseCentipid, parseCsv, toIsoDay, type CsvRow, type ImportRow } from "@/lib/import-csv";
@@ -11,7 +11,7 @@ const emptyMapping: Mapping = { date: -1, amount: -1, category: -1, note: -1, ac
 
 export function CsvImportPanel() {
   const settings = useQuery(api.settings.overview, {});
-  const history = useQuery(api.imports.history, {});
+  const history = usePaginatedQuery(api.imports.history, settings?.access === "ready" ? {} : "skip", { initialNumItems: 20 });
   const importRows = useMutation(api.imports.importRows);
   const beginBatch = useMutation(api.imports.beginBatch);
   const completeBatch = useMutation(api.imports.completeBatch);
@@ -117,6 +117,14 @@ export function CsvImportPanel() {
     const anchor = document.createElement("a"); anchor.href = url; anchor.download = "mylesnet-cashbook-import-template.csv"; anchor.click(); URL.revokeObjectURL(url);
   }
 
+  function downloadReport() {
+    if (!reportDetails || !reportBatchId) return;
+    const batch = history.results.find(item => item._id === reportBatchId);
+    const safeName = (batch?.fileName ?? "centipid-import").replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
+    const url = URL.createObjectURL(new Blob([JSON.stringify(JSON.parse(reportDetails), null, 2)], { type: "application/json;charset=utf-8" }));
+    const anchor = document.createElement("a"); anchor.href = url; anchor.download = `${safeName || "centipid-import"}-report.json`; anchor.click(); URL.revokeObjectURL(url);
+  }
+
   return <section className="card settings-card">
     <div className="card-heading"><div><h2 className="card-title">Import CSV data</h2><p className="card-subtitle">Preview, reconcile, then import entries with duplicate protection and an audit record.</p></div></div>
     <div className="form-actions"><label className="field"><span>CSV file · up to 5 MB and 10,000 rows</span><input type="file" accept=".csv,text/csv" onChange={e => void chooseFile(e.target.files?.[0])} /></label><button type="button" className="button" onClick={downloadTemplate}>Download cashbook CSV template</button></div>
@@ -131,8 +139,8 @@ export function CsvImportPanel() {
     </>}
     {error && <p className="form-feedback form-error" role="alert">{error}</p>}{message && <p className="form-feedback form-success" role="status">{message}</p>}
     <div className="form-actions"><button type="button" className="button button-accent" disabled={busy || !fileName || !settings || settings.access !== "ready" || (looksCentipid && !report)} onClick={() => void runImport()}>{busy ? "Importing…" : "Import rows"}</button>{settings?.access === "ready" && <span className="muted-note">All amounts are stored as safe integers in {settings.currency}.</span>}</div>
-    <div className="card-heading" style={{ marginTop: 18 }}><div><h3 className="card-title">Recent imports</h3><p className="card-subtitle">Up to 20 owner-visible import batches.</p></div></div>
-    {!history?.length ? <p className="muted-note">No imports yet.</p> : <div className="table-scroll"><table className="data-table"><thead><tr><th>File</th><th>Type</th><th>Progress</th><th>Imported</th><th>Skipped</th><th>When</th><th>Report data</th><th>Action</th></tr></thead><tbody>{history.map(item => <tr key={item._id}><td>{item.fileName}</td><td>{item.importType === "centipid_analytics" ? "Centipid analytics" : "Cashbook"}</td><td>{item.status === "completed" ? "Completed" : item.status === "cancelled" ? "Cancelled" : `${item.progressRows} / ${item.totalRows}`}</td><td>{item.importedCount}</td><td>{item.skippedCount}</td><td>{new Date(item.createdAt).toLocaleString()}</td><td>{item.importType === "centipid_analytics" ? <button type="button" className="button" onClick={() => setReportBatchId(current => current === item._id ? null : item._id)}>{reportBatchId === item._id ? "Hide report" : "View report"}</button> : "—"}</td><td>{item.status === "in_progress" ? <button type="button" className="button" onClick={() => { if (window.confirm("Cancel this import? Rows already imported remain saved.")) void cancelBatch({ batchId: item._id }); }}>Cancel import</button> : "—"}</td></tr>)}</tbody></table></div>}
-    {reportBatchId && <div className="notice-banner notice-info"><strong>Retained Centipid report</strong>{reportDetails === undefined ? <p>Loading report data…</p> : reportDetails ? <pre style={{ maxHeight: 360, overflow: "auto", whiteSpace: "pre-wrap" }}>{JSON.stringify(JSON.parse(reportDetails), null, 2)}</pre> : <p>Report details are not available.</p>}</div>}
+    <div className="card-heading" style={{ marginTop: 18 }}><div><h3 className="card-title">Import history</h3><p className="card-subtitle">Owner-visible import batches, loaded 20 at a time.</p></div></div>
+    {!history.results.length ? <p className="muted-note">No imports yet.</p> : <div className="table-scroll"><table className="data-table"><thead><tr><th>File</th><th>Type</th><th>Progress</th><th>Imported</th><th>Skipped</th><th>When</th><th>Report data</th><th>Action</th></tr></thead><tbody>{history.results.map(item => <tr key={item._id}><td>{item.fileName}</td><td>{item.importType === "centipid_analytics" ? "Centipid analytics" : "Cashbook"}</td><td>{item.status === "completed" ? "Completed" : item.status === "cancelled" ? "Cancelled" : `${item.progressRows} / ${item.totalRows}`}</td><td>{item.importedCount}</td><td>{item.skippedCount}</td><td>{new Date(item.createdAt).toLocaleString()}</td><td>{item.importType === "centipid_analytics" ? <button type="button" className="button" onClick={() => setReportBatchId(current => current === item._id ? null : item._id)}>{reportBatchId === item._id ? "Hide report" : "View report"}</button> : "—"}</td><td>{item.status === "in_progress" ? <button type="button" className="button" onClick={() => { if (window.confirm("Cancel this import? Rows already imported remain saved.")) void cancelBatch({ batchId: item._id }); }}>Cancel import</button> : "—"}</td></tr>)}</tbody></table></div>}{history.status === "CanLoadMore" && <button type="button" className="button" onClick={() => history.loadMore(20)}>Load older imports</button>}
+    {reportBatchId && <div className="notice-banner notice-info"><strong>Retained Centipid report</strong>{reportDetails === undefined ? <p>Loading report data…</p> : reportDetails ? <><button type="button" className="button" onClick={downloadReport}>Download report JSON</button><pre style={{ maxHeight: 360, overflow: "auto", whiteSpace: "pre-wrap" }}>{JSON.stringify(JSON.parse(reportDetails), null, 2)}</pre></> : <p>Report details are not available.</p>}</div>}
   </section>;
 }

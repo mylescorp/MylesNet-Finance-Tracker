@@ -1,4 +1,5 @@
 import { getAuthUserId } from "@convex-dev/auth/server";
+import { paginationOptsValidator } from "convex/server";
 import { ConvexError, v } from "convex/values";
 import { mutation, query } from "./_generated/server";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
@@ -150,11 +151,11 @@ export const cancelBatch = mutation({
 });
 
 export const history = query({
-  args: {},
-  returns: v.array(v.object({ _id: v.id("importBatches"), fileName: v.string(), importType, totalRows: v.number(), importedCount: v.number(), skippedCount: v.number(), progressRows: v.number(), status: v.union(v.literal("in_progress"), v.literal("completed"), v.literal("cancelled")), createdAt: v.number() })),
-  handler: async (ctx) => {
+  args: { paginationOpts: paginationOptsValidator },
+  handler: async (ctx, args) => {
     const { business } = await ownerContext(ctx);
-    return (await ctx.db.query("importBatches").withIndex("by_business_and_created", q => q.eq("businessId", business._id)).order("desc").take(20)).map(({ _id, fileName, importType, totalRows, importedCount, skippedCount, progressRows, status, createdAt }) => ({ _id, fileName, importType, totalRows, importedCount, skippedCount, progressRows, status, createdAt }));
+    const result = await ctx.db.query("importBatches").withIndex("by_business_and_created", q => q.eq("businessId", business._id)).order("desc").paginate(args.paginationOpts);
+    return { ...result, page: result.page.map(({ _id, fileName, importType, totalRows, importedCount, skippedCount, progressRows, status, createdAt }) => ({ _id, fileName, importType, totalRows, importedCount, skippedCount, progressRows, status, createdAt })) };
   },
 });
 
