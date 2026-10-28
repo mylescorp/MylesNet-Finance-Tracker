@@ -1,10 +1,10 @@
 import { paginationOptsValidator } from "convex/server";
+import { getAuthUserId } from "@convex-dev/auth/server";
 import { ConvexError, v } from "convex/values";
 import { internalMutation, mutation, query } from "./_generated/server";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
 import { isIgnoredCentipidEvent } from "./centipidUtils";
-import { getSelectedWorkspace } from "./workspaceContext";
 
 function addSafeInteger(left: number, right: number, label: string) {
   const result = left + right;
@@ -12,8 +12,12 @@ function addSafeInteger(left: number, right: number, label: string) {
   return result;
 }
 
-async function owner(ctx: MutationCtx | QueryCtx) {
-  const current = await getSelectedWorkspace(ctx);
+async function owner(ctx: MutationCtx | QueryCtx, businessId: Id<"businesses">) {
+  const userId = await getAuthUserId(ctx);
+  if (!userId) throw new ConvexError("Sign in to manage the integration.");
+  const membership = await ctx.db.query("memberships").withIndex("by_business_and_user", q => q.eq("businessId", businessId).eq("userId", userId)).unique();
+  const business = membership?.active ? await ctx.db.get("businesses", businessId) : null;
+  const current = business && membership ? { userId, membership, business } : null;
   if (!current || current.membership.role !== "owner") throw new ConvexError("Select a workspace you own before managing the integration.");
   return { userId: current.userId, business: current.business };
 }
@@ -24,10 +28,10 @@ async function sha256(value: string) {
 }
 
 export const createToken = mutation({
-  args: {},
+  args: { businessId: v.id("businesses") },
   returns: v.string(),
-  handler: async (ctx) => {
-    const { business, userId } = await owner(ctx);
+  handler: async (ctx, args) => {
+    const { business, userId } = await owner(ctx, args.businessId);
     const random = crypto.getRandomValues(new Uint8Array(32));
     const token = [...random].map(byte => byte.toString(16).padStart(2, "0")).join("");
     const tokenHash = await sha256(token);
@@ -40,9 +44,9 @@ export const createToken = mutation({
 });
 
 export const revokeToken = mutation({
-  args: {}, returns: v.null(),
-  handler: async (ctx) => {
-    const { business, userId } = await owner(ctx);
+  args: { businessId: v.id("businesses") }, returns: v.null(),
+  handler: async (ctx, args) => {
+    const { business, userId } = await owner(ctx, args.businessId);
     const rows = await ctx.db.query("centipidIntegrations").withIndex("by_business", q => q.eq("businessId", business._id)).order("desc").take(10);
     for (const integration of rows) if (integration.active) await ctx.db.patch("centipidIntegrations", integration._id, { active: false, revokedAt: Date.now() });
     await ctx.db.insert("auditEvents", { businessId: business._id, actorId: userId, action: "integration.centipid.revoked", entityType: "integration", entityId: business._id, occurredAt: Date.now(), summary: "Centipid webhook access revoked." });
@@ -51,18 +55,18 @@ export const revokeToken = mutation({
 });
 
 export const status = query({
-  args: {}, returns: v.object({ enabled: v.boolean() }),
-  handler: async (ctx) => {
-    const { business } = await owner(ctx);
+  args: { businessId: v.id("businesses") }, returns: v.object({ enabled: v.boolean() }),
+  handler: async (ctx, args) => {
+    const { business } = await owner(ctx, args.businessId);
     const rows = await ctx.db.query("centipidIntegrations").withIndex("by_business", q => q.eq("businessId", business._id)).order("desc").take(10);
     return { enabled: rows.some(item => item.active) };
   },
 });
 
 export const history = query({
-  args: { paginationOpts: paginationOptsValidator },
+  args: { businessId: v.id("businesses"), paginationOpts: paginationOptsValidator },
   handler: async (ctx, args) => {
-    const { business } = await owner(ctx);
+    const { business } = await owner(ctx, args.businessId);
     return await ctx.db.query("webhookReceipts")
       .withIndex("by_business_and_created", q => q.eq("businessId", business._id))
       .order("desc")

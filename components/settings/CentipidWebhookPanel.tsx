@@ -11,19 +11,21 @@ function siteBase() {
 }
 
 export function CentipidWebhookPanel() {
-  const status = useQuery(api.centipid.status, {});
-  const { results: history, status: historyStatus, loadMore } = usePaginatedQuery(api.centipid.history, {}, { initialNumItems: 20 });
+  const settings = useQuery(api.settings.overview, {});
+  const status = useQuery(api.centipid.status, settings?.access === "ready" ? { businessId: settings.businessId } : "skip");
+  const { results: history, status: historyStatus, loadMore } = usePaginatedQuery(api.centipid.history, settings?.access === "ready" ? { businessId: settings.businessId } : "skip", { initialNumItems: 20 });
   const create = useMutation(api.centipid.createToken);
   const revoke = useMutation(api.centipid.revokeToken);
   const [webhookUrl, setWebhookUrl] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
+  function currentBusinessId() { if (settings?.access !== "ready") throw new Error("Workspace is still loading."); return settings.businessId; }
   async function rotate() {
     setBusy(true); setMessage("");
     try {
       const base = siteBase();
       if (!base) throw new Error("Convex site URL is unavailable. Check NEXT_PUBLIC_CONVEX_URL in the deployment environment.");
-      const token = await create({});
+      const token = await create({ businessId: currentBusinessId() });
       setWebhookUrl(`${base}/centipid?token=${encodeURIComponent(token)}`);
       setMessage("Token created. Copy this URL into Centipid now; the token is only shown once. The current Apps Script URL stays active until you replace it.");
     } catch (error) { setMessage(error instanceof Error ? error.message : "Could not create the token."); }
@@ -31,7 +33,7 @@ export function CentipidWebhookPanel() {
   }
   async function disable() {
     setBusy(true); setMessage("");
-    try { await revoke({}); setWebhookUrl(""); setMessage("The app’s Centipid token has been revoked. The existing Apps Script webhook remains active until separately disabled there."); }
+    try { await revoke({ businessId: currentBusinessId() }); setWebhookUrl(""); setMessage("The app’s Centipid token has been revoked. The existing Apps Script webhook remains active until separately disabled there."); }
     catch (error) { setMessage(error instanceof Error ? error.message : "Could not revoke the token."); }
     finally { setBusy(false); }
   }

@@ -11,20 +11,22 @@ function siteBase() {
 }
 
 export function GoogleFormsPanel() {
-  const status = useQuery(api.googleForms.status, {});
-  const { results: history, status: historyStatus, loadMore } = usePaginatedQuery(api.googleForms.history, {}, { initialNumItems: 20 });
+  const settings = useQuery(api.settings.overview, {});
+  const status = useQuery(api.googleForms.status, settings?.access === "ready" ? { businessId: settings.businessId } : "skip");
+  const { results: history, status: historyStatus, loadMore } = usePaginatedQuery(api.googleForms.history, settings?.access === "ready" ? { businessId: settings.businessId } : "skip", { initialNumItems: 20 });
   const create = useMutation(api.googleForms.createToken);
   const revoke = useMutation(api.googleForms.revokeToken);
   const [endpoint, setEndpoint] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
+  function currentBusinessId() { if (settings?.access !== "ready") throw new Error("Workspace is still loading."); return settings.businessId; }
 
   async function rotate() {
     setBusy(true); setMessage("");
     try {
       const base = siteBase();
       if (!base) throw new Error("Convex site URL is unavailable. Check the deployment environment.");
-      const token = await create({});
+      const token = await create({ businessId: currentBusinessId() });
       setEndpoint(`${base}/google-form?token=${encodeURIComponent(token)}`);
       setMessage("Connection key created. It is shown only in this URL; keep the URL private. This connection is separate from Centipid.");
     } catch (error) { setMessage(error instanceof Error ? error.message : "Could not create the Google Forms connection."); }
@@ -33,7 +35,7 @@ export function GoogleFormsPanel() {
 
   async function disable() {
     setBusy(true); setMessage("");
-    try { await revoke({}); setEndpoint(""); setMessage("Google Forms submissions can no longer enter this app using the previous connection key."); }
+    try { await revoke({ businessId: currentBusinessId() }); setEndpoint(""); setMessage("Google Forms submissions can no longer enter this app using the previous connection key."); }
     catch (error) { setMessage(error instanceof Error ? error.message : "Could not revoke the connection."); }
     finally { setBusy(false); }
   }

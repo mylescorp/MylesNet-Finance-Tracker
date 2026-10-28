@@ -1,14 +1,19 @@
 import { paginationOptsValidator } from "convex/server";
+import { getAuthUserId } from "@convex-dev/auth/server";
 import { ConvexError, v } from "convex/values";
 import { internalMutation, mutation, query } from "./_generated/server";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
-import { getSelectedWorkspace } from "./workspaceContext";
+import type { Id } from "./_generated/dataModel";
 
 type Ctx = MutationCtx | QueryCtx;
 type Kind = "sale" | "expense" | "movement" | "savings" | "loan" | "unknown";
 
-async function owner(ctx: Ctx) {
-  const current = await getSelectedWorkspace(ctx);
+async function owner(ctx: Ctx, businessId: Id<"businesses">) {
+  const userId = await getAuthUserId(ctx);
+  if (!userId) throw new ConvexError("Sign in to manage Google Forms.");
+  const membership = await ctx.db.query("memberships").withIndex("by_business_and_user", q => q.eq("businessId", businessId).eq("userId", userId)).unique();
+  const business = membership?.active ? await ctx.db.get("businesses", businessId) : null;
+  const current = business && membership ? { userId, membership, business } : null;
   if (!current || current.membership.role !== "owner") throw new ConvexError("Select a workspace you own before managing Google Forms.");
   return { userId: current.userId, business: current.business };
 }
@@ -19,9 +24,9 @@ async function sha256(value: string) {
 }
 
 export const createToken = mutation({
-  args: {}, returns: v.string(),
-  handler: async ctx => {
-    const { userId, business } = await owner(ctx);
+  args: { businessId: v.id("businesses") }, returns: v.string(),
+  handler: async (ctx, args) => {
+    const { userId, business } = await owner(ctx, args.businessId);
     const token = [...crypto.getRandomValues(new Uint8Array(32))].map(byte => byte.toString(16).padStart(2, "0")).join("");
     const tokenHash = await sha256(token);
     const integrations = await ctx.db.query("googleFormIntegrations").withIndex("by_business_and_active", q => q.eq("businessId", business._id).eq("active", true)).collect();
@@ -33,9 +38,9 @@ export const createToken = mutation({
 });
 
 export const revokeToken = mutation({
-  args: {}, returns: v.null(),
-  handler: async ctx => {
-    const { userId, business } = await owner(ctx);
+  args: { businessId: v.id("businesses") }, returns: v.null(),
+  handler: async (ctx, args) => {
+    const { userId, business } = await owner(ctx, args.businessId);
     const rows = await ctx.db.query("googleFormIntegrations").withIndex("by_business_and_active", q => q.eq("businessId", business._id).eq("active", true)).collect();
     for (const integration of rows) await ctx.db.patch("googleFormIntegrations", integration._id, { active: false, revokedAt: Date.now() });
     await ctx.db.insert("auditEvents", { businessId: business._id, actorId: userId, action: "integration.google_form.revoked", entityType: "integration", entityId: business._id, occurredAt: Date.now(), summary: "Google Form ingress access revoked." });
@@ -44,18 +49,18 @@ export const revokeToken = mutation({
 });
 
 export const status = query({
-  args: {}, returns: v.object({ enabled: v.boolean() }),
-  handler: async ctx => {
-    const { business } = await owner(ctx);
+  args: { businessId: v.id("businesses") }, returns: v.object({ enabled: v.boolean() }),
+  handler: async (ctx, args) => {
+    const { business } = await owner(ctx, args.businessId);
     const active = await ctx.db.query("googleFormIntegrations").withIndex("by_business_and_active", q => q.eq("businessId", business._id).eq("active", true)).first();
     return { enabled: !!active };
   },
 });
 
 export const history = query({
-  args: { paginationOpts: paginationOptsValidator },
+  args: { businessId: v.id("businesses"), paginationOpts: paginationOptsValidator },
   handler: async (ctx, args) => {
-    const { business } = await owner(ctx);
+    const { business } = await owner(ctx, args.businessId);
     const result = await ctx.db.query("googleFormReceipts").withIndex("by_business_and_created", q => q.eq("businessId", business._id)).order("desc").paginate(args.paginationOpts);
     return { ...result, page: result.page.map(({ _id, submissionKind, status, occurredOn, amountUgx, summary, createdAt, attemptCount, lastAttemptAt }) => ({ _id, submissionKind, status, occurredOn, amountUgx, summary, createdAt, attemptCount: attemptCount ?? 1, lastAttemptAt: lastAttemptAt ?? createdAt })) };
   },
