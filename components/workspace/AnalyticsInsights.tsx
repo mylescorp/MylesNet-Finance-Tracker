@@ -1,23 +1,38 @@
 "use client";
 
-import { useQuery } from "convex/react";
-import { useState } from "react";
+import { useMutation, useQuery } from "convex/react";
+import { useState, type FormEvent } from "react";
 import Link from "next/link";
 import { api } from "@/convex/_generated/api";
+import type { Id } from "@/convex/_generated/dataModel";
 import { Card } from "@/components/AppShell";
 
 type Range = { from: string; toExclusive: string };
 export function AnalyticsInsights({ range, today, currency, scale, locale, compact = false, issuesOnly = false }: { range: Range; today: string; currency: string; scale: number; locale: string; compact?: boolean; issuesOnly?: boolean }) {
   const data = useQuery(api.analytics.overview, { ...range, today });
+  const saveIssueReview = useMutation(api.analytics.updateIssueReview);
   const [salesChange, setSalesChange] = useState(0);
   const [expenseChange, setExpenseChange] = useState(0);
+  const [savingIssueKey, setSavingIssueKey] = useState<string | null>(null);
+  const [issueFeedback, setIssueFeedback] = useState("");
   const money = (amount: number) => new Intl.NumberFormat(locale, { style: "currency", currency, maximumFractionDigits: Math.round(Math.log10(scale)) }).format(amount / scale);
   if (!data || data.access === "pending") return <Card><div className="empty-state" role="status"><strong>Loading analytics…</strong><span>Authorized workspace totals are being calculated.</span></div></Card>;
   if (data.access === "restricted") return <Card><div className="notice-banner notice-info">Partner accounts see their own statement under Partners. Workspace-wide analytics are restricted.</div></Card>;
   const scenarioNet = Math.round(data.target.monthSalesUgx * (1 + salesChange / 100) - data.target.monthExpensesUgx * (1 - expenseChange / 100));
   const issues = data.issues;
+  async function submitIssueReview(issue: typeof issues[number], event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    setSavingIssueKey(issue.issueKey); setIssueFeedback("");
+    try {
+      await saveIssueReview({ issueKey: issue.issueKey, issueId: issue.id, from: range.from, toExclusive: range.toExclusive, amountUgx: issue.amountUgx, status: String(form.get("status")) as "open" | "acknowledged" | "resolved", note: String(form.get("note") ?? ""), assignedTo: form.get("assignedTo") ? String(form.get("assignedTo")) as Id<"users"> : undefined });
+      setIssueFeedback("Issue review saved with an audit trail.");
+    } catch (error) {
+      setIssueFeedback(error instanceof Error ? error.message : "Could not save the issue review.");
+    } finally { setSavingIssueKey(null); }
+  }
   if (issuesOnly) return <div className="board-grid">
-    <Card className="board-feature-card"><div className="card-heading"><div><h2 className="card-title">Live data-health inbox</h2><p className="card-subtitle">Signals are derived from saved records and workspace thresholds.</p></div><span className={`status-chip ${issues.length ? "status-warning" : "status-ok"}`}>{issues.length} open</span></div>{!data.issuesComplete && <p className="notice-banner notice-warning">Some source ranges exceeded the safe summary limit. Narrow the period to inspect every record.</p>}{issues.length ? <div className="entry-list">{issues.map(issue => <div className="entry-row" key={issue.id}><div className="entry-main"><span className={`status-chip ${issue.severity === "action" ? "status-warning" : "status-ok"}`}>{issue.severity}</span><div><div className="entry-description">{issue.title}</div><div className="entry-meta">{issue.detail}</div></div></div><Link className="button" href={issue.href}>Review</Link></div>)}</div> : <div className="empty-state compact-empty"><strong>No data-health flags for this view.</strong><span>Checks cover recent sales coverage, weak days, allocation, balances, target pace, reconciliations, expenses, and ownership.</span></div>}</Card>
+    <Card className="board-feature-card"><div className="card-heading"><div><h2 className="card-title">Data-health review queue</h2><p className="card-subtitle">Flags come from saved source data. Review status, assignment, and notes are audited and scoped to this report period.</p></div><span className={`status-chip ${issues.some(issue => issue.status !== "resolved") ? "status-warning" : "status-ok"}`}>{issues.filter(issue => issue.status !== "resolved").length} open</span></div>{!data.issuesComplete && <p className="notice-banner notice-warning">Some source ranges exceeded the safe summary limit. Narrow the period to inspect every record.</p>}{issueFeedback && <p className="muted-note" role="status">{issueFeedback}</p>}{issues.length ? <div className="entry-list">{issues.map(issue => <div className="entry-row" key={issue.issueKey}><div className="entry-main"><span className={`status-chip ${issue.severity === "action" ? "status-warning" : "status-ok"}`}>{issue.severity}</span><div><div className="entry-description">{issue.title} · {issue.status}</div><div className="entry-meta">{issue.detail}{issue.assignedToLabel ? ` · assigned to ${issue.assignedToLabel}` : ""}</div><form className="form-layout" onSubmit={event => void submitIssueReview(issue, event)}><label className="field"><span>Review status</span><select name="status" defaultValue={issue.status}><option value="open">Open</option><option value="acknowledged">Acknowledged</option><option value="resolved">Resolved</option></select></label><label className="field"><span>Assign to</span><select name="assignedTo" defaultValue={issue.assignedTo ?? ""}><option value="">Unassigned</option>{data.reviewers.map(reviewer => <option key={reviewer.id} value={reviewer.id}>{reviewer.label}</option>)}</select></label><label className="field"><span>Review note</span><input name="note" defaultValue={issue.reviewNote ?? ""} maxLength={500} placeholder="Add investigation or resolution details" /></label><button className="button" type="submit" disabled={savingIssueKey !== null}>{savingIssueKey === issue.issueKey ? "Saving…" : "Save review"}</button></form></div></div><Link className="button" href={issue.href}>Open record</Link></div>)}</div> : <div className="empty-state compact-empty"><strong>No data-health flags for this view.</strong><span>Checks cover recent sales coverage, weak days, allocation, balances, target pace, reconciliations, expenses, and ownership.</span></div>}</Card>
     <Card className="board-section-card"><h2 className="card-title">Analytics snapshot</h2><div className="settings-facts"><div><span>Cash runway</span><strong>{data.runway.days === null ? "No recent expense burn" : `${data.runway.days} days`}</strong></div><div><span>Monthly sales pace</span><strong>{money(data.target.projectedSalesUgx)}</strong></div><div><span>Required daily sales</span><strong>{money(data.target.requiredSalesPerDayUgx)}</strong></div></div><Link className="text-link" href="/analytics">Open advanced analytics →</Link></Card>
   </div>;
   return <div className={compact ? "dashboard-insight-grid" : "board-grid"}>

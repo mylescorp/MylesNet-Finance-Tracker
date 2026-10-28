@@ -1,6 +1,6 @@
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { v } from "convex/values";
-import { query } from "./_generated/server";
+import { mutation, query } from "./_generated/server";
 import type { QueryCtx } from "./_generated/server";
 import type { Id } from "./_generated/dataModel";
 
@@ -133,6 +133,19 @@ export const overview = query({
     if (expenseWarning > 0 && monthExpenses > expenseWarning) issues.push({ id: "monthly-expense-warning", title: "Monthly expenses crossed the warning level", detail: `Recorded month-to-date expenses are ${displayMoney(monthExpenses)} against a ${displayMoney(expenseWarning)} warning level.`, severity: "warning", href: "/expenses", amountUgx: monthExpenses });
     if (partners.length > 0 && !ownershipComplete) issues.push({ id: "ownership-incomplete", title: "Partner ownership does not total 100%", detail: `Active ownership currently totals ${(ownershipBps / 100).toFixed(2)}%. Partner profit shares are withheld until ownership is complete.`, severity: "warning", href: "/partners", amountUgx: ownershipBps });
 
+    const reviewers = (await ctx.db.query("memberships").withIndex("by_business_and_user", q => q.eq("businessId", business._id)).take(100))
+      .filter(row => row.active && (row.role === "owner" || row.role === "cashier"));
+    const reviewerOptions = await Promise.all(reviewers.map(async row => {
+      const user = await ctx.db.get("users", row.userId);
+      return { id: row.userId, label: user?.name || user?.email || "Workspace member" };
+    }));
+    const issueRows = await Promise.all(issues.map(async issue => {
+      const issueKey = `${args.from}:${args.toExclusive}:${issue.id}:${issue.amountUgx}`;
+      const review = await ctx.db.query("issueReviews").withIndex("by_business_and_issue", q => q.eq("businessId", business._id).eq("issueKey", issueKey)).unique();
+      const assignee = review?.assignedTo ? await ctx.db.get("users", review.assignedTo) : null;
+      return { ...issue, issueKey, status: review?.status ?? "open" as const, reviewNote: review?.note, assignedTo: review?.assignedTo, assignedToLabel: assignee?.name || assignee?.email };
+    }));
+
     return {
       access: "ready" as const,
       currency: business.currency,
@@ -145,9 +158,42 @@ export const overview = query({
       partners: partnerSnapshot,
       ownershipComplete,
       unallocated: { count: unallocated.length, amountUgx: unallocatedUgx, complete: unallocatedComplete },
-      issues,
+      issues: issueRows,
+      reviewers: reviewerOptions,
       issuesComplete: reconciliations.length < 101 && expenseEntries.length < 1001 && salesEntries.length < 5001,
       periodActivity: { salesRowsComplete: salesEntries.length < 5001, expenseRowsComplete: expenseEntries.length < 1001 },
     };
+  },
+});
+
+export const updateIssueReview = mutation({
+  args: {
+    issueKey: v.string(), issueId: v.string(), from: v.string(), toExclusive: v.string(), amountUgx: v.number(),
+    status: v.union(v.literal("open"), v.literal("acknowledged"), v.literal("resolved")),
+    note: v.string(), assignedTo: v.optional(v.id("users")),
+  },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error("Sign in before updating issue reviews.");
+    const memberships = await ctx.db.query("memberships").withIndex("by_user", q => q.eq("userId", userId)).take(20);
+    const active = memberships.filter(row => row.active);
+    if (memberships.length >= 20 || active.length !== 1 || (active[0].role !== "owner" && active[0].role !== "cashier")) throw new Error("Only an active owner or cashier can update data-health reviews.");
+    const business = await ctx.db.get("businesses", active[0].businessId);
+    if (!business) throw new Error("Workspace not found.");
+    if (!validDay(args.from) || !validDay(args.toExclusive) || args.from >= args.toExclusive || !/^[a-z0-9-]{3,80}$/.test(args.issueId) || !Number.isSafeInteger(args.amountUgx) || args.issueKey !== `${args.from}:${args.toExclusive}:${args.issueId}:${args.amountUgx}`) throw new Error("The issue reference is invalid or has expired.");
+    const note = args.note.trim();
+    if (note.length > 500) throw new Error("Review notes must be 500 characters or fewer.");
+    if (args.assignedTo) {
+      const assigneeMembership = await ctx.db.query("memberships").withIndex("by_business_and_user", q => q.eq("businessId", business._id).eq("userId", args.assignedTo!)).unique();
+      if (!assigneeMembership?.active || (assigneeMembership.role !== "owner" && assigneeMembership.role !== "cashier")) throw new Error("Assign this issue to an active owner or cashier.");
+      if (active[0].role !== "owner" && args.assignedTo !== userId) throw new Error("Cashiers can assign an issue only to themselves.");
+    }
+    const prior = await ctx.db.query("issueReviews").withIndex("by_business_and_issue", q => q.eq("businessId", business._id).eq("issueKey", args.issueKey)).unique();
+    const now = Date.now();
+    if (prior) await ctx.db.patch("issueReviews", prior._id, { status: args.status, note: note || undefined, assignedTo: args.assignedTo, updatedBy: userId, updatedAt: now });
+    else await ctx.db.insert("issueReviews", { businessId: business._id, issueKey: args.issueKey, issueId: args.issueId, status: args.status, note: note || undefined, assignedTo: args.assignedTo, updatedBy: userId, updatedAt: now, createdAt: now });
+    await ctx.db.insert("auditEvents", { businessId: business._id, actorId: userId, action: "issue.review_updated", entityType: "issueReview", entityId: args.issueKey, occurredAt: now, summary: `${args.issueId} issue review set to ${args.status}${args.assignedTo ? ` and assigned to ${args.assignedTo}` : ""}.`, details: JSON.stringify({ before: prior ? { status: prior.status, note: prior.note, assignedTo: prior.assignedTo } : null, after: { status: args.status, note: note || undefined, assignedTo: args.assignedTo } }) });
+    return null;
   },
 });

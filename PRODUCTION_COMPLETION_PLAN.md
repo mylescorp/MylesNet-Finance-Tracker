@@ -44,7 +44,7 @@ This plan tracks every gap found in the production-readiness audit. Financial re
 - [ ] Preserve the existing webhook URL and payload contract; run documented staging parity before any caller cutover.
 
 ### F. Analytics, issues, reports, and close
-- [ ] Turn generated data-health flags into a persistent, role-scoped review queue with acknowledge/assign/resolve and audit events.
+- [ ] Turn generated data-health flags into a persistent, role-scoped review queue with acknowledge/assign/resolve and audit events. Flags now persist review status, note, and owner/cashier assignment by report-period issue key, with changes audited; filtering and a paginated cross-period queue remain.
 - [ ] Complete report exports and paginated source data; distinguish print-to-PDF from generated downloadable PDF.
 - [ ] Add period close, role-scoped lock/unlock with reason, and controls preventing edits to locked periods except authorized reopen/correction.
 - [ ] Add scheduled report delivery and delivery history once the provider and recipient-consent contract are configured.

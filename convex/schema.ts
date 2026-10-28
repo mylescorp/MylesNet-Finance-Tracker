@@ -379,6 +379,17 @@ export default defineSchema({
     summary: v.string(),
     details: v.optional(v.string()),
   }).index("by_business_and_time", ["businessId", "occurredAt"]),
+  issueReviews: defineTable({
+    businessId: v.id("businesses"),
+    issueKey: v.string(),
+    issueId: v.string(),
+    status: v.union(v.literal("open"), v.literal("acknowledged"), v.literal("resolved")),
+    note: v.optional(v.string()),
+    assignedTo: v.optional(v.id("users")),
+    updatedBy: v.id("users"),
+    updatedAt: v.number(),
+    createdAt: v.number(),
+  }).index("by_business_and_issue", ["businessId", "issueKey"]),
   importBatches: defineTable({
     businessId: v.id("businesses"),
     fileName: v.string(),
