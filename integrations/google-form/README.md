@@ -18,7 +18,7 @@ This bridge is a separate ingress path for the existing accountant Form. It does
 2. Deploy the app branch to the staging Convex deployment so the `/google-form` route and schema are available.
 3. In the staged app, open Settings → Data and create the Google Form connection URL. Copy it once; the secret is not shown again.
 4. Add `GoogleFormBridge.gs` to the staged bound Apps Script project. Do not replace `doPost` or `onEntrySubmit`.
-5. Run `configureGoogleFormIngressUrl_` and paste the copied URL. Run `installGoogleFormBridgeTriggers_` and approve Google’s script permissions.
+5. Run `configureGoogleFormIngressUrl` and paste the copied URL. Run `installGoogleFormBridgeTriggers` and approve Google’s script permissions.
 6. The app's default `Product sales` and `Service income` categories cover the Form's sales subtypes. If you renamed them, ensure income categories still unambiguously map product/direct/equipment sales and installation/connection fees. Expense categories must match the Form's `Category` choices, and `Paid from` must identify cash or mobile money. Confirm the staging workspace uses UGX and that note, negative-balance, and duplicate rules behave as intended. Submit a test Sale and Expense; retry one queued row and confirm it is deduplicated. Submit Movement, Savings, and Loan responses and confirm they appear as `Needs review` without changing balances.
 7. Compare the staged app totals and receipts with the response Sheet and Apps Script audit trail. Resolve category/date mapping before production use.
 
