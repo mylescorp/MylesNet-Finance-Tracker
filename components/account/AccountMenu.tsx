@@ -26,7 +26,10 @@ export function AccountMenu({ displayName, email, photoUrl, workspaceName, canMa
 
   useEffect(() => {
     const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
+      if (event.key === "Escape") {
+        document.querySelector<HTMLButtonElement>(".user-menu")?.focus();
+        onClose();
+      }
     };
     const closeOnOutsideClick = (event: MouseEvent) => {
       if (event.target instanceof Element && event.target.closest(".user-menu")) return;

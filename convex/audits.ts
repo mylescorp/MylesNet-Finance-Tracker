@@ -5,6 +5,19 @@ import { query } from "./_generated/server";
 import type { QueryCtx } from "./_generated/server";
 import { hasPermission } from "./accessControl";
 
+const AUDIT_ACTIONS = [
+  "access.roles.migrated",
+  "balance.adjustment_created", "balance.adjustment_updated", "balance.adjustment_voided",
+  "bill.payment_expense_recorded", "business.settings.updated",
+  "entry.created", "entry.google_form_posted", "entry.imported", "entry.rule_override", "entry.voided",
+  "import.cancelled", "import.completed", "import.resumed", "import.started",
+  "integration.centipid.revoked", "integration.centipid.rotated", "integration.google_form.revoked", "integration.google_form.rotated",
+  "invitation.accepted", "invitation.revoked", "loan.interest_recorded",
+  "member.access.granted", "member.access.updated", "member.invited", "movement.fee_recorded",
+  "role.created", "role.updated", "webhook.entry_created", "webhook.ignored",
+  "workspace.created", "workspace.settings.updated",
+];
+
 async function authorizedWorkspace(ctx: QueryCtx) {
   const userId = await getAuthUserId(ctx);
   if (!userId) return null;
@@ -79,10 +92,7 @@ export const filterOptions = query({
   handler: async ctx => {
     const current = await authorizedWorkspace(ctx);
     if (!current) return { access: "restricted" as const };
-    const [memberships, events] = await Promise.all([
-      ctx.db.query("memberships").withIndex("by_business_and_user", q => q.eq("businessId", current.business._id)).take(500),
-      ctx.db.query("auditEvents").withIndex("by_business_and_time", q => q.eq("businessId", current.business._id)).order("desc").take(500),
-    ]);
+    const memberships = await ctx.db.query("memberships").withIndex("by_business_and_user", q => q.eq("businessId", current.business._id)).take(500);
     const actors = await Promise.all(memberships.map(async membership => {
       const [user, profile] = await Promise.all([
         ctx.db.get("users", membership.userId),
@@ -90,6 +100,6 @@ export const filterOptions = query({
       ]);
       return { id: membership.userId, name: profile?.displayName?.trim() || user?.email || "Workspace member" };
     }));
-    return { access: "ready" as const, actors: [...new Map(actors.map(actor => [actor.id, actor])).values()], actions: [...new Set(events.map(event => event.action))].sort() };
+    return { access: "ready" as const, actors: [...new Map(actors.map(actor => [actor.id, actor])).values()], actions: AUDIT_ACTIONS };
   },
 });

@@ -360,10 +360,15 @@ export const accessOverview = query({
     }));
     const pendingUsers = await Promise.all(requestsPage.page.map(async request => {
       const user = await ctx.db.get("users", request.userId);
+      if (!user) return null;
+      const membership = await ctx.db.query("memberships")
+        .withIndex("by_business_and_user", q => q.eq("businessId", current.business._id).eq("userId", request.userId))
+        .unique();
+      if (membership?.active) return null;
       return user ? { id: user._id, email: user.email ?? "Signed-in account", createdAt: request.createdAt } : null;
     }));
     const canViewAudit = await hasPermission(ctx, current.membership, "audit.view");
-    return { access: "ready" as const, canViewMembers, canManage: canManageAccess, canManageRoles, canInitializeRoleTemplates: isOwnerMembership(current.membership), canViewAudit, members: canViewMembers ? members : [], pendingUsers: canManageAccess ? pendingUsers.filter((user): user is NonNullable<typeof user> => user !== null) : [], pendingUsersContinueCursor: requestsPage.continueCursor, pendingUsersIsDone: requestsPage.isDone, roles: canManageRoles || await hasPermission(ctx, current.membership, "access.view") ? roles.map(r => ({ id: r._id, name: r.name, description: r.description, permissions: r.permissions, builtIn: r.builtIn ?? null, active: r.active, memberCount: memberships.filter(m => m.roleId === r._id || !m.roleId && (m.role === r.builtIn || m.role.toLowerCase() === r.name.toLowerCase())).length })) : [], partners: canManageAccess || canViewMembers ? partners.map(partner => ({ id: partner._id, name: partner.name })) : [], invitations: canManageAccess ? invitations.map(i => ({ id: i._id, email: i.email, role: i.role, roleId: i.roleId ?? null, partnerId: i.partnerId ?? null, partnerName: i.partnerId ? partnerNames.get(i.partnerId) : undefined, expiresAt: i.expiresAt })) : [], audit: canViewAudit ? audit.map(a => ({ id: a._id, action: a.action, summary: a.summary, occurredAt: a.occurredAt })) : [] };
+    return { access: "ready" as const, canViewMembers, canManage: canManageAccess, canManageRoles, canInitializeRoleTemplates: isOwnerMembership(current.membership), canViewAudit, members: canViewMembers ? members : [], pendingUsers: canManageAccess ? pendingUsers.filter((user): user is NonNullable<typeof user> => user !== null) : [], pendingUsersContinueCursor: requestsPage.continueCursor, pendingUsersIsDone: requestsPage.isDone, roles: canManageRoles || canManageAccess || canViewMembers ? roles.map(r => ({ id: r._id, name: r.name, description: r.description, permissions: r.permissions, builtIn: r.builtIn ?? null, active: r.active, memberCount: memberships.filter(m => m.roleId === r._id || !m.roleId && (m.role === r.builtIn || m.role.toLowerCase() === r.name.toLowerCase())).length })) : [], partners: canManageAccess || canViewMembers ? partners.map(partner => ({ id: partner._id, name: partner.name })) : [], invitations: canManageAccess ? invitations.map(i => ({ id: i._id, email: i.email, role: i.role, roleId: i.roleId ?? null, partnerId: i.partnerId ?? null, partnerName: i.partnerId ? partnerNames.get(i.partnerId) : undefined, expiresAt: i.expiresAt })) : [], audit: canViewAudit ? audit.map(a => ({ id: a._id, action: a.action, summary: a.summary, occurredAt: a.occurredAt })) : [] };
   },
 });
 
@@ -552,6 +557,12 @@ export const updateMember = mutation({
     if (!isOwnerMembership(current.membership) && assignedRole.permissions.some(p => p === "access.manage" || p === "roles.manage" || p === "data.export" || p === "imports.manage" || p === "integrations.manage" || p === "balanceAdjustments.manage" || p === "partners.distributions.manage" || p === "partners.distributions.approve")) throw new Error("Only the workspace owner can assign a privileged role.");
     if (member.userId === current.userId && !args.active) throw new Error("You cannot deactivate your own account.");
     await ctx.db.patch("memberships", args.membershipId, { role: assignedRole.name, roleId: assignedRole._id, partnerId: args.partnerId, active: args.active });
+    if (args.active) {
+      const accessRequest = await ctx.db.query("workspaceAccessRequests")
+        .withIndex("by_business_and_user", q => q.eq("businessId", current.business._id).eq("userId", member.userId))
+        .unique();
+      if (accessRequest?.status === "pending") await ctx.db.patch("workspaceAccessRequests", accessRequest._id, { status: "granted", updatedAt: Date.now() });
+    }
     await ctx.db.insert("auditEvents", { businessId: current.business._id, actorId: current.userId, action: "member.access.updated", entityType: "membership", entityId: args.membershipId, occurredAt: Date.now(), summary: `Changed a member to ${assignedRole.name} (${args.active ? "active" : "inactive"}).` });
     return null;
   },
@@ -602,6 +613,10 @@ export const acceptInvite = mutation({
     const now = Date.now();
     if (existing) await ctx.db.patch("memberships", existing._id, { active: true, role: role.name, roleId: role._id, partnerId: invite.partnerId });
     else await ctx.db.insert("memberships", { businessId: invite.businessId, userId, role: role.name, roleId: role._id, partnerId: invite.partnerId, active: true, createdAt: now });
+    const accessRequest = await ctx.db.query("workspaceAccessRequests")
+      .withIndex("by_business_and_user", q => q.eq("businessId", invite.businessId).eq("userId", userId))
+      .unique();
+    if (accessRequest?.status === "pending") await ctx.db.patch("workspaceAccessRequests", accessRequest._id, { status: "granted", updatedAt: now });
     await ctx.db.patch("invitations", invite._id, { active: false, acceptedAt: Date.now() });
     await ctx.db.insert("auditEvents", { businessId: invite.businessId, actorId: userId, action: "invitation.accepted", entityType: "invitation", entityId: invite._id, occurredAt: Date.now(), summary: `${user.email} accepted a workspace invitation.` });
     return null;
