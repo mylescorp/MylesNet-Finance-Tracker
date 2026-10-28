@@ -54,10 +54,12 @@ export default defineSchema({
     invitedBy: v.id("users"),
     expiresAt: v.number(),
     acceptedAt: v.optional(v.number()),
+    revokedAt: v.optional(v.number()),
     active: v.boolean(),
     tokenHash: v.optional(v.string()),
   })
     .index("by_email", ["email"])
+    .index("by_business_and_expires", ["businessId", "expiresAt"])
     .index("by_business_and_active", ["businessId", "active"])
     .index("by_business_and_partner_and_active", ["businessId", "partnerId", "active"])
     .index("by_token_hash", ["tokenHash"]),

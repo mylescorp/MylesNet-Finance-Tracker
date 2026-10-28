@@ -16,8 +16,8 @@ This plan tracks every gap found in the production-readiness audit. Financial re
 ### A. Auth, workspace selection, and RBAC
 - [ ] Replace the single-active-workspace assumption with an explicit selected workspace context validated against the caller's active membership.
 - [ ] Apply role/permission checks consistently to every public business query and mutation; document Owner, Cashier, Finance Approver, and Partner capabilities.
-- [ ] Add verified, audited owner transfer with protection against leaving a workspace without an owner. A transfer to a verified, active cashier or finance approver is now supported with typed email confirmation; the outgoing owner retains cashier access.
-- [ ] Add paginated member, invitation, and audit history; maintain revocation as an auditable inactive state.
+- [x] Add verified, audited owner transfer with protection against leaving a workspace without an owner. A transfer to a verified, active cashier or finance approver is supported with typed email confirmation; the outgoing owner retains cashier access.
+- [x] Add paginated member, invitation, and audit history; maintain revocation as an auditable inactive state. Owner access screens page members, all invitation outcomes, and audit events; invitation revocation records a timestamp.
 
 ### B. Cashbook and account lifecycle
 - [ ] Add safe correction and reversal screens for sales and expenses; retain originals and reconcile account balance and daily aggregates.
@@ -67,6 +67,7 @@ This plan tracks every gap found in the production-readiness audit. Financial re
 
 - Owner-only movement reversal is implemented for transfers, withdrawals, deposits, and partner contributions. It reverses account effects, updates partner capital where applicable, voids the generated withdrawal-fee entry and daily expense totals, and writes an audit reason.
 - Workspace ownership can be handed off to a verified, active cashier or finance approver after the current owner types the member's email and provides a reason. The former owner retains cashier access, and the transfer is audited.
+- Owner access history now paginates member lists, accepted/pending/expired/revoked invitations, and audit events. Invitation revocation is separately timestamped so the history distinguishes it from acceptance and natural expiry.
 - Reconciliation count corrections now preserve the original record as superseded and create a new immutable count with the updated book comparison, reason, idempotency key, and audit events. Corrections are limited to the current business day because the ledger does not reconstruct historical balances.
 - Owners can reopen an explained reconciliation with a reason; the resolution fields are cleared while the earlier explanation and reopen reason remain in the audit history.
 - Owner-only cashbook entry void controls are available on Sales and Expenses. Savings flow, loan repayment, and bill payment reversals now update linked balances, records, and daily expense totals atomically, with owner-only UI actions and audit reasons.

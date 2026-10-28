@@ -1,6 +1,7 @@
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { countries } from "countries-list";
 import { currencies } from "countries-list/currencies";
+import { paginationOptsValidator } from "convex/server";
 import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
@@ -299,19 +300,48 @@ export const accessOverview = query({
   args: {},
   handler: async (ctx) => {
     const current = await activeWorkspace(ctx);
-    if (!current || current.membership.role !== "owner") return { access: "restricted" as const, members: [], invitations: [], audit: [] };
-    const [memberships, invitations, audit, partners] = await Promise.all([
-      ctx.db.query("memberships").withIndex("by_business_and_user", q => q.eq("businessId", current.business._id)).take(100),
-      ctx.db.query("invitations").withIndex("by_business_and_active", q => q.eq("businessId", current.business._id).eq("active", true)).take(100),
-      ctx.db.query("auditEvents").withIndex("by_business_and_time", q => q.eq("businessId", current.business._id)).order("desc").take(20),
-      ctx.db.query("partners").withIndex("by_business_and_active", q => q.eq("businessId", current.business._id).eq("active", true)).take(100),
-    ]);
+    if (!current || current.membership.role !== "owner") return { access: "restricted" as const };
+    const partners = await ctx.db.query("partners").withIndex("by_business_and_active", q => q.eq("businessId", current.business._id).eq("active", true)).take(100);
+    return { access: "ready" as const, partners: partners.map(({ _id, name }) => ({ id: _id, name })) };
+  },
+});
+
+export const accessMembers = query({
+  args: { paginationOpts: paginationOptsValidator },
+  handler: async (ctx, args) => {
+    const current = await activeWorkspace(ctx);
+    if (!current || current.membership.role !== "owner") throw new Error("Only the workspace owner can view member access history.");
+    const result = await ctx.db.query("memberships").withIndex("by_business_and_user", q => q.eq("businessId", current.business._id)).order("asc").paginate(args.paginationOpts);
+    const partners = await ctx.db.query("partners").withIndex("by_business_and_active", q => q.eq("businessId", current.business._id).eq("active", true)).take(100);
     const partnerNames = new Map(partners.map(partner => [partner._id, partner.name]));
-    const members = await Promise.all(memberships.map(async m => {
-      const user = await ctx.db.get("users", m.userId);
-      return { id: m._id, role: m.role, partnerId: m.partnerId, partnerName: m.partnerId ? partnerNames.get(m.partnerId) : undefined, active: m.active, email: user?.email ?? "Signed-in user", emailVerified: typeof user?.emailVerificationTime === "number", createdAt: m.createdAt };
+    const page = await Promise.all(result.page.map(async membership => {
+      const user = await ctx.db.get("users", membership.userId);
+      return { id: membership._id, role: membership.role, partnerId: membership.partnerId, partnerName: membership.partnerId ? partnerNames.get(membership.partnerId) : undefined, active: membership.active, email: user?.email ?? "Signed-in user", emailVerified: typeof user?.emailVerificationTime === "number", createdAt: membership.createdAt };
     }));
-    return { access: "ready" as const, members, partners: partners.map(({ _id, name }) => ({ id: _id, name })), invitations: invitations.map(i => ({ id: i._id, email: i.email, role: i.role, partnerName: i.partnerId ? partnerNames.get(i.partnerId) : undefined, expiresAt: i.expiresAt })), audit: audit.map(a => ({ id: a._id, action: a.action, summary: a.summary, occurredAt: a.occurredAt })) };
+    return { ...result, page };
+  },
+});
+
+export const accessInvitations = query({
+  args: { paginationOpts: paginationOptsValidator },
+  handler: async (ctx, args) => {
+    const current = await activeWorkspace(ctx);
+    if (!current || current.membership.role !== "owner") throw new Error("Only the workspace owner can view invitations.");
+    const result = await ctx.db.query("invitations").withIndex("by_business_and_expires", q => q.eq("businessId", current.business._id)).order("desc").paginate(args.paginationOpts);
+    const partners = await ctx.db.query("partners").withIndex("by_business_and_active", q => q.eq("businessId", current.business._id).eq("active", true)).take(100);
+    const partnerNames = new Map(partners.map(partner => [partner._id, partner.name]));
+    const now = Date.now();
+    return { ...result, page: result.page.map(invitation => ({ id: invitation._id, email: invitation.email, role: invitation.role, partnerName: invitation.partnerId ? partnerNames.get(invitation.partnerId) : undefined, expiresAt: invitation.expiresAt, active: invitation.active, acceptedAt: invitation.acceptedAt, revokedAt: invitation.revokedAt, status: invitation.acceptedAt ? "Accepted" as const : invitation.revokedAt ? "Revoked" as const : invitation.expiresAt <= now ? "Expired" as const : "Pending" as const })) };
+  },
+});
+
+export const accessAudit = query({
+  args: { paginationOpts: paginationOptsValidator },
+  handler: async (ctx, args) => {
+    const current = await activeWorkspace(ctx);
+    if (!current || current.membership.role !== "owner") throw new Error("Only the workspace owner can view access audit history.");
+    const result = await ctx.db.query("auditEvents").withIndex("by_business_and_time", q => q.eq("businessId", current.business._id)).order("desc").paginate(args.paginationOpts);
+    return { ...result, page: result.page.map(event => ({ id: event._id, action: event.action, summary: event.summary, occurredAt: event.occurredAt })) };
   },
 });
 
@@ -352,7 +382,7 @@ export const revokeInvite = mutation({
     const current = await activeWorkspace(ctx);
     const invite = await ctx.db.get("invitations", invitationId);
     if (!current || current.membership.role !== "owner" || !invite || invite.businessId !== current.business._id) throw new Error("Invitation not found or access denied.");
-    await ctx.db.patch("invitations", invitationId, { active: false });
+    await ctx.db.patch("invitations", invitationId, { active: false, revokedAt: Date.now() });
     await ctx.db.insert("auditEvents", { businessId: current.business._id, actorId: current.userId, action: "invitation.revoked", entityType: "invitation", entityId: invitationId, occurredAt: Date.now(), summary: `Revoked invitation for ${invite.email}.` });
     return null;
   },
