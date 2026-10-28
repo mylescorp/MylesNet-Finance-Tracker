@@ -5,6 +5,7 @@ import { paginationOptsValidator, paginationResultValidator } from "convex/serve
 import { mutation, query } from "./_generated/server";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import type { Id } from "./_generated/dataModel";
+import { getSelectedWorkspace, listUserWorkspaces } from "./workspaceContext";
 
 function addSafeInteger(left: number, right: number, label: string) {
   const result = left + right;
@@ -23,8 +24,10 @@ function formatAmount(amountMinor: number, currency: string) {
 const accessResult = v.union(
   v.object({ access: v.literal("setup") }),
   v.object({ access: v.literal("pending") }),
+  v.object({ access: v.literal("choose_workspace"), workspaces: v.array(v.object({ businessId: v.id("businesses"), businessName: v.string(), role: v.union(v.literal("owner"), v.literal("partner"), v.literal("cashier"), v.literal("finance_approver")) })) }),
   v.object({
     access: v.literal("ready"),
+    businessId: v.id("businesses"),
     businessName: v.string(),
     role: v.union(
       v.literal("owner"),
@@ -35,23 +38,7 @@ const accessResult = v.union(
   }),
 );
 
-async function getMembership(ctx: QueryCtx | MutationCtx) {
-  const userId = await getAuthUserId(ctx);
-  if (!userId) return null;
-  const memberships = await ctx.db
-    .query("memberships")
-    .withIndex("by_user", (q) => q.eq("userId", userId))
-    .take(20);
-  // This first release has one active business workspace per signed-in user.
-  // Fail closed instead of choosing a tenant if more than one membership exists.
-  if (memberships.length === 20) return null;
-  const activeMemberships = memberships.filter((membership) => membership.active);
-  if (activeMemberships.length !== 1) return null;
-  const membership = activeMemberships[0];
-  const business = await ctx.db.get("businesses", membership.businessId);
-  if (!business) return null;
-  return { userId, membership, business };
-}
+async function getMembership(ctx: QueryCtx | MutationCtx) { return await getSelectedWorkspace(ctx); }
 
 async function applyAccountEffect(
   ctx: MutationCtx,
@@ -141,14 +128,41 @@ export const currentAccess = query({
   handler: async (ctx) => {
     const current = await getMembership(ctx);
     if (!current) {
+      const userId = await getAuthUserId(ctx);
+      if (userId) {
+        const workspaces = await listUserWorkspaces(ctx, userId);
+        if (workspaces.length > 1) return { access: "choose_workspace" as const, workspaces };
+      }
       const businesses = await ctx.db.query("businesses").take(1);
       return { access: businesses.length === 0 ? "setup" as const : "pending" as const };
     }
+    const workspaces = await listUserWorkspaces(ctx, current.userId);
     return {
       access: "ready" as const,
+      businessId: current.business._id,
       businessName: current.business.name,
       role: current.membership.role,
+      workspaces,
     };
+  },
+});
+
+export const selectWorkspace = mutation({
+  args: { businessId: v.id("businesses") },
+  returns: v.null(),
+  handler: async (ctx, { businessId }) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error("Sign in before switching workspaces.");
+    const membership = await ctx.db.query("memberships").withIndex("by_business_and_user", q => q.eq("businessId", businessId).eq("userId", userId)).unique();
+    if (!membership?.active) throw new Error("This account does not have active access to that workspace.");
+    const business = await ctx.db.get("businesses", businessId);
+    if (!business) throw new Error("Workspace not found.");
+    const prior = await ctx.db.query("workspaceSelections").withIndex("by_user", q => q.eq("userId", userId)).unique();
+    const now = Date.now();
+    if (prior) await ctx.db.patch("workspaceSelections", prior._id, { businessId, selectedAt: now });
+    else await ctx.db.insert("workspaceSelections", { userId, businessId, selectedAt: now });
+    await ctx.db.insert("auditEvents", { businessId, actorId: userId, action: "workspace.selected", entityType: "business", entityId: businessId, occurredAt: now, summary: `Switched active workspace to ${business.name}.` });
+    return null;
   },
 });
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { useQuery } from "convex/react";
+import { useMutation, useQuery } from "convex/react";
 import {
   Activity, ArrowDownUp, BarChart3, Bell, CalendarDays, ChevronDown,
   ChevronsLeft, ChevronsRight, FileBarChart, HandCoins, LayoutDashboard,
@@ -14,6 +14,7 @@ import { ThemeControl } from "@/components/ThemeControl";
 import { AccountDrawer, ProfileAvatar } from "@/components/account/AccountDrawer";
 import { GlobalSearch } from "@/components/workspace/GlobalSearch";
 import { api } from "@/convex/_generated/api";
+import type { Id } from "@/convex/_generated/dataModel";
 
 const navGroups = [
   { label: "Overview", items: [
@@ -43,11 +44,14 @@ export function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
   const access = useQuery(api.workspace.currentAccess, {});
+  const selectWorkspace = useMutation(api.workspace.selectWorkspace);
   const businessSettings = useQuery(api.workspace.businessSettings, {});
   const profile = useQuery(api.users.profile, {});
   const [mobileOpen, setMobileOpen] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
   const [accountReturnTo, setAccountReturnTo] = useState("/dashboard");
+  const [workspaceError, setWorkspaceError] = useState("");
+  const [switchingWorkspace, setSwitchingWorkspace] = useState(false);
   const menuButtonRef = useRef<HTMLButtonElement>(null);
   const sidebarCloseRef = useRef<HTMLButtonElement>(null);
   const accountLabel = access?.access === "ready" ? access.businessName : "My account";
@@ -66,6 +70,13 @@ export function AppShell({ children }: { children: ReactNode }) {
   const closeAccount = useCallback(() => {
     router.replace(accountReturnTo === "/account" ? "/dashboard" : accountReturnTo);
   }, [accountReturnTo, router]);
+  async function changeWorkspace(businessId: string) {
+    if (!businessId || access?.access !== "ready" || businessId === access.businessId) return;
+    setSwitchingWorkspace(true); setWorkspaceError("");
+    try { await selectWorkspace({ businessId: businessId as Id<"businesses"> }); }
+    catch (error) { setWorkspaceError(error instanceof Error ? error.message : "Could not switch workspaces."); }
+    finally { setSwitchingWorkspace(false); }
+  }
   useEffect(() => {
     const media = window.matchMedia("(max-width: 760px)");
     if (!mobileOpen || !media.matches) return;
@@ -115,6 +126,7 @@ export function AppShell({ children }: { children: ReactNode }) {
           <span className="sidebar-workspace-copy"><strong>{accountLabel}</strong><small>FINANCE WORKSPACE</small></span>
           <ChevronDown className="sidebar-workspace-chevron" size={15} aria-hidden="true" />
         </div>
+        {access?.access === "ready" && access.workspaces.length > 1 && <label className="workspace-switcher"><span>Switch workspace</span><select aria-label="Switch workspace" value={access.businessId} disabled={switchingWorkspace} onChange={event => void changeWorkspace(event.target.value)}>{access.workspaces.map(workspace => <option key={workspace.businessId} value={workspace.businessId}>{workspace.businessName} · {workspace.role.replaceAll("_", " ")}</option>)}</select></label>}
         <nav className="sidebar-nav" aria-label="Main navigation">
           {visibleNavGroups.map(group => <section className="sidebar-nav-group" key={group.label} aria-label={group.label}>
             <h2 className="sidebar-group-label">{group.label}</h2>
@@ -151,7 +163,8 @@ export function AppShell({ children }: { children: ReactNode }) {
         </div>
       </header>
       {access?.access === "pending" && <div className="access-pending" role="status"><strong>Access awaiting invitation</strong><span>This Google account is signed in but is not yet linked to a MylesNet workspace.</span></div>}
-      <main className="page-content">{children}</main>
+      {access?.access === "choose_workspace" && <section className="access-pending workspace-choice" role="status"><strong>Choose a workspace</strong><span>Your account has access to more than one workspace. Select which workspace to open.</span>{workspaceError && <span role="alert">{workspaceError}</span>}{access.workspaces.map(workspace => <button key={workspace.businessId} className="button" type="button" disabled={switchingWorkspace} onClick={() => { setSwitchingWorkspace(true); setWorkspaceError(""); void selectWorkspace({ businessId: workspace.businessId }).catch(error => setWorkspaceError(error instanceof Error ? error.message : "Could not open this workspace.")).finally(() => setSwitchingWorkspace(false)); }}><strong>{workspace.businessName}</strong><span>{workspace.role.replaceAll("_", " ")}</span></button>)}</section>}
+      <main className="page-content">{access?.access === "choose_workspace" ? null : children}</main>
       <footer className="app-footer"><span>MylesNet Finance Tracker · {businessSettings?.access === "ready" ? businessSettings.currency : "UGX"}</span><span>Workspace data is protected by your assigned role.</span></footer>
       </div>
       {pathname === "/account" && <AccountDrawer onClose={closeAccount} />}

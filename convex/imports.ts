@@ -1,23 +1,16 @@
-import { getAuthUserId } from "@convex-dev/auth/server";
 import { paginationOptsValidator } from "convex/server";
 import { ConvexError, v } from "convex/values";
 import { mutation, query } from "./_generated/server";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
+import { getSelectedWorkspace } from "./workspaceContext";
 
 const account = v.union(v.literal("cash"), v.literal("mobile_money"), v.literal("unallocated"));
 const importType = v.union(v.literal("cashbook"), v.literal("centipid_analytics"));
 
 async function ownerContext(ctx: MutationCtx | QueryCtx) {
-  const userId = await getAuthUserId(ctx);
-  if (!userId) throw new ConvexError("Sign in before importing data.");
-  const memberships = await ctx.db.query("memberships").withIndex("by_user", q => q.eq("userId", userId)).take(20);
-  const active = memberships.filter(item => item.active);
-  if (memberships.length >= 20 || active.length !== 1 || active[0].role !== "owner") {
-    throw new ConvexError("Only the owner of one active workspace can import data.");
-  }
-  const business = await ctx.db.get("businesses", active[0].businessId);
-  if (!business) throw new ConvexError("Workspace not found.");
-  return { userId, business };
+  const current = await getSelectedWorkspace(ctx);
+  if (!current || current.membership.role !== "owner") throw new ConvexError("Select a workspace you own before importing data.");
+  return { userId: current.userId, business: current.business };
 }
 
 function validDay(day: string) {

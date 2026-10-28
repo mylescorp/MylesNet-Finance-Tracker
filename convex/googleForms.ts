@@ -1,21 +1,16 @@
-import { getAuthUserId } from "@convex-dev/auth/server";
 import { paginationOptsValidator } from "convex/server";
 import { ConvexError, v } from "convex/values";
 import { internalMutation, mutation, query } from "./_generated/server";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
+import { getSelectedWorkspace } from "./workspaceContext";
 
 type Ctx = MutationCtx | QueryCtx;
 type Kind = "sale" | "expense" | "movement" | "savings" | "loan" | "unknown";
 
 async function owner(ctx: Ctx) {
-  const userId = await getAuthUserId(ctx);
-  if (!userId) throw new ConvexError("Sign in before managing the Google Forms connection.");
-  const memberships = await ctx.db.query("memberships").withIndex("by_user", q => q.eq("userId", userId)).take(20);
-  const active = memberships.filter(item => item.active);
-  if (memberships.length >= 20 || active.length !== 1 || active[0].role !== "owner") throw new ConvexError("Only the owner of one active workspace can manage Google Forms.");
-  const business = await ctx.db.get("businesses", active[0].businessId);
-  if (!business) throw new ConvexError("Workspace not found.");
-  return { userId, business };
+  const current = await getSelectedWorkspace(ctx);
+  if (!current || current.membership.role !== "owner") throw new ConvexError("Select a workspace you own before managing Google Forms.");
+  return { userId: current.userId, business: current.business };
 }
 
 async function sha256(value: string) {

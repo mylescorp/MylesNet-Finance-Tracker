@@ -25,6 +25,10 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .sidebar-workspace-copy strong { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px; font-weight:600; }
 .sidebar-workspace-copy small { color:var(--mn-muted); font-size:9px; letter-spacing:.09em; }
 .sidebar-workspace-chevron { flex:none; margin-left:auto; color:var(--mn-subtle); }
+.workspace-switcher { display:flex; flex-direction:column; gap:5px; padding:0 2px 5px; color:var(--mn-muted); font-size:10px; }
+.workspace-switcher select { width:100%; min-height:34px; padding:6px 8px; border:1px solid var(--mn-line); border-radius:8px; color:var(--mn-ink); background:var(--mn-card); font:inherit; }
+.workspace-choice { display:flex; flex-direction:column; align-items:flex-start; gap:10px; max-width:620px; margin:32px auto; padding:22px; }
+.workspace-choice>button { display:flex; width:100%; justify-content:space-between; align-items:center; gap:16px; }
 .sidebar-nav { display:flex; flex:1; flex-direction:column; gap:18px; padding:2px 0; }
 .sidebar-nav-group { display:flex; flex-direction:column; gap:3px; }
 .sidebar-group-label { margin:0 0 5px; padding:0 11px; color:var(--mn-subtle); font-size:10px; line-height:18px; font-weight:600; letter-spacing:.1em; text-transform:uppercase; }
@@ -46,6 +50,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .app-frame-collapsed .sidebar-brand { display:none; }
 .app-frame-collapsed .sidebar-collapse-button { width:38px; height:38px; }
 .app-frame-collapsed .sidebar-workspace { justify-content:center; padding:8px 3px; }
+.app-frame-collapsed .workspace-switcher { display:none; }
 .app-frame-collapsed .sidebar-workspace-copy,.app-frame-collapsed .sidebar-workspace-chevron,.app-frame-collapsed .sidebar-group-label,.app-frame-collapsed .sidebar-link-label,.app-frame-collapsed .sidebar-support span:last-child { display:none; }
 .app-frame-collapsed .sidebar-link { justify-content:center; padding:0; }
 .app-frame-collapsed .sidebar-link:hover { transform:translateY(-1px); }

@@ -1,10 +1,10 @@
-import { getAuthUserId } from "@convex-dev/auth/server";
 import { paginationOptsValidator } from "convex/server";
 import { ConvexError, v } from "convex/values";
 import { internalMutation, mutation, query } from "./_generated/server";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
 import { isIgnoredCentipidEvent } from "./centipidUtils";
+import { getSelectedWorkspace } from "./workspaceContext";
 
 function addSafeInteger(left: number, right: number, label: string) {
   const result = left + right;
@@ -13,14 +13,9 @@ function addSafeInteger(left: number, right: number, label: string) {
 }
 
 async function owner(ctx: MutationCtx | QueryCtx) {
-  const userId = await getAuthUserId(ctx);
-  if (!userId) throw new ConvexError("Sign in before managing Centipid integration.");
-  const memberships = await ctx.db.query("memberships").withIndex("by_user", q => q.eq("userId", userId)).take(20);
-  const active = memberships.filter(item => item.active);
-  if (memberships.length >= 20 || active.length !== 1 || active[0].role !== "owner") throw new ConvexError("Only the owner of one active workspace can manage the integration.");
-  const business = await ctx.db.get("businesses", active[0].businessId);
-  if (!business) throw new ConvexError("Workspace not found.");
-  return { userId, business };
+  const current = await getSelectedWorkspace(ctx);
+  if (!current || current.membership.role !== "owner") throw new ConvexError("Select a workspace you own before managing the integration.");
+  return { userId: current.userId, business: current.business };
 }
 
 async function sha256(value: string) {

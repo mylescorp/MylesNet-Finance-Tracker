@@ -1,9 +1,9 @@
-import { getAuthUserId } from "@convex-dev/auth/server";
 import { paginationOptsValidator } from "convex/server";
 import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import type { Id } from "./_generated/dataModel";
+import { getSelectedWorkspace } from "./workspaceContext";
 
 type Ctx = QueryCtx | MutationCtx;
 type ActiveWorkspace = { userId: Id<"users">; membership: { role: "owner" | "partner" | "cashier" | "finance_approver"; businessId: Id<"businesses"> }; business: { _id: Id<"businesses">; currency: string; timezone: string; createdAt: number } };
@@ -35,14 +35,7 @@ function dayAt(timestamp: number, timezone: string) {
 }
 
 async function workspace(ctx: Ctx): Promise<ActiveWorkspace | null> {
-  const userId = await getAuthUserId(ctx);
-  if (!userId) return null;
-  const memberships = await ctx.db.query("memberships").withIndex("by_user", q => q.eq("userId", userId)).take(20);
-  const active = memberships.filter(row => row.active);
-  if (memberships.length === 20 || active.length !== 1) return null;
-  const membership = active[0];
-  const business = await ctx.db.get("businesses", membership.businessId);
-  return business ? { userId, membership, business } : null;
+  return await getSelectedWorkspace(ctx);
 }
 
 async function requireOwner(ctx: Ctx) {

@@ -14,7 +14,7 @@ This plan tracks every gap found in the production-readiness audit. Financial re
 ## Workstreams
 
 ### A. Auth, workspace selection, and RBAC
-- [ ] Replace the single-active-workspace assumption with an explicit selected workspace context validated against the caller's active membership.
+- [x] Replace the single-active-workspace assumption with an explicit selected workspace context validated against the caller's active membership. A server-backed selection and workspace chooser now drive a shared resolver used by public finance, settings, imports, analytics, distributions, and integration-management functions.
 - [ ] Apply role/permission checks consistently to every public business query and mutation; document Owner, Cashier, Finance Approver, and Partner capabilities.
 - [x] Add verified, audited owner transfer with protection against leaving a workspace without an owner. A transfer to a verified, active cashier or finance approver is supported with typed email confirmation; the outgoing owner retains cashier access.
 - [x] Add paginated member, invitation, and audit history; maintain revocation as an auditable inactive state. Owner access screens page members, all invitation outcomes, and audit events; invitation revocation records a timestamp.
@@ -65,6 +65,7 @@ This plan tracks every gap found in the production-readiness audit. Financial re
 
 ## Current working branch evidence
 
+- Accounts with multiple active workspace memberships now receive a workspace chooser and can switch from the sidebar. Selection is stored per user, audited, and every supported business-data resolver rechecks the selected active membership before returning data or accepting writes.
 - Owner-only movement reversal is implemented for transfers, withdrawals, deposits, and partner contributions. It reverses account effects, updates partner capital where applicable, voids the generated withdrawal-fee entry and daily expense totals, and writes an audit reason.
 - Workspace ownership can be handed off to a verified, active cashier or finance approver after the current owner types the member's email and provides a reason. The former owner retains cashier access, and the transfer is audited.
 - Owner access history now paginates member lists, accepted/pending/expired/revoked invitations, and audit events. Invitation revocation is separately timestamped so the history distinguishes it from acceptance and natural expiry.

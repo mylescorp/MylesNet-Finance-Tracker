@@ -1,9 +1,9 @@
-import { getAuthUserId } from "@convex-dev/auth/server";
 import { paginationOptsValidator } from "convex/server";
 import { ConvexError, v } from "convex/values";
 import { mutation, query } from "./_generated/server";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import type { Id } from "./_generated/dataModel";
+import { getSelectedWorkspace } from "./workspaceContext";
 
 type Ctx = MutationCtx | QueryCtx;
 type Account = "cash" | "mobile_money";
@@ -29,14 +29,7 @@ function dayInZone(timestamp: number, timezone: string) {
 }
 
 async function workspace(ctx: Ctx) {
-  const userId = await getAuthUserId(ctx);
-  if (!userId) return null;
-  const memberships = await ctx.db.query("memberships").withIndex("by_user", q => q.eq("userId", userId)).take(20);
-  if (memberships.length === 20) return null;
-  const active = memberships.filter(row => row.active);
-  if (active.length !== 1) return null;
-  const business = await ctx.db.get("businesses", active[0].businessId);
-  return business ? { userId, membership: active[0], business } : null;
+  return await getSelectedWorkspace(ctx);
 }
 
 async function accountBalance(ctx: MutationCtx, businessId: Id<"businesses">, account: Account) {

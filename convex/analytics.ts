@@ -1,8 +1,8 @@
-import { getAuthUserId } from "@convex-dev/auth/server";
 import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
 import type { QueryCtx } from "./_generated/server";
 import type { Id } from "./_generated/dataModel";
+import { getSelectedWorkspace } from "./workspaceContext";
 
 function safeAdd(a: number, b: number, label: string) {
   const result = a + b;
@@ -42,14 +42,9 @@ export const overview = query({
     if (!validDay(args.from) || !validDay(args.toExclusive) || !validDay(args.today) || args.from >= args.toExclusive || args.toExclusive > shiftDay(args.today, 1)) throw new Error("Choose a valid reporting range that ends no later than today.");
     const rangeLength = (Date.parse(`${args.toExclusive}T00:00:00.000Z`) - Date.parse(`${args.from}T00:00:00.000Z`)) / 86_400_000;
     if (rangeLength > 370) throw new Error("Choose a reporting period of 370 days or less.");
-    const userId = await getAuthUserId(ctx);
-    if (!userId) return { access: "pending" as const };
-    const memberships = await ctx.db.query("memberships").withIndex("by_user", q => q.eq("userId", userId)).take(20);
-    const active = memberships.filter(row => row.active);
-    if (memberships.length === 20 || active.length !== 1) return { access: "pending" as const };
-    const membership = active[0];
-    const business = await ctx.db.get("businesses", membership.businessId);
-    if (!business) return { access: "pending" as const };
+    const current = await getSelectedWorkspace(ctx);
+    if (!current) return { access: "pending" as const };
+    const { membership, business } = current;
     if (membership.role === "partner" || membership.role === "finance_approver") return { access: "restricted" as const };
 
     const month = monthBounds(args.today);
@@ -135,7 +130,8 @@ export const overview = query({
 
     const reviewers = (await ctx.db.query("memberships").withIndex("by_business_and_user", q => q.eq("businessId", business._id)).take(100))
       .filter(row => row.active && (row.role === "owner" || row.role === "cashier"));
-    const reviewerOptions = await Promise.all(reviewers.map(async row => {
+    const visibleReviewers = membership.role === "owner" ? reviewers : reviewers.filter(row => row.userId === current.userId);
+    const reviewerOptions = await Promise.all(visibleReviewers.map(async row => {
       const user = await ctx.db.get("users", row.userId);
       return { id: row.userId, label: user?.name || user?.email || "Workspace member" };
     }));
@@ -143,7 +139,7 @@ export const overview = query({
       const issueKey = `${args.from}:${args.toExclusive}:${issue.id}:${issue.amountUgx}`;
       const review = await ctx.db.query("issueReviews").withIndex("by_business_and_issue", q => q.eq("businessId", business._id).eq("issueKey", issueKey)).unique();
       const assignee = review?.assignedTo ? await ctx.db.get("users", review.assignedTo) : null;
-      return { ...issue, issueKey, status: review?.status ?? "open" as const, reviewNote: review?.note, assignedTo: review?.assignedTo, assignedToLabel: assignee?.name || assignee?.email };
+      return { ...issue, issueKey, status: review?.status ?? "open" as const, reviewNote: review?.note, assignedTo: review?.assignedTo, assignedToLabel: assignee?.name || assignee?.email, reviewUpdatedAt: review?.updatedAt };
     }));
 
     return {
@@ -168,28 +164,27 @@ export const overview = query({
 
 export const updateIssueReview = mutation({
   args: {
-    issueKey: v.string(), issueId: v.string(), from: v.string(), toExclusive: v.string(), amountUgx: v.number(),
+    issueKey: v.string(), issueId: v.string(), from: v.string(), toExclusive: v.string(), amountUgx: v.number(), expectedUpdatedAt: v.union(v.number(), v.null()),
     status: v.union(v.literal("open"), v.literal("acknowledged"), v.literal("resolved")),
     note: v.string(), assignedTo: v.optional(v.id("users")),
   },
   returns: v.null(),
   handler: async (ctx, args) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) throw new Error("Sign in before updating issue reviews.");
-    const memberships = await ctx.db.query("memberships").withIndex("by_user", q => q.eq("userId", userId)).take(20);
-    const active = memberships.filter(row => row.active);
-    if (memberships.length >= 20 || active.length !== 1 || (active[0].role !== "owner" && active[0].role !== "cashier")) throw new Error("Only an active owner or cashier can update data-health reviews.");
-    const business = await ctx.db.get("businesses", active[0].businessId);
-    if (!business) throw new Error("Workspace not found.");
+    const current = await getSelectedWorkspace(ctx);
+    if (!current || (current.membership.role !== "owner" && current.membership.role !== "cashier")) throw new Error("Select a workspace where you are an active owner or cashier to update data-health reviews.");
+    const { userId, business } = current;
     if (!validDay(args.from) || !validDay(args.toExclusive) || args.from >= args.toExclusive || !/^[a-z0-9-]{3,80}$/.test(args.issueId) || !Number.isSafeInteger(args.amountUgx) || args.issueKey !== `${args.from}:${args.toExclusive}:${args.issueId}:${args.amountUgx}`) throw new Error("The issue reference is invalid or has expired.");
     const note = args.note.trim();
     if (note.length > 500) throw new Error("Review notes must be 500 characters or fewer.");
+    const prior = await ctx.db.query("issueReviews").withIndex("by_business_and_issue", q => q.eq("businessId", business._id).eq("issueKey", args.issueKey)).unique();
+    if (prior?.updatedAt !== (args.expectedUpdatedAt ?? undefined)) throw new Error("This issue changed after you opened it. Its latest review has been loaded; review the new status before saving again.");
+    if (current.membership.role !== "owner" && args.assignedTo !== prior?.assignedTo && args.assignedTo !== userId && prior?.assignedTo !== userId) throw new Error("Cashiers can assign an issue only to themselves or preserve its current assignment.");
     if (args.assignedTo) {
       const assigneeMembership = await ctx.db.query("memberships").withIndex("by_business_and_user", q => q.eq("businessId", business._id).eq("userId", args.assignedTo!)).unique();
-      if (!assigneeMembership?.active || (assigneeMembership.role !== "owner" && assigneeMembership.role !== "cashier")) throw new Error("Assign this issue to an active owner or cashier.");
-      if (active[0].role !== "owner" && args.assignedTo !== userId) throw new Error("Cashiers can assign an issue only to themselves.");
+      const preservingAssignment = prior?.assignedTo === args.assignedTo;
+      if (!preservingAssignment && (!assigneeMembership?.active || (assigneeMembership.role !== "owner" && assigneeMembership.role !== "cashier"))) throw new Error("Assign this issue to an active owner or cashier.");
+      if (current.membership.role !== "owner" && args.assignedTo !== userId && !preservingAssignment) throw new Error("Cashiers can assign an issue only to themselves or preserve its current assignment.");
     }
-    const prior = await ctx.db.query("issueReviews").withIndex("by_business_and_issue", q => q.eq("businessId", business._id).eq("issueKey", args.issueKey)).unique();
     const now = Date.now();
     if (prior) await ctx.db.patch("issueReviews", prior._id, { status: args.status, note: note || undefined, assignedTo: args.assignedTo, updatedBy: userId, updatedAt: now });
     else await ctx.db.insert("issueReviews", { businessId: business._id, issueKey: args.issueKey, issueId: args.issueId, status: args.status, note: note || undefined, assignedTo: args.assignedTo, updatedBy: userId, updatedAt: now, createdAt: now });

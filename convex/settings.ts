@@ -6,6 +6,7 @@ import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import type { Id } from "./_generated/dataModel";
+import { getSelectedWorkspace } from "./workspaceContext";
 
 const role = v.union(v.literal("owner"), v.literal("partner"), v.literal("cashier"), v.literal("finance_approver"));
 function currencyMinorDigits(currency: string) {
@@ -22,14 +23,7 @@ function isValidCurrencyAmount(amount: number, scale: number) {
 }
 
 async function activeWorkspace(ctx: QueryCtx | MutationCtx) {
-  const userId = await getAuthUserId(ctx);
-  if (!userId) return null;
-  const memberships = await ctx.db.query("memberships").withIndex("by_user", q => q.eq("userId", userId)).take(20);
-  const active = memberships.filter(m => m.active);
-  if (memberships.length === 20 || active.length !== 1) return null;
-  const membership = active[0];
-  const business = await ctx.db.get("businesses", membership.businessId);
-  return business ? { userId, membership, business } : null;
+  return await getSelectedWorkspace(ctx);
 }
 
 async function hasCurrencySensitiveData(ctx: MutationCtx, businessId: Id<"businesses">) {
@@ -331,7 +325,7 @@ export const accessInvitations = query({
     const partners = await ctx.db.query("partners").withIndex("by_business_and_active", q => q.eq("businessId", current.business._id).eq("active", true)).take(100);
     const partnerNames = new Map(partners.map(partner => [partner._id, partner.name]));
     const now = Date.now();
-    return { ...result, page: result.page.map(invitation => ({ id: invitation._id, email: invitation.email, role: invitation.role, partnerName: invitation.partnerId ? partnerNames.get(invitation.partnerId) : undefined, expiresAt: invitation.expiresAt, active: invitation.active, acceptedAt: invitation.acceptedAt, revokedAt: invitation.revokedAt, status: invitation.acceptedAt ? "Accepted" as const : invitation.revokedAt ? "Revoked" as const : invitation.expiresAt <= now ? "Expired" as const : "Pending" as const })) };
+    return { ...result, page: result.page.map(invitation => ({ id: invitation._id, email: invitation.email, role: invitation.role, partnerName: invitation.partnerId ? partnerNames.get(invitation.partnerId) : undefined, expiresAt: invitation.expiresAt, active: invitation.active, acceptedAt: invitation.acceptedAt, revokedAt: invitation.revokedAt, status: invitation.acceptedAt ? "Accepted" as const : invitation.revokedAt || !invitation.active ? "Revoked" as const : invitation.expiresAt <= now ? "Expired" as const : "Pending" as const })) };
   },
 });
 

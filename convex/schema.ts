@@ -19,6 +19,11 @@ export default defineSchema({
     photoRemoved: v.optional(v.boolean()),
     updatedAt: v.number(),
   }).index("by_user", ["userId"]),
+  workspaceSelections: defineTable({
+    userId: v.id("users"),
+    businessId: v.id("businesses"),
+    selectedAt: v.number(),
+  }).index("by_user", ["userId"]),
   profilePhotoUploads: defineTable({
     userId: v.id("users"),
     storageId: v.id("_storage"),
