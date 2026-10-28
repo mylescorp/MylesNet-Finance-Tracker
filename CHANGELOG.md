@@ -14,5 +14,6 @@ Add a dated entry at the top of this file for every user-visible product change.
 
 ### Improvements
 
+- Simplify the sidebar by removing the redundant workspace-protection footer.
 - Configure workspace country, timezone, currency, finance rules, and reporting preferences in Settings.
 - Review imports and connected finance integrations from the Data settings area.

@@ -199,7 +199,6 @@ export function AppShell({ children }: { children: ReactNode }) {
             {unreadChanges > 0 && <span className="changelog-unread-count" aria-hidden="true">{unreadChanges > 99 ? "99+" : unreadChanges}</span>}
             {pathname === "/changelog" && <span className="sidebar-active-indicator" aria-hidden="true" />}
           </Link>
-          <div className="sidebar-support"><span className="sidebar-support-dot" /><span><strong>Workspace protected</strong><small>Secure finance access</small></span></div>
         </div>
       </aside>
       {mobileOpen && <button className="sidebar-backdrop" type="button" aria-label="Close navigation" onClick={() => setMobileOpen(false)} />}
