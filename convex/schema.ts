@@ -241,6 +241,9 @@ export default defineSchema({
     state: v.union(v.literal("posted"), v.literal("void")),
     createdBy: v.id("users"),
     createdAt: v.number(),
+    voidedAt: v.optional(v.number()),
+    voidedBy: v.optional(v.id("users")),
+    voidReason: v.optional(v.string()),
   })
     .index("by_business_and_date", ["businessId", "occurredOn"])
     .index("by_business_and_partner_and_date", ["businessId", "partnerId", "occurredOn"])
@@ -266,6 +269,10 @@ export default defineSchema({
     idempotencyKey: v.string(),
     createdBy: v.id("users"),
     createdAt: v.number(),
+    state: v.optional(v.union(v.literal("posted"), v.literal("void"))),
+    voidedAt: v.optional(v.number()),
+    voidedBy: v.optional(v.id("users")),
+    voidReason: v.optional(v.string()),
   })
     .index("by_business_and_date", ["businessId", "occurredOn"])
     .index("by_business_and_idempotency", ["businessId", "idempotencyKey"])
@@ -298,6 +305,10 @@ export default defineSchema({
     idempotencyKey: v.string(),
     createdBy: v.id("users"),
     createdAt: v.number(),
+    state: v.optional(v.union(v.literal("posted"), v.literal("void"))),
+    voidedAt: v.optional(v.number()),
+    voidedBy: v.optional(v.id("users")),
+    voidReason: v.optional(v.string()),
   })
     .index("by_business_and_date", ["businessId", "paidOn"])
     .index("by_business_and_idempotency", ["businessId", "idempotencyKey"])
@@ -325,13 +336,19 @@ export default defineSchema({
     amountUgx: v.number(),
     account: v.optional(v.union(v.literal("cash"), v.literal("mobile_money"))),
     paidOn: v.string(),
+    priorNextDueOn: v.optional(v.string()),
     idempotencyKey: v.string(),
     createdBy: v.id("users"),
     createdAt: v.number(),
+    state: v.optional(v.union(v.literal("posted"), v.literal("void"))),
+    voidedAt: v.optional(v.number()),
+    voidedBy: v.optional(v.id("users")),
+    voidReason: v.optional(v.string()),
   })
     .index("by_business_and_date", ["businessId", "paidOn"])
     .index("by_business_and_idempotency", ["businessId", "idempotencyKey"])
-    .index("by_bill_and_date", ["billId", "paidOn"]),
+    .index("by_bill_and_date", ["billId", "paidOn"])
+    .index("by_bill_and_created_at", ["billId", "createdAt"]),
   reconciliations: defineTable({
     businessId: v.id("businesses"),
     account: v.union(v.literal("cash"), v.literal("mobile_money")),

@@ -98,6 +98,17 @@ async function postExpense(ctx: MutationCtx, args: {
   return entryId;
 }
 
+async function reverseLinkedExpense(ctx: MutationCtx, current: NonNullable<Awaited<ReturnType<typeof workspace>>>, idempotencyKey: string, operationKey: string, operationSource: "loan_interest" | "bill_payment", reason: string) {
+  const entry = await ctx.db.query("entries").withIndex("by_business_and_idempotency", q => q.eq("businessId", current.business._id).eq("idempotencyKey", idempotencyKey)).unique();
+  if (!entry || entry.state !== "posted" || entry.operationSource !== operationSource || entry.operationKey !== operationKey) throw new Error("The linked expense is missing or already changed. Reconcile its source record before reversing.");
+  const day = await ctx.db.query("dailyTotals").withIndex("by_business_and_day", q => q.eq("businessId", current.business._id).eq("day", entry.occurredOn)).unique();
+  if (!day || day.expensesUgx < entry.amountUgx || day.expenseCount < 1) throw new Error("Daily expense totals need reconciliation before this payment can be reversed.");
+  await ctx.db.patch("dailyTotals", day._id, { expensesUgx: safeAdd(day.expensesUgx, -entry.amountUgx, "Daily expenses"), expenseCount: safeAdd(day.expenseCount, -1, "Daily expense count") });
+  const now = Date.now();
+  await ctx.db.patch("entries", entry._id, { state: "void", voidedAt: now, voidedBy: current.userId, voidReason: reason });
+  await ctx.db.insert("auditEvents", { businessId: current.business._id, actorId: current.userId, action: `${operationSource}.reversed`, entityType: "entry", entityId: entry._id, occurredAt: now, summary: reason });
+}
+
 async function audit(ctx: MutationCtx, current: NonNullable<Awaited<ReturnType<typeof workspace>>>, action: string, entityType: string, entityId: string, summary: string) {
   await ctx.db.insert("auditEvents", { businessId: current.business._id, actorId: current.userId, action, entityType, entityId, occurredAt: Date.now(), summary });
 }
@@ -112,13 +123,13 @@ export const overview = query({
     v.object({ access: v.literal("restricted") }),
     v.object({
       access: v.literal("ready"), role: membershipRoleV,
-      movements: v.array(v.object({ _id: v.id("movements"), kind: v.union(v.literal("transfer"), v.literal("withdrawal"), v.literal("deposit"), v.literal("capital_contribution")), amountUgx: v.number(), feeUgx: v.optional(v.number()), fromAccount: v.optional(accountV), toAccount: v.optional(accountV), partnerName: v.optional(v.string()), occurredOn: v.string(), note: v.string() })),
+      movements: v.array(v.object({ _id: v.id("movements"), kind: v.union(v.literal("transfer"), v.literal("withdrawal"), v.literal("deposit"), v.literal("capital_contribution")), amountUgx: v.number(), feeUgx: v.optional(v.number()), fromAccount: v.optional(accountV), toAccount: v.optional(accountV), partnerName: v.optional(v.string()), occurredOn: v.string(), note: v.string(), state: v.union(v.literal("posted"), v.literal("void")), voidReason: v.optional(v.string()) })),
       savings: v.array(v.object({ _id: v.id("savingsHoldings"), name: v.string(), targetUgx: v.optional(v.number()), balanceUgx: v.number(), active: v.boolean() })),
-      savingsFlows: v.array(v.object({ _id: v.id("savingsFlows"), holdingName: v.string(), kind: v.union(v.literal("contribution"), v.literal("withdrawal")), amountUgx: v.number(), account: accountV, occurredOn: v.string(), note: v.string() })),
+      savingsFlows: v.array(v.object({ _id: v.id("savingsFlows"), holdingName: v.string(), kind: v.union(v.literal("contribution"), v.literal("withdrawal")), amountUgx: v.number(), account: accountV, occurredOn: v.string(), note: v.string(), state: v.union(v.literal("posted"), v.literal("void")), voidReason: v.optional(v.string()) })),
       loans: v.array(v.object({ _id: v.id("loans"), lender: v.string(), principalUgx: v.number(), outstandingPrincipalUgx: v.number(), annualRateBps: v.number(), termMonths: v.number(), startedOn: v.string(), account: accountV, status: v.union(v.literal("active"), v.literal("paid_off")) })),
-      loanRepayments: v.array(v.object({ _id: v.id("loanRepayments"), lender: v.string(), amountUgx: v.number(), principalUgx: v.number(), interestUgx: v.number(), account: accountV, paidOn: v.string() })),
+      loanRepayments: v.array(v.object({ _id: v.id("loanRepayments"), lender: v.string(), amountUgx: v.number(), principalUgx: v.number(), interestUgx: v.number(), account: accountV, paidOn: v.string(), state: v.union(v.literal("posted"), v.literal("void")), voidReason: v.optional(v.string()) })),
       bills: v.array(v.object({ _id: v.id("bills"), name: v.string(), category: v.string(), amountUgx: v.number(), account: accountV, recurrence: v.union(v.literal("weekly"), v.literal("monthly"), v.literal("quarterly"), v.literal("yearly")), nextDueOn: v.string(), active: v.boolean() })),
-      billPayments: v.array(v.object({ _id: v.id("billPayments"), billName: v.string(), amountUgx: v.number(), account: v.optional(accountV), paidOn: v.string() })),
+      billPayments: v.array(v.object({ _id: v.id("billPayments"), billName: v.string(), amountUgx: v.number(), account: v.optional(accountV), paidOn: v.string(), state: v.union(v.literal("posted"), v.literal("void")), voidReason: v.optional(v.string()) })),
       reconciliations: v.array(v.object({ _id: v.id("reconciliations"), account: accountV, asOfDate: v.string(), bookBalanceUgx: v.number(), countedBalanceUgx: v.number(), varianceUgx: v.number(), status: v.union(v.literal("matched"), v.literal("open"), v.literal("explained")), note: v.string(), explanation: v.optional(v.string()) })),
       partners: v.array(v.object({ _id: v.id("partners"), name: v.string(), ownershipBps: v.number(), active: v.boolean() })),
     }),
@@ -157,13 +168,13 @@ export const overview = query({
     const billById = new Map(bills.map(item => [item._id, item.name]));
     return {
       access: "ready" as const, role: current.membership.role,
-      movements: movements.map(row => ({ _id: row._id, kind: row.kind, amountUgx: row.amountUgx, feeUgx: row.feeUgx, fromAccount: row.fromAccount, toAccount: row.toAccount, partnerName: row.partnerId ? partnerById.get(row.partnerId) : undefined, occurredOn: row.occurredOn, note: row.note })),
+      movements: movements.map(row => ({ _id: row._id, kind: row.kind, amountUgx: row.amountUgx, feeUgx: row.feeUgx, fromAccount: row.fromAccount, toAccount: row.toAccount, partnerName: row.partnerId ? partnerById.get(row.partnerId) : undefined, occurredOn: row.occurredOn, note: row.note, state: row.state, voidReason: row.voidReason })),
       savings: savings.map(row => ({ _id: row._id, name: row.name, targetUgx: row.targetUgx, balanceUgx: row.balanceUgx, active: row.active })),
-      savingsFlows: savingsFlows.map(row => ({ _id: row._id, holdingName: holdingById.get(row.holdingId) ?? "Inactive holding", kind: row.kind, amountUgx: row.amountUgx, account: row.account, occurredOn: row.occurredOn, note: row.note })),
+      savingsFlows: savingsFlows.map(row => ({ _id: row._id, holdingName: holdingById.get(row.holdingId) ?? "Inactive holding", kind: row.kind, amountUgx: row.amountUgx, account: row.account, occurredOn: row.occurredOn, note: row.note, state: row.state ?? "posted", voidReason: row.voidReason })),
       loans: loans.map(row => ({ _id: row._id, lender: row.lender, principalUgx: row.principalUgx, outstandingPrincipalUgx: row.outstandingPrincipalUgx, annualRateBps: row.annualRateBps, termMonths: row.termMonths, startedOn: row.startedOn, account: row.account, status: row.status })),
-      loanRepayments: loanRepayments.map(row => ({ _id: row._id, lender: loanById.get(row.loanId) ?? "Loan", amountUgx: row.amountUgx, principalUgx: row.principalUgx, interestUgx: row.interestUgx, account: row.account, paidOn: row.paidOn })),
+      loanRepayments: loanRepayments.map(row => ({ _id: row._id, lender: loanById.get(row.loanId) ?? "Loan", amountUgx: row.amountUgx, principalUgx: row.principalUgx, interestUgx: row.interestUgx, account: row.account, paidOn: row.paidOn, state: row.state ?? "posted", voidReason: row.voidReason })),
       bills: bills.map(row => ({ _id: row._id, name: row.name, category: row.category, amountUgx: row.amountUgx, account: row.account, recurrence: row.recurrence, nextDueOn: row.nextDueOn, active: row.active })),
-      billPayments: billPayments.map(row => ({ _id: row._id, billName: billById.get(row.billId) ?? "Inactive bill", amountUgx: row.amountUgx, account: row.account, paidOn: row.paidOn })),
+      billPayments: billPayments.map(row => ({ _id: row._id, billName: billById.get(row.billId) ?? "Inactive bill", amountUgx: row.amountUgx, account: row.account, paidOn: row.paidOn, state: row.state ?? "posted", voidReason: row.voidReason })),
       reconciliations: reconciliations.map(row => ({ _id: row._id, account: row.account, asOfDate: row.asOfDate, bookBalanceUgx: row.bookBalanceUgx, countedBalanceUgx: row.countedBalanceUgx, varianceUgx: row.varianceUgx, status: row.status, note: row.note, explanation: row.explanation })),
       partners: currentPartnerShares.map(row => ({ _id: row._id, name: row.name, ownershipBps: row.ownershipBps, active: row.active })),
     };
@@ -296,6 +307,64 @@ export const createMovement = mutation({
   },
 });
 
+async function voidMovementFee(ctx: MutationCtx, current: NonNullable<Awaited<ReturnType<typeof workspace>>>, movement: { idempotencyKey: string; occurredOn: string; feeUgx?: number }) {
+  if (!movement.feeUgx) return;
+  const entry = await ctx.db.query("entries").withIndex("by_business_and_idempotency", q => q.eq("businessId", current.business._id).eq("idempotencyKey", `movement-fee:${movement.idempotencyKey}`)).unique();
+  if (!entry || entry.state !== "posted" || entry.operationSource !== "movement_fee" || entry.operationKey !== movement.idempotencyKey) {
+    throw new Error("The linked withdrawal-fee expense is missing or already changed. Reconcile the movement before reversing it.");
+  }
+  const day = await ctx.db.query("dailyTotals").withIndex("by_business_and_day", q => q.eq("businessId", current.business._id).eq("day", movement.occurredOn)).unique();
+  if (!day || day.expensesUgx < entry.amountUgx || day.expenseCount < 1) throw new Error("Daily expense totals need reconciliation before this movement can be reversed.");
+  await ctx.db.patch("dailyTotals", day._id, { expensesUgx: safeAdd(day.expensesUgx, -entry.amountUgx, "Daily expenses"), expenseCount: safeAdd(day.expenseCount, -1, "Daily expense count") });
+  const now = Date.now();
+  await ctx.db.patch("entries", entry._id, { state: "void", voidedAt: now, voidedBy: current.userId, voidReason: "Linked withdrawal movement reversed." });
+  await ctx.db.insert("auditEvents", { businessId: current.business._id, actorId: current.userId, action: "movement.fee_reversed", entityType: "entry", entityId: entry._id, occurredAt: now, summary: "Voided the withdrawal fee expense as part of its linked movement reversal." });
+}
+
+export const reverseMovement = mutation({
+  args: { movementId: v.id("movements"), reason: v.string(), confirmNegativeBalance: v.optional(v.boolean()) },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const current = await workspace(ctx);
+    if (!current || current.membership.role !== "owner") throw new Error("Only a workspace owner can reverse a movement.");
+    const movement = await ctx.db.get("movements", args.movementId);
+    if (!movement || movement.businessId !== current.business._id) throw new Error("Movement not found.");
+    if (movement.state === "void") return null;
+    const reason = args.reason.trim();
+    if (reason.length < 5 || reason.length > 300) throw new Error("Explain the movement reversal in 5 to 300 characters.");
+    if (!movement.toAccount) throw new Error("This movement has no receiving account and cannot be reversed automatically.");
+    await checkOutflow(ctx, current.business._id, movement.toAccount, -movement.amountUgx, args.confirmNegativeBalance ?? false);
+    if (movement.kind === "transfer") {
+      if (!movement.fromAccount) throw new Error("The original transfer source account is missing.");
+      await applyAccountDelta(ctx, current.business._id, movement.fromAccount, movement.amountUgx);
+      await applyAccountDelta(ctx, current.business._id, movement.toAccount, -movement.amountUgx);
+    } else if (movement.kind === "withdrawal") {
+      if (!movement.fromAccount) throw new Error("The original withdrawal source account is missing.");
+      await applyAccountDelta(ctx, current.business._id, movement.fromAccount, safeAdd(movement.amountUgx, movement.feeUgx ?? 0, "Movement reversal"));
+      await applyAccountDelta(ctx, current.business._id, movement.toAccount, -movement.amountUgx);
+      await voidMovementFee(ctx, current, movement);
+    } else {
+      await applyAccountDelta(ctx, current.business._id, movement.toAccount, -movement.amountUgx);
+      if (movement.kind === "capital_contribution" && movement.partnerId) {
+        const partner = await ctx.db.get("partners", movement.partnerId);
+        if (!partner || partner.businessId !== current.business._id) throw new Error("The linked partner record is unavailable; reconcile partner capital before reversing.");
+        let capital = partner.capitalContributedUgx;
+        if (capital === undefined) {
+          const historical = await historicalPartnerCapital(ctx, current.business._id, partner._id);
+          if (!historical.complete) throw new Error("Partner capital history exceeds the safe reconciliation window. Reconcile the owner statement before reversing this contribution.");
+          capital = historical.total;
+        }
+        if (capital < movement.amountUgx) throw new Error("Partner capital is lower than this contribution; reconcile the partner statement before reversing.");
+        await ctx.db.patch("partners", partner._id, { capitalContributedUgx: safeAdd(capital, -movement.amountUgx, "Partner capital contributions") });
+      }
+    }
+    const now = Date.now();
+    await ctx.db.patch("movements", movement._id, { state: "void", voidedAt: now, voidedBy: current.userId, voidReason: reason });
+    await ctx.db.insert("auditEvents", { businessId: current.business._id, actorId: current.userId, action: "movement.reversed", entityType: "movement", entityId: movement._id, occurredAt: now, summary: reason, details: JSON.stringify({ kind: movement.kind, amountUgx: movement.amountUgx, feeUgx: movement.feeUgx ?? 0, fromAccount: movement.fromAccount, toAccount: movement.toAccount, partnerId: movement.partnerId }) });
+    return null;
+  },
+});
+
 export const createSavingsHolding = mutation({
   args: { name: v.string(), targetUgx: v.optional(v.number()), idempotencyKey: v.string() }, returns: v.id("savingsHoldings"),
   handler: async (ctx, args) => {
@@ -341,6 +410,32 @@ export const recordSavingsFlow = mutation({
     const flowId = await ctx.db.insert("savingsFlows", { businessId: current.business._id, holdingId: holding._id, kind: args.kind, amountUgx: args.amountUgx, account: args.account, occurredOn: args.occurredOn, note: args.note.trim(), idempotencyKey: args.idempotencyKey, createdBy: current.userId, createdAt: Date.now() });
     await audit(ctx, current, `savings.${args.kind}`, "savingsFlow", flowId, `${args.kind} · ${args.amountUgx} · ${args.occurredOn}`);
     return flowId;
+  },
+});
+
+export const reverseSavingsFlow = mutation({
+  args: { flowId: v.id("savingsFlows"), reason: v.string(), confirmNegativeBalance: v.optional(v.boolean()) },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const current = await workspace(ctx);
+    if (!current || current.membership.role !== "owner") throw new Error("Only a workspace owner can reverse savings activity.");
+    const flow = await ctx.db.get("savingsFlows", args.flowId);
+    if (!flow || flow.businessId !== current.business._id) throw new Error("Savings activity not found.");
+    if (flow.state === "void") return null;
+    const reason = args.reason.trim();
+    if (reason.length < 5 || reason.length > 300) throw new Error("Explain the savings reversal in 5 to 300 characters.");
+    const holding = await ctx.db.get("savingsHoldings", flow.holdingId);
+    if (!holding || holding.businessId !== current.business._id) throw new Error("The linked savings holding is unavailable.");
+    const accountDelta = flow.kind === "contribution" ? flow.amountUgx : -flow.amountUgx;
+    if (accountDelta < 0) await checkOutflow(ctx, current.business._id, flow.account, accountDelta, args.confirmNegativeBalance ?? false);
+    const holdingDelta = flow.kind === "contribution" ? -flow.amountUgx : flow.amountUgx;
+    if (safeAdd(holding.balanceUgx, holdingDelta, "Savings balance") < 0) throw new Error("Later savings activity used this amount. Reverse later flows first.");
+    await applyAccountDelta(ctx, current.business._id, flow.account, accountDelta);
+    await ctx.db.patch("savingsHoldings", holding._id, { balanceUgx: safeAdd(holding.balanceUgx, holdingDelta, "Savings balance") });
+    const now = Date.now();
+    await ctx.db.patch("savingsFlows", flow._id, { state: "void", voidedAt: now, voidedBy: current.userId, voidReason: reason });
+    await audit(ctx, current, "savings.flow_reversed", "savingsFlow", flow._id, reason);
+    return null;
   },
 });
 
@@ -390,6 +485,29 @@ export const recordLoanRepayment = mutation({
     const repaymentId = await ctx.db.insert("loanRepayments", { businessId: current.business._id, loanId: loan._id, amountUgx, principalUgx: args.principalUgx, interestUgx: args.interestUgx, account: args.account, paidOn: args.paidOn, idempotencyKey: args.idempotencyKey, createdBy: current.userId, createdAt: Date.now() });
     await audit(ctx, current, "loan.repayment_recorded", "loanRepayment", repaymentId, `Repayment · principal ${args.principalUgx} · interest ${args.interestUgx} · ${args.paidOn}`);
     return repaymentId;
+  },
+});
+
+export const reverseLoanRepayment = mutation({
+  args: { repaymentId: v.id("loanRepayments"), reason: v.string(), confirmNegativeBalance: v.optional(v.boolean()) },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const current = await workspace(ctx);
+    if (!current || current.membership.role !== "owner") throw new Error("Only a workspace owner can reverse loan repayments.");
+    const repayment = await ctx.db.get("loanRepayments", args.repaymentId);
+    if (!repayment || repayment.businessId !== current.business._id) throw new Error("Loan repayment not found.");
+    if (repayment.state === "void") return null;
+    const reason = args.reason.trim();
+    if (reason.length < 5 || reason.length > 300) throw new Error("Explain the repayment reversal in 5 to 300 characters.");
+    const loan = await ctx.db.get("loans", repayment.loanId);
+    if (!loan || loan.businessId !== current.business._id) throw new Error("The linked loan is unavailable.");
+    if (repayment.interestUgx > 0) await reverseLinkedExpense(ctx, current, `loan-interest:${repayment.idempotencyKey}`, repayment.idempotencyKey, "loan_interest", reason);
+    await applyAccountDelta(ctx, current.business._id, repayment.account, repayment.amountUgx);
+    await ctx.db.patch("loans", loan._id, { outstandingPrincipalUgx: safeAdd(loan.outstandingPrincipalUgx, repayment.principalUgx, "Loan principal"), status: "active" });
+    const now = Date.now();
+    await ctx.db.patch("loanRepayments", repayment._id, { state: "void", voidedAt: now, voidedBy: current.userId, voidReason: reason });
+    await audit(ctx, current, "loan.repayment_reversed", "loanRepayment", repayment._id, reason);
+    return null;
   },
 });
 
@@ -456,9 +574,45 @@ export const recordBillPayment = mutation({
     const scheduleAnchorDay = bill.scheduleAnchorDay ?? startDate.getUTCDate();
     const scheduleEndOfMonth = bill.scheduleEndOfMonth ?? scheduleAnchorDay === new Date(Date.UTC(startDate.getUTCFullYear(), startDate.getUTCMonth() + 1, 0)).getUTCDate();
     await ctx.db.patch("bills", bill._id, { nextDueOn: nextOccurrence(bill.nextDueOn, bill.recurrence, scheduleAnchorDay, scheduleEndOfMonth), scheduleStartDueOn, scheduleAnchorDay, scheduleEndOfMonth });
-    const paymentId = await ctx.db.insert("billPayments", { businessId: current.business._id, billId: bill._id, entryId, amountUgx, account: args.account, paidOn: args.paidOn, idempotencyKey: args.idempotencyKey, createdBy: current.userId, createdAt: Date.now() });
+    const paymentId = await ctx.db.insert("billPayments", { businessId: current.business._id, billId: bill._id, entryId, amountUgx, account: args.account, paidOn: args.paidOn, priorNextDueOn: bill.nextDueOn, idempotencyKey: args.idempotencyKey, createdBy: current.userId, createdAt: Date.now() });
     await audit(ctx, current, "bill.payment_recorded", "billPayment", paymentId, `${bill.name} · ${amountUgx} · ${args.paidOn}`);
     return paymentId;
+  },
+});
+
+export const reverseBillPayment = mutation({
+  args: { paymentId: v.id("billPayments"), reason: v.string() },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const current = await workspace(ctx);
+    if (!current || current.membership.role !== "owner") throw new Error("Only a workspace owner can reverse bill payments.");
+    const payment = await ctx.db.get("billPayments", args.paymentId);
+    if (!payment || payment.businessId !== current.business._id) throw new Error("Bill payment not found.");
+    if (payment.state === "void") return null;
+    const reason = args.reason.trim();
+    if (reason.length < 5 || reason.length > 300) throw new Error("Explain the payment reversal in 5 to 300 characters.");
+    if (!payment.priorNextDueOn || !validDay(payment.priorNextDueOn)) throw new Error("This older payment has no saved due-date snapshot. Reconcile the bill schedule before reversing it.");
+    const latestPosted = await ctx.db.query("billPayments")
+      .withIndex("by_bill_and_created_at", q => q.eq("billId", payment.billId))
+      .order("desc")
+      .filter(q => q.neq(q.field("state"), "void"))
+      .first();
+    if (!latestPosted || latestPosted._id !== payment._id) throw new Error("Reverse later posted payments for this bill first so the due date can be restored safely.");
+    const bill = await ctx.db.get("bills", payment.billId);
+    if (!bill || bill.businessId !== current.business._id) throw new Error("The linked bill schedule is unavailable.");
+    const entry = await ctx.db.get("entries", payment.entryId);
+    if (!entry || entry.businessId !== current.business._id || entry.state !== "posted" || entry.kind !== "expense" || entry.amountUgx !== payment.amountUgx || entry.operationSource !== "bill_payment" || entry.operationKey !== payment.idempotencyKey || entry.idempotencyKey !== `bill-expense:${payment.idempotencyKey}`) {
+      throw new Error("The linked bill expense is missing or changed. Reconcile the payment before reversing it.");
+    }
+    const account = payment.account ?? (entry.account === "cash" || entry.account === "mobile_money" ? entry.account : undefined);
+    if (!account) throw new Error("The account used for this payment is unavailable.");
+    await reverseLinkedExpense(ctx, current, `bill-expense:${payment.idempotencyKey}`, payment.idempotencyKey, "bill_payment", reason);
+    await applyAccountDelta(ctx, current.business._id, account, payment.amountUgx);
+    await ctx.db.patch("bills", bill._id, { nextDueOn: payment.priorNextDueOn });
+    const now = Date.now();
+    await ctx.db.patch("billPayments", payment._id, { state: "void", voidedAt: now, voidedBy: current.userId, voidReason: reason });
+    await audit(ctx, current, "bill.payment_reversed", "billPayment", payment._id, reason);
+    return null;
   },
 });
 
