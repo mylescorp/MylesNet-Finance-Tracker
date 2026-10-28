@@ -2,9 +2,9 @@
 
 import { useMutation, useQuery } from "convex/react";
 import {
-  Activity, ArrowDownUp, BarChart3, Bell, CalendarDays, ChevronDown,
+  Activity, ArrowDownUp, ArrowUpRight, BarChart3, Bell, CalendarDays, ChevronDown,
   ChevronsLeft, ChevronsRight, FileBarChart, HandCoins, LayoutDashboard,
-  Menu, Newspaper, PiggyBank, Receipt, Settings2, UsersRound, Wallet, X,
+  Menu, MessageCircle, Newspaper, PiggyBank, Receipt, Settings2, Sparkles, UsersRound, Wallet, X,
 } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
@@ -67,6 +67,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   const [mobileOpen, setMobileOpen] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
   const [accountMenuOpen, setAccountMenuOpen] = useState(false);
+  const [aiNoticeOpen, setAiNoticeOpen] = useState(false);
   const [unreadChanges, setUnreadChanges] = useState(0);
   const [changelogSummary, setChangelogSummary] = useState<ChangelogSummary | null>(null);
   const changelogSummaryRef = useRef<ChangelogSummary | null>(null);
@@ -207,9 +208,14 @@ export function AppShell({ children }: { children: ReactNode }) {
           {mobileOpen ? <X size={19} /> : <Menu size={19} />}
         </button>
         <div className="topbar-page-context"><strong>{routePageLabel}</strong></div>
-        <div className="topbar-center">{!financeApproverOnly && <GlobalSearch />}</div>
+        <div className="topbar-center">
+          {!financeApproverOnly && <GlobalSearch />}
+          <button className="topbar-ai-button" type="button" aria-expanded={aiNoticeOpen} aria-controls={aiNoticeOpen ? "ai-assistant-notice" : undefined} onClick={() => setAiNoticeOpen(open => !open)}><Sparkles size={15} aria-hidden="true" /><span>Ask AI</span></button>
+          {aiNoticeOpen && <div className="topbar-ai-notice" id="ai-assistant-notice" role="status"><strong>AI assistant isn’t enabled yet.</strong><span>Use workspace search to find saved finance records.</span></div>}
+        </div>
         <div className="header-actions">
           {!financeApproverOnly && permissions.includes("audit.view") && <Link className="utility-link" href="/issues" aria-label="Needs attention"><Bell size={17} /><span>Needs attention</span></Link>}
+          <a className="topbar-support" href="https://mylescorptech.com" target="_blank" rel="noopener noreferrer"><MessageCircle size={15} aria-hidden="true" /><span>Support</span><ArrowUpRight size={13} aria-hidden="true" /></a>
           <button className="user-menu" type="button" aria-label="Open your account menu" aria-haspopup="dialog" aria-expanded={accountMenuOpen} title="Manage your account" onClick={() => setAccountMenuOpen(open => !open)}>
             <ProfileAvatar imageUrl={profile?.photoUrl} name={profile?.displayName || accountLabel} />
             <span className="user-menu-label">{profile?.displayName || accountLabel}</span>
