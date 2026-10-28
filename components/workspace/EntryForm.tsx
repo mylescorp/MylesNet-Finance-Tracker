@@ -4,6 +4,7 @@ import { useMutation, useQuery } from "convex/react";
 import { ConvexError } from "convex/values";
 import { useRef, useState, type FormEvent } from "react";
 import { api } from "@/convex/_generated/api";
+import { useRecordEntryBusy, useRecordEntrySaved } from "@/components/workspace/RecordEntryDrawer";
 
 type EntryKind = "sale" | "expense";
 function businessDate(timezone: string) {
@@ -11,6 +12,8 @@ function businessDate(timezone: string) {
 }
 
 export function EntryForm({ kind }: { kind: EntryKind }) {
+  const recordSaved = useRecordEntrySaved();
+  const setDrawerBusy = useRecordEntryBusy();
   const createEntry = useMutation(api.workspace.createEntry);
   const access = useQuery(api.workspace.currentAccess, {});
   const settings = useQuery(api.workspace.businessSettings, {});
@@ -40,6 +43,7 @@ export function EntryForm({ kind }: { kind: EntryKind }) {
       return;
     }
     setBusy(true); setFeedback(null);
+    setDrawerBusy(true);
     try {
       const requestKey = idempotencyKey.current ?? crypto.randomUUID();
       idempotencyKey.current = requestKey;
@@ -61,6 +65,7 @@ export function EntryForm({ kind }: { kind: EntryKind }) {
       form.reset();
       setOccurredOn(null);
       setFeedback({ message: `${title.replace("Record a ", "")} saved to the cashbook.`, error: false });
+      recordSaved(`${kind === "sale" ? "Sale" : "Expense"} saved to the cashbook.`);
     } catch (error) {
       if (error instanceof ConvexError) {
         const warning = error.data as { code?: string; message?: string };
@@ -70,7 +75,7 @@ export function EntryForm({ kind }: { kind: EntryKind }) {
         }
       }
       setFeedback({ message: error instanceof Error ? error.message : "Could not save this entry. Try again.", error: true });
-    } finally { setBusy(false); }
+    } finally { setBusy(false); setDrawerBusy(false); }
   }
   if (access?.access === "ready" && access.role === "partner") {
     return <div className="empty-state" role="status"><strong>Partner accounts can’t add ledger entries.</strong><span>Your scoped partner statement will be available here after partner reporting is connected.</span></div>;
