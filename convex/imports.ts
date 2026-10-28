@@ -194,28 +194,35 @@ export const reverseBatchChunk = mutation({
     let reversedNow = 0;
     for (const entry of result.page) {
       if (!entry.idempotencyKey.startsWith(prefix) || entry.source !== "import") throw new ConvexError("The batch contains a row that is not a matching imported cashbook entry.");
-      if (entry.state === "void") continue;
-      if (entry.operationSource) throw new ConvexError("An imported row is linked to an operation and cannot be safely reversed with this batch.");
-      const day = await ctx.db.query("dailyTotals").withIndex("by_business_and_day", q => q.eq("businessId", business._id).eq("day", entry.occurredOn)).unique();
-      if (!day) throw new ConvexError(`Daily totals for ${entry.occurredOn} are missing; reconcile them before reversing this import.`);
-      const isSale = entry.kind === "sale";
-      if (isSale && (day.salesUgx < entry.amountUgx || day.saleCount < 1)) throw new ConvexError(`Daily sales totals for ${entry.occurredOn} need reconciliation before reversing this import.`);
-      if (!isSale && (day.expensesUgx < entry.amountUgx || day.expenseCount < 1)) throw new ConvexError(`Daily expense totals for ${entry.occurredOn} need reconciliation before reversing this import.`);
+      let effectiveEntry = entry;
+      if (entry.state === "void") {
+        if (!entry.correctedBy) continue;
+        const replacement = await ctx.db.get("entries", entry.correctedBy);
+        if (!replacement || replacement.businessId !== business._id || replacement.source !== "import" || replacement.correctionOf !== entry._id) throw new ConvexError("The corrected import row has inconsistent replacement history; reconcile it before reversing this batch.");
+        if (replacement.state === "void") continue;
+        effectiveEntry = replacement;
+      }
+      if (effectiveEntry.operationSource) throw new ConvexError("An imported row is linked to an operation and cannot be safely reversed with this batch.");
+      const day = await ctx.db.query("dailyTotals").withIndex("by_business_and_day", q => q.eq("businessId", business._id).eq("day", effectiveEntry.occurredOn)).unique();
+      if (!day) throw new ConvexError(`Daily totals for ${effectiveEntry.occurredOn} are missing; reconcile them before reversing this import.`);
+      const isSale = effectiveEntry.kind === "sale";
+      if (isSale && (day.salesUgx < effectiveEntry.amountUgx || day.saleCount < 1)) throw new ConvexError(`Daily sales totals for ${effectiveEntry.occurredOn} need reconciliation before reversing this import.`);
+      if (!isSale && (day.expensesUgx < effectiveEntry.amountUgx || day.expenseCount < 1)) throw new ConvexError(`Daily expense totals for ${effectiveEntry.occurredOn} need reconciliation before reversing this import.`);
       await ctx.db.patch("dailyTotals", day._id, {
-        salesUgx: isSale ? safeAdd(day.salesUgx, -entry.amountUgx, "Daily sales") : day.salesUgx,
-        expensesUgx: isSale ? day.expensesUgx : safeAdd(day.expensesUgx, -entry.amountUgx, "Daily expenses"),
+        salesUgx: isSale ? safeAdd(day.salesUgx, -effectiveEntry.amountUgx, "Daily sales") : day.salesUgx,
+        expensesUgx: isSale ? day.expensesUgx : safeAdd(day.expensesUgx, -effectiveEntry.amountUgx, "Daily expenses"),
         saleCount: isSale ? safeAdd(day.saleCount, -1, "Daily sale count") : day.saleCount,
         expenseCount: isSale ? day.expenseCount : safeAdd(day.expenseCount, -1, "Daily expense count"),
       });
-      if (entry.account === "cash" || entry.account === "mobile_money") {
-        const accountName: "cash" | "mobile_money" = entry.account;
+      if (effectiveEntry.account === "cash" || effectiveEntry.account === "mobile_money") {
+        const accountName: "cash" | "mobile_money" = effectiveEntry.account;
         const balance = await ctx.db.query("accountBalances").withIndex("by_business_and_account", q => q.eq("businessId", business._id).eq("account", accountName)).unique();
-        const change = isSale ? -entry.amountUgx : entry.amountUgx;
+        const change = isSale ? -effectiveEntry.amountUgx : effectiveEntry.amountUgx;
         if (balance) await ctx.db.patch("accountBalances", balance._id, { balanceUgx: safeAdd(balance.balanceUgx, change, "Account balance"), updatedAt: now });
         else await ctx.db.insert("accountBalances", { businessId: business._id, account: accountName, balanceUgx: change, updatedAt: now });
       }
-      await ctx.db.patch("entries", entry._id, { state: "void", voidedAt: now, voidedBy: userId, voidReason: reason });
-      await ctx.db.insert("auditEvents", { businessId: business._id, actorId: userId, action: "entry.import_reversed", entityType: "entry", entityId: entry._id, occurredAt: now, summary: `Reversed imported ${entry.kind} · ${entry.occurredOn} · ${entry.category}.`, details: JSON.stringify({ batchId: batch._id, reason, amountUgx: entry.amountUgx, account: entry.account }) });
+      await ctx.db.patch("entries", effectiveEntry._id, { state: "void", voidedAt: now, voidedBy: userId, voidReason: reason });
+      await ctx.db.insert("auditEvents", { businessId: business._id, actorId: userId, action: "entry.import_reversed", entityType: "entry", entityId: effectiveEntry._id, occurredAt: now, summary: `Reversed imported ${effectiveEntry.kind} · ${effectiveEntry.occurredOn} · ${effectiveEntry.category}.`, details: JSON.stringify({ batchId: batch._id, importEntryId: entry._id, correctionReplacementId: effectiveEntry._id === entry._id ? undefined : effectiveEntry._id, reason, amountUgx: effectiveEntry.amountUgx, account: effectiveEntry.account }) });
       reversedNow++;
     }
     const status = result.isDone ? "reversed" as const : "reversing" as const;

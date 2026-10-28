@@ -528,7 +528,7 @@ export const recentEntries = query({
           : args.from ? q.eq("businessId", current.business._id).gte("occurredOn", args.from)
           : args.toExclusive ? q.eq("businessId", current.business._id).lt("occurredOn", args.toExclusive)
           : q.eq("businessId", current.business._id)).order("desc").take(limit);
-    return rows.map(({ _id, kind, amountUgx, occurredOn, account, category, note, state, operationSource, source, correctedBy }) => ({
+    return rows.map(({ _id, kind, amountUgx, occurredOn, account, category, note, state, operationSource, source, correctionOf, correctedBy }) => ({
       _id,
       kind,
       amountUgx,
@@ -538,7 +538,7 @@ export const recentEntries = query({
       note,
       state,
       canVoid: !operationSource,
-      canCorrect: source === "manual" && !operationSource && !correctedBy,
+      canCorrect: (source === "manual" || (source === "import" && !correctionOf)) && !operationSource && !correctedBy,
     }));
   },
 });
@@ -878,7 +878,13 @@ export const correctEntry = mutation({
       return existing._id;
     }
     const original = await ctx.db.get("entries", args.entryId);
-    if (!original || original.businessId !== current.business._id || original.state !== "posted" || original.source !== "manual" || original.operationSource || original.correctedBy) throw new Error("Choose an uncorrected, manually posted entry in this workspace.");
+    if (!original || original.businessId !== current.business._id || original.state !== "posted" || (original.source !== "manual" && original.source !== "import") || original.operationSource || original.correctedBy || (original.source === "import" && original.correctionOf)) throw new Error("Choose an uncorrected, manually posted or imported entry in this workspace.");
+    if (original.source === "import") {
+      const match = /^csv:([a-f0-9]{64}):\d+$/.exec(original.idempotencyKey);
+      if (!match) throw new Error("This imported row has no recoverable source batch and cannot be corrected here.");
+      const batch = await ctx.db.query("importBatches").withIndex("by_business_and_source", q => q.eq("businessId", current.business._id).eq("sourceHash", match[1])).unique();
+      if (!batch || (batch.status !== "completed" && batch.status !== "cancelled")) throw new Error("Complete or cancel this import before correcting one of its rows.");
+    }
     const duplicateWindowDays = preferences?.duplicateWindowDays ?? 1;
     if (duplicateWindowDays > 0 && !args.confirmPossibleDuplicate) {
       const date = new Date(`${args.occurredOn}T00:00:00.000Z`);
@@ -923,7 +929,7 @@ export const correctEntry = mutation({
       else await ctx.db.insert("accountBalances", { businessId: current.business._id, account, balanceUgx: next, updatedAt: Date.now() });
     }
     const now = Date.now();
-    const replacementId = await ctx.db.insert("entries", { businessId: current.business._id, kind: original.kind, amountUgx: args.amountUgx, occurredOn: args.occurredOn, account: args.account, category, note, source: "manual", idempotencyKey: args.idempotencyKey, state: "posted", correctionOf: original._id, createdBy: current.userId, createdAt: now });
+    const replacementId = await ctx.db.insert("entries", { businessId: current.business._id, kind: original.kind, amountUgx: args.amountUgx, occurredOn: args.occurredOn, account: args.account, category, note, source: original.source, idempotencyKey: args.idempotencyKey, state: "posted", correctionOf: original._id, createdBy: current.userId, createdAt: now });
     await ctx.db.patch("entries", original._id, { state: "void", voidedAt: now, voidedBy: current.userId, voidReason: reason, correctedBy: replacementId });
     await ctx.db.insert("auditEvents", { businessId: current.business._id, actorId: current.userId, action: "entry.corrected", entityType: "entry", entityId: original._id, occurredAt: now, summary: `Corrected entry: ${reason}`, details: JSON.stringify({ replacementId, negativeBalanceOverride: args.confirmNegativeBalance ?? false, possibleDuplicateOverride: args.confirmPossibleDuplicate ?? false, previous: { amountUgx: original.amountUgx, occurredOn: original.occurredOn, account: original.account, category: original.category, note: original.note }, replacement: { amountUgx: args.amountUgx, occurredOn: args.occurredOn, account: args.account, category, note } }) });
     return replacementId;
