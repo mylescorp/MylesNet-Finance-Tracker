@@ -6,6 +6,7 @@ import { mutation, query } from "./_generated/server";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import type { Id } from "./_generated/dataModel";
 import { getSelectedWorkspace, listUserWorkspaces } from "./workspaceContext";
+import { hasPermission, permissionsForMembership } from "./accessControl";
 
 function addSafeInteger(left: number, right: number, label: string) {
   const result = left + right;
@@ -24,18 +25,14 @@ function formatAmount(amountMinor: number, currency: string) {
 const accessResult = v.union(
   v.object({ access: v.literal("setup") }),
   v.object({ access: v.literal("pending") }),
-  v.object({ access: v.literal("choose_workspace"), workspaces: v.array(v.object({ businessId: v.id("businesses"), businessName: v.string(), role: v.union(v.literal("owner"), v.literal("partner"), v.literal("cashier"), v.literal("finance_approver")) })) }),
+  v.object({ access: v.literal("choose_workspace"), workspaces: v.array(v.object({ businessId: v.id("businesses"), businessName: v.string(), role: v.string() })) }),
   v.object({
     access: v.literal("ready"),
     businessId: v.id("businesses"),
     businessName: v.string(),
-    role: v.union(
-      v.literal("owner"),
-      v.literal("partner"),
-      v.literal("cashier"),
-      v.literal("finance_approver"),
-    ),
-    workspaces: v.array(v.object({ businessId: v.id("businesses"), businessName: v.string(), role: v.union(v.literal("owner"), v.literal("partner"), v.literal("cashier"), v.literal("finance_approver")) })),
+    role: v.string(),
+    permissions: v.array(v.string()),
+    workspaces: v.array(v.object({ businessId: v.id("businesses"), businessName: v.string(), role: v.string() })),
   }),
 );
 
@@ -146,11 +143,13 @@ export const currentAccess = query({
       return { access: businesses.length === 0 ? "setup" as const : "pending" as const };
     }
     const workspaces = await listUserWorkspaces(ctx, current.userId);
+    const permissions = await permissionsForMembership(ctx, current.membership);
     return {
       access: "ready" as const,
       businessId: current.business._id,
       businessName: current.business.name,
       role: current.membership.role,
+      permissions,
       workspaces,
     };
   },
@@ -188,7 +187,7 @@ export const businessSettings = query({
       currency: v.string(),
       timezone: v.string(),
       weekStartsOn: v.union(v.literal("monday"), v.literal("sunday")),
-      role: v.union(v.literal("owner"), v.literal("partner"), v.literal("cashier"), v.literal("finance_approver")),
+      role: v.string(),
     }),
   ),
   handler: async (ctx) => {
@@ -220,8 +219,8 @@ export const updateBusinessSettings = mutation({
   returns: v.null(),
   handler: async (ctx, args) => {
     const current = await getMembership(ctx, args.businessId);
-    if (!current || current.membership.role !== "owner") {
-      throw new Error("Only a workspace owner can change general settings.");
+    if (!current || !(await hasPermission(ctx, current.membership, "settings.update"))) {
+      throw new Error("Your role cannot change workspace settings.");
     }
     const businessName = args.businessName.trim();
     const timezone = args.timezone.trim();
@@ -280,7 +279,7 @@ export const balanceAdjustments = query({
   })),
   handler: async (ctx, args) => {
     const current = await getMembership(ctx);
-    if (!current || current.membership.role !== "owner") throw new Error("Only workspace owners can view balance adjustment history.");
+    if (!current || !(await hasPermission(ctx, current.membership, "balanceAdjustments.manage"))) throw new Error("Your role cannot view balance adjustment history.");
     const result = await ctx.db.query("balanceAdjustments").withIndex("by_business_and_created_at", q => q.eq("businessId", current.business._id)).order("desc").paginate(args.paginationOpts);
     return {
       ...result,
@@ -294,7 +293,7 @@ export const createBalanceAdjustment = mutation({
   returns: v.id("balanceAdjustments"),
   handler: async (ctx, args) => {
     const current = await getMembership(ctx, args.businessId);
-    if (!current || current.membership.role !== "owner") throw new Error("Only a workspace owner can adjust account balances.");
+    if (!current || !(await hasPermission(ctx, current.membership, "balanceAdjustments.manage"))) throw new Error("Your role cannot adjust account balances.");
     if (!Number.isSafeInteger(args.countedBalanceUgx) || args.countedBalanceUgx < 0) throw new Error("Enter a valid non-negative counted balance.");
     if (!isIsoDay(args.occurredOn)) throw new Error("Choose a valid adjustment date.");
     const note = args.note.trim();
@@ -315,7 +314,7 @@ export const updateBalanceAdjustment = mutation({
   returns: v.null(),
   handler: async (ctx, args) => {
     const current = await getMembership(ctx, args.businessId);
-    if (!current || current.membership.role !== "owner") throw new Error("Only a workspace owner can edit balance adjustments.");
+    if (!current || !(await hasPermission(ctx, current.membership, "balanceAdjustments.manage"))) throw new Error("Your role cannot edit balance adjustments.");
     const adjustment = await ctx.db.get("balanceAdjustments", args.adjustmentId);
     if (!adjustment || adjustment.businessId !== current.business._id) throw new Error("Balance adjustment not found.");
     if (adjustment.state !== "posted") throw new Error("Voided adjustments cannot be edited.");
@@ -338,7 +337,7 @@ export const voidBalanceAdjustment = mutation({
   returns: v.null(),
   handler: async (ctx, args) => {
     const current = await getMembership(ctx, args.businessId);
-    if (!current || current.membership.role !== "owner") throw new Error("Only a workspace owner can remove balance adjustments.");
+    if (!current || !(await hasPermission(ctx, current.membership, "balanceAdjustments.manage"))) throw new Error("Your role cannot remove balance adjustments.");
     const adjustment = await ctx.db.get("balanceAdjustments", args.adjustmentId);
     if (!adjustment || adjustment.businessId !== current.business._id) throw new Error("Balance adjustment not found.");
     if (adjustment.state === "void") return null;
@@ -397,7 +396,7 @@ export const dashboardSummary = query({
     }
     // Partner statement data is not yet linked to partner-specific ledger rows.
     // Hide business-wide finance totals until that scope is implemented.
-    if (current.membership.role === "partner" || current.membership.role === "finance_approver") return { access: "restricted" as const };
+    if (!(await hasPermission(ctx, current.membership, "analytics.view"))) return { access: "restricted" as const };
     const days = await ctx.db
       .query("dailyTotals")
       .withIndex("by_business_and_day", (q) =>
@@ -468,7 +467,7 @@ export const balanceOverview = query({
       const businesses = await ctx.db.query("businesses").take(1);
       return { access: businesses.length === 0 ? "setup" as const : "pending" as const };
     }
-    if (current.membership.role === "partner") return { access: "restricted" as const };
+    if (!(await hasPermission(ctx, current.membership, "analytics.view"))) return { access: "restricted" as const };
     const [day, balances, dailyEntries] = await Promise.all([
       ctx.db.query("dailyTotals").withIndex("by_business_and_day", q => q.eq("businessId", current.business._id).eq("day", args.day)).unique(),
       ctx.db.query("accountBalances").withIndex("by_business_and_account", q => q.eq("businessId", current.business._id)).take(2),
@@ -514,7 +513,10 @@ export const recentEntries = query({
   handler: async (ctx, args) => {
     const current = await getMembership(ctx);
     if (!current) return [];
-    if (current.membership.role === "partner" || current.membership.role === "finance_approver") return [];
+    if (!(await hasPermission(ctx, current.membership, "sales.view")) && !(await hasPermission(ctx, current.membership, "expenses.view"))) return [];
+    const canViewSales = await hasPermission(ctx, current.membership, "sales.view");
+    const canViewExpenses = await hasPermission(ctx, current.membership, "expenses.view");
+    if (args.kind === "sale" && !canViewSales || args.kind === "expense" && !canViewExpenses) return [];
     const limit = Math.max(1, Math.min(Math.floor(args.limit ?? 10), 500));
     if ((args.from && !isIsoDay(args.from)) || (args.toExclusive && !isIsoDay(args.toExclusive)) || (args.from && args.toExclusive && args.from >= args.toExclusive)) throw new Error("Choose a valid entry date range.");
     const rows = args.kind
@@ -528,7 +530,8 @@ export const recentEntries = query({
           : args.from ? q.eq("businessId", current.business._id).gte("occurredOn", args.from)
           : args.toExclusive ? q.eq("businessId", current.business._id).lt("occurredOn", args.toExclusive)
           : q.eq("businessId", current.business._id)).order("desc").take(limit);
-    return await Promise.all(rows.map(async ({ _id, kind, amountUgx, occurredOn, account, category, note, state, operationSource, source, correctionOf, correctedBy, idempotencyKey, businessId }) => {
+    const visibleRows = rows.filter(row => row.kind === "sale" ? canViewSales : canViewExpenses);
+    return await Promise.all(visibleRows.map(async ({ _id, kind, amountUgx, occurredOn, account, category, note, state, operationSource, source, correctionOf, correctedBy, idempotencyKey, businessId }) => {
       let importedBatchReady = false;
       if (source === "import" && !correctionOf) {
         const match = /^csv:([a-f0-9]{64}):\d+$/.exec(idempotencyKey);
@@ -576,7 +579,12 @@ export const entriesForExport = query({
   })),
   handler: async (ctx, args) => {
     const current = await getMembership(ctx, args.businessId);
-    if (!current || (current.membership.role !== "owner" && current.membership.role !== "cashier")) throw new Error("Only active owners and cashiers can export cashbook entries.");
+    if (!current || !(await hasPermission(ctx, current.membership, "data.export"))) throw new Error("Your role cannot export cashbook entries.");
+    const canViewSales = await hasPermission(ctx, current.membership, "sales.view");
+    const canViewExpenses = await hasPermission(ctx, current.membership, "expenses.view");
+    if (args.kind === "sale" && !canViewSales || args.kind === "expense" && !canViewExpenses || !args.kind && (!canViewSales || !canViewExpenses)) {
+      throw new Error("Your role cannot export the requested entry types.");
+    }
     if (!isIsoDay(args.from) || !isIsoDay(args.toExclusive) || args.from >= args.toExclusive) throw new Error("Choose a valid export date range.");
     const rangeDays = (Date.parse(`${args.toExclusive}T00:00:00.000Z`) - Date.parse(`${args.from}T00:00:00.000Z`)) / 86_400_000;
     if (rangeDays > 370 || args.paginationOpts.numItems > 100) throw new Error("Cashbook exports are limited to 370 days and 100 rows per page. Narrow the date range if needed.");
@@ -601,14 +609,18 @@ export const searchEntries = query({
   handler: async (ctx, args) => {
     const current = await getMembership(ctx);
     const term = args.term.trim();
-    if (!current || current.membership.role === "partner" || current.membership.role === "finance_approver" || term.length < 2 || term.length > 80) return [];
+    if (!current || term.length < 2 || term.length > 80 || (!(await hasPermission(ctx, current.membership, "sales.view")) && !(await hasPermission(ctx, current.membership, "expenses.view")))) return [];
+    const [canViewSales, canViewExpenses] = await Promise.all([
+      hasPermission(ctx, current.membership, "sales.view"),
+      hasPermission(ctx, current.membership, "expenses.view"),
+    ]);
     const limit = Math.max(1, Math.min(Math.floor(args.limit ?? 8), 12));
     const [notes, categories] = await Promise.all([
       ctx.db.query("entries").withSearchIndex("search_note", (q) => q.search("note", term).eq("businessId", current.business._id)).take(limit),
       ctx.db.query("entries").withSearchIndex("search_category", (q) => q.search("category", term).eq("businessId", current.business._id)).take(limit),
     ]);
     const unique = new Map([...notes, ...categories].map((entry) => [entry._id, entry]));
-    return [...unique.values()]
+    return [...unique.values()].filter(entry => entry.kind === "sale" ? canViewSales : canViewExpenses)
       .sort((a, b) => b.occurredOn.localeCompare(a.occurredOn) || b.createdAt - a.createdAt)
       .slice(0, limit)
       .map(({ _id, kind, amountUgx, occurredOn, category, note }) => ({ _id, kind, amountUgx, occurredOn, category, note }));
@@ -629,7 +641,8 @@ export const operationalRecords = query({
   })),
   handler: async (ctx, args) => {
     const current = await getMembership(ctx);
-    if (!current || current.membership.role === "partner" || current.membership.role === "finance_approver") return [];
+    const permission = args.kind === "movement" ? "movements.view" : args.kind === "holding" ? "savings.view" : args.kind === "loan" ? "loans.view" : "bills.view";
+    if (!current || !(await hasPermission(ctx, current.membership, permission))) return [];
     return (await ctx.db.query("operationalRecords").withIndex("by_business_and_kind_and_date", q => q.eq("businessId", current.business._id).eq("kind", args.kind)).order("desc").take(200))
       .map(({ _id, kind, title, amountUgx, occurredOn, account, destinationAccount, movementType, cadence, note }) => ({ _id, kind, title, amountUgx, occurredOn, account, destinationAccount, movementType, cadence, note }));
   },
@@ -648,7 +661,8 @@ export const createOperationalRecord = mutation({
   returns: v.id("operationalRecords"),
   handler: async (ctx, args) => {
     const current = await getMembership(ctx, args.businessId);
-    if (!current || (current.membership.role !== "owner" && current.membership.role !== "cashier")) throw new Error("Only an owner or cashier can save this record.");
+    const permission = args.kind === "movement" ? "movements.create" : args.kind === "holding" ? "savings.create" : args.kind === "loan" ? "loans.create" : "bills.create";
+    if (!current || !(await hasPermission(ctx, current.membership, permission))) throw new Error("Your role cannot create this operational record.");
     if (!isIsoDay(args.occurredOn)) throw new Error("Choose a valid business date.");
     if (!Number.isSafeInteger(args.amountUgx) || args.amountUgx <= 0) throw new Error(`Amount must be a positive whole minor-unit amount in ${current.business.currency}.`);
     const title = args.title.trim();
@@ -699,7 +713,8 @@ export const createEntry = mutation({
   handler: async (ctx, args) => {
     const current = await getMembership(ctx, args.businessId);
     if (!current) throw new Error("Access is pending. Ask an owner for an invitation.");
-    if (current.membership.role !== "owner" && current.membership.role !== "cashier") throw new Error("This account cannot add ledger entries.");
+    const permission = args.kind === "sale" ? "sales.create" : "expenses.create";
+    if (!(await hasPermission(ctx, current.membership, permission))) throw new Error("Your role cannot add this ledger entry.");
     if (!Number.isSafeInteger(args.amountUgx) || args.amountUgx <= 0) {
       throw new Error(`Amount must be a positive valid amount in ${current.business.currency}.`);
     }
@@ -830,10 +845,9 @@ export const voidEntry = mutation({
   returns: v.null(),
   handler: async (ctx, args) => {
     const current = await getMembership(ctx, args.businessId);
-    if (!current || current.membership.role !== "owner") {
-      throw new Error("Only an owner can void an entry.");
-    }
     const entry = await ctx.db.get("entries", args.entryId);
+    const permission = entry?.kind === "sale" ? "sales.void" : "expenses.void";
+    if (!current || !(await hasPermission(ctx, current.membership, permission))) throw new Error("Your role cannot void this entry.");
     if (!entry || entry.businessId !== current.business._id) {
       throw new Error("Entry not found.");
     }
@@ -909,7 +923,9 @@ export const correctEntry = mutation({
   returns: v.id("entries"),
   handler: async (ctx, args) => {
     const current = await getMembership(ctx, args.businessId);
-    if (!current || current.membership.role !== "owner") throw new Error("Only a workspace owner can correct a posted entry.");
+    const originalEntry = await ctx.db.get("entries", args.entryId);
+    const correctionPermission = originalEntry?.kind === "sale" ? "sales.update" : "expenses.update";
+    if (!current || !originalEntry || !(await hasPermission(ctx, current.membership, correctionPermission))) throw new Error("Your role cannot correct this posted entry.");
     const reason = args.reason.trim();
     const category = args.category.trim();
     const note = args.note.trim();

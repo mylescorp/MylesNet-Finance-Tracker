@@ -4,6 +4,7 @@ import { ConvexError, v } from "convex/values";
 import { mutation, query } from "./_generated/server";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import type { Id } from "./_generated/dataModel";
+import { hasPermission } from "./accessControl";
 
 const account = v.union(v.literal("cash"), v.literal("mobile_money"), v.literal("unallocated"));
 const importType = v.union(v.literal("cashbook"), v.literal("centipid_analytics"));
@@ -15,7 +16,7 @@ async function ownerContext(ctx: MutationCtx | QueryCtx, businessId: Id<"busines
   if (!membership?.active) throw new ConvexError("Select an active workspace membership before importing data.");
   const business = await ctx.db.get("businesses", businessId);
   const current = business ? { userId, membership, business } : null;
-  if (!current || current.membership.role !== "owner") throw new ConvexError("Select a workspace you own before importing data.");
+  if (!current || !(await hasPermission(ctx, current.membership, "imports.manage"))) throw new ConvexError("Your role cannot import workspace data.");
   return { userId: current.userId, business: current.business };
 }
 

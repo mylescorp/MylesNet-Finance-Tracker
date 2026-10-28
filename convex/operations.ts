@@ -3,6 +3,7 @@ import { ConvexError, v } from "convex/values";
 import { mutation, query } from "./_generated/server";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import type { Id } from "./_generated/dataModel";
+import { hasPermission } from "./accessControl";
 import { getSelectedWorkspace } from "./workspaceContext";
 import { getAuthUserId } from "@convex-dev/auth/server";
 
@@ -115,7 +116,7 @@ async function audit(ctx: MutationCtx, current: NonNullable<Awaited<ReturnType<t
 }
 
 const accountV = v.union(v.literal("cash"), v.literal("mobile_money"));
-const membershipRoleV = v.union(v.literal("owner"), v.literal("cashier"), v.literal("partner"), v.literal("finance_approver"));
+const membershipRoleV = v.string();
 
 export const overview = query({
   args: { businessId: v.id("businesses"), from: v.string(), toExclusive: v.string() },
@@ -139,7 +140,15 @@ export const overview = query({
     if (!validDay(args.from) || !validDay(args.toExclusive) || args.from >= args.toExclusive) throw new Error("Choose a valid reporting date range.");
     const current = await workspace(ctx, args.businessId);
     if (!current) return { access: "pending" as const };
-    if (current.membership.role !== "owner" && current.membership.role !== "cashier") return { access: "restricted" as const };
+    const [canViewMovements, canViewSavings, canViewLoans, canViewBills, canViewReconciliation, canViewPartners] = await Promise.all([
+      hasPermission(ctx, current.membership, "movements.view"),
+      hasPermission(ctx, current.membership, "savings.view"),
+      hasPermission(ctx, current.membership, "loans.view"),
+      hasPermission(ctx, current.membership, "bills.view"),
+      hasPermission(ctx, current.membership, "reconcile.view"),
+      hasPermission(ctx, current.membership, "partners.view"),
+    ]);
+    if (![canViewMovements, canViewSavings, canViewLoans, canViewBills, canViewReconciliation, canViewPartners].some(Boolean)) return { access: "restricted" as const };
     const businessId = current.business._id;
     const [movements, savings, savingsFlows, loans, loanRepayments, bills, billPayments, reconciliations, partners] = await Promise.all([
       ctx.db.query("movements").withIndex("by_business_and_date", q => q.eq("businessId", businessId).gte("occurredOn", args.from).lt("occurredOn", args.toExclusive)).order("desc").take(100),
@@ -171,15 +180,15 @@ export const overview = query({
     const billById = new Map(paymentBills.flatMap(item => item?.businessId === businessId ? [[item._id, item] as const] : []));
     return {
       access: "ready" as const, businessId: current.business._id, role: current.membership.role,
-      movements: movements.map(row => ({ _id: row._id, kind: row.kind, amountUgx: row.amountUgx, feeUgx: row.feeUgx, fromAccount: row.fromAccount, toAccount: row.toAccount, partnerName: row.partnerId ? partnerById.get(row.partnerId) : undefined, occurredOn: row.occurredOn, note: row.note, state: row.state, voidReason: row.voidReason })),
-      savings: savings.map(row => ({ _id: row._id, name: row.name, targetUgx: row.targetUgx, balanceUgx: row.balanceUgx, active: row.active })),
-      savingsFlows: savingsFlows.map(row => { const holding = holdingById.get(row.holdingId); return { _id: row._id, holdingName: holding?.name ?? "Inactive holding", kind: row.kind, amountUgx: row.amountUgx, account: row.account, occurredOn: row.occurredOn, note: row.note, state: row.state ?? "posted", voidReason: row.voidReason, canReverse: holding?.active === true }; }),
-      loans: loans.map(row => ({ _id: row._id, lender: row.lender, principalUgx: row.principalUgx, outstandingPrincipalUgx: row.outstandingPrincipalUgx, annualRateBps: row.annualRateBps, termMonths: row.termMonths, startedOn: row.startedOn, account: row.account, status: row.status })),
-      loanRepayments: loanRepayments.map(row => ({ _id: row._id, lender: loanById.get(row.loanId) ?? "Loan", amountUgx: row.amountUgx, principalUgx: row.principalUgx, interestUgx: row.interestUgx, account: row.account, paidOn: row.paidOn, state: row.state ?? "posted", voidReason: row.voidReason })),
-      bills: bills.map(row => ({ _id: row._id, name: row.name, category: row.category, amountUgx: row.amountUgx, account: row.account, recurrence: row.recurrence, nextDueOn: row.nextDueOn, active: row.active })),
-      billPayments: billPayments.map(row => { const bill = billById.get(row.billId); return { _id: row._id, billName: bill?.name ?? "Inactive bill", amountUgx: row.amountUgx, account: row.account, paidOn: row.paidOn, state: row.state ?? "posted", voidReason: row.voidReason, canReverse: row.state !== "void" && !!row.priorNextDueOn && !!row.nextDueOnAfter && row.priorScheduleStartDueOn !== undefined && row.priorScheduleAnchorDay !== undefined && row.priorScheduleEndOfMonth !== undefined && row.nextScheduleStartDueOn !== undefined && row.nextScheduleAnchorDay !== undefined && row.nextScheduleEndOfMonth !== undefined && bill?.nextDueOn === row.nextDueOnAfter && bill.scheduleStartDueOn === row.nextScheduleStartDueOn && bill.scheduleAnchorDay === row.nextScheduleAnchorDay && bill.scheduleEndOfMonth === row.nextScheduleEndOfMonth }; }),
-      reconciliations: reconciliations.map(row => ({ _id: row._id, account: row.account, asOfDate: row.asOfDate, bookBalanceUgx: row.bookBalanceUgx, countedBalanceUgx: row.countedBalanceUgx, varianceUgx: row.varianceUgx, status: row.status, note: row.note, explanation: row.explanation, supersedesId: row.supersedesId })),
-      partners: currentPartnerShares.map(row => ({ _id: row._id, name: row.name, ownershipBps: row.ownershipBps, active: row.active })),
+      movements: canViewMovements ? movements.map(row => ({ _id: row._id, kind: row.kind, amountUgx: row.amountUgx, feeUgx: row.feeUgx, fromAccount: row.fromAccount, toAccount: row.toAccount, partnerName: row.partnerId ? partnerById.get(row.partnerId) : undefined, occurredOn: row.occurredOn, note: row.note, state: row.state, voidReason: row.voidReason })) : [],
+      savings: canViewSavings ? savings.map(row => ({ _id: row._id, name: row.name, targetUgx: row.targetUgx, balanceUgx: row.balanceUgx, active: row.active })) : [],
+      savingsFlows: canViewSavings ? savingsFlows.map(row => { const holding = holdingById.get(row.holdingId); return { _id: row._id, holdingName: holding?.name ?? "Inactive holding", kind: row.kind, amountUgx: row.amountUgx, account: row.account, occurredOn: row.occurredOn, note: row.note, state: row.state ?? "posted", voidReason: row.voidReason, canReverse: holding?.active === true }; }) : [],
+      loans: canViewLoans ? loans.map(row => ({ _id: row._id, lender: row.lender, principalUgx: row.principalUgx, outstandingPrincipalUgx: row.outstandingPrincipalUgx, annualRateBps: row.annualRateBps, termMonths: row.termMonths, startedOn: row.startedOn, account: row.account, status: row.status })) : [],
+      loanRepayments: canViewLoans ? loanRepayments.map(row => ({ _id: row._id, lender: loanById.get(row.loanId) ?? "Loan", amountUgx: row.amountUgx, principalUgx: row.principalUgx, interestUgx: row.interestUgx, account: row.account, paidOn: row.paidOn, state: row.state ?? "posted", voidReason: row.voidReason })) : [],
+      bills: canViewBills ? bills.map(row => ({ _id: row._id, name: row.name, category: row.category, amountUgx: row.amountUgx, account: row.account, recurrence: row.recurrence, nextDueOn: row.nextDueOn, active: row.active })) : [],
+      billPayments: canViewBills ? billPayments.map(row => { const bill = billById.get(row.billId); return { _id: row._id, billName: bill?.name ?? "Inactive bill", amountUgx: row.amountUgx, account: row.account, paidOn: row.paidOn, state: row.state ?? "posted", voidReason: row.voidReason, canReverse: row.state !== "void" && !!row.priorNextDueOn && !!row.nextDueOnAfter && row.priorScheduleStartDueOn !== undefined && row.priorScheduleAnchorDay !== undefined && row.priorScheduleEndOfMonth !== undefined && row.nextScheduleStartDueOn !== undefined && row.nextScheduleAnchorDay !== undefined && row.nextScheduleEndOfMonth !== undefined && bill?.nextDueOn === row.nextDueOnAfter && bill.scheduleStartDueOn === row.nextScheduleStartDueOn && bill.scheduleAnchorDay === row.nextScheduleAnchorDay && bill.scheduleEndOfMonth === row.nextScheduleEndOfMonth }; }) : [],
+      reconciliations: canViewReconciliation ? reconciliations.map(row => ({ _id: row._id, account: row.account, asOfDate: row.asOfDate, bookBalanceUgx: row.bookBalanceUgx, countedBalanceUgx: row.countedBalanceUgx, varianceUgx: row.varianceUgx, status: row.status, note: row.note, explanation: row.explanation, supersedesId: row.supersedesId })) : [],
+      partners: canViewPartners ? currentPartnerShares.map(row => ({ _id: row._id, name: row.name, ownershipBps: row.ownershipBps, active: row.active })) : [],
     };
   },
 });
@@ -188,7 +197,7 @@ export const savingsArchive = query({
   args: { businessId: v.id("businesses"), paginationOpts: paginationOptsValidator },
   handler: async (ctx, args) => {
     const current = await workspace(ctx, args.businessId);
-    if (!current || (current.membership.role !== "owner" && current.membership.role !== "cashier")) throw new Error("Archived savings holdings are not available to this account.");
+    if (!current || !(await hasPermission(ctx, current.membership, "savings.view"))) throw new Error("Archived savings holdings are not available to this account.");
     return await ctx.db.query("savingsHoldings").withIndex("by_business_and_active", q => q.eq("businessId", current.business._id).eq("active", false)).order("desc").paginate(args.paginationOpts);
   },
 });
@@ -197,7 +206,7 @@ export const billArchive = query({
   args: { businessId: v.id("businesses"), paginationOpts: paginationOptsValidator },
   handler: async (ctx, args) => {
     const current = await workspace(ctx, args.businessId);
-    if (!current || (current.membership.role !== "owner" && current.membership.role !== "cashier")) throw new Error("Archived bill schedules are not available to this account.");
+    if (!current || !(await hasPermission(ctx, current.membership, "bills.view"))) throw new Error("Archived bill schedules are not available to this account.");
     return await ctx.db.query("bills").withIndex("by_business_and_active_due", q => q.eq("businessId", current.business._id).eq("active", false)).order("desc").paginate(args.paginationOpts);
   },
 });
@@ -206,7 +215,7 @@ export const partnerArchive = query({
   args: { businessId: v.id("businesses"), paginationOpts: paginationOptsValidator },
   handler: async (ctx, args) => {
     const current = await workspace(ctx, args.businessId);
-    if (!current || current.membership.role !== "owner") throw new Error("Archived partner records are available to workspace owners only.");
+    if (!current || !(await hasPermission(ctx, current.membership, "partners.manage"))) throw new Error("Your role cannot view archived partner records.");
     const page = await ctx.db.query("partners").withIndex("by_business_and_active", q => q.eq("businessId", current.business._id).eq("active", false)).order("desc").paginate(args.paginationOpts);
     const today = dayInZone(Date.now(), current.business.timezone);
     const results = await Promise.all(page.page.map(async partner => ({ ...partner, ownershipBps: await ownershipAtDay(ctx, current.business._id, partner, today) })));
@@ -221,7 +230,7 @@ export const partnerStatement = query({
   handler: async (ctx, args) => {
     if (!validDay(args.from) || !validDay(args.toExclusive) || args.from >= args.toExclusive) throw new Error("Choose a valid statement date range.");
     const current = await workspace(ctx, args.businessId);
-    if (!current || current.membership.role !== "partner" || !current.membership.partnerId) return { access: "restricted" as const };
+    if (!current || !current.membership.partnerId || !(await hasPermission(ctx, current.membership, "partners.view"))) return { access: "restricted" as const };
     const partner = await ctx.db.get("partners", current.membership.partnerId);
     if (!partner || partner.businessId !== current.business._id || !partner.active) return { access: "restricted" as const };
     const contributions = await ctx.db.query("movements")
@@ -291,7 +300,7 @@ export const createMovement = mutation({
   returns: v.id("movements"),
   handler: async (ctx, args) => {
     const current = await workspace(ctx, args.businessId);
-    if (!current || (current.membership.role !== "owner" && current.membership.role !== "cashier")) throw new Error("Only an active owner or cashier can record a movement.");
+    if (!current || !(await hasPermission(ctx, current.membership, "movements.create"))) throw new Error("Your role cannot record a movement.");
     if (!Number.isSafeInteger(args.amountUgx) || args.amountUgx <= 0 || !Number.isSafeInteger(args.feeUgx ?? 0) || (args.feeUgx ?? 0) < 0) throw new Error("Enter a positive whole-unit amount and a non-negative fee.");
     if (!validDay(args.occurredOn) || args.note.length > 300 || args.idempotencyKey.length < 16 || args.idempotencyKey.length > 120) throw new Error("Movement details are invalid.");
     const feeUgx = args.feeUgx ?? 0;
@@ -360,7 +369,7 @@ export const reverseMovement = mutation({
   returns: v.null(),
   handler: async (ctx, args) => {
     const current = await workspace(ctx, args.businessId);
-    if (!current || current.membership.role !== "owner") throw new Error("Only a workspace owner can reverse a movement.");
+    if (!current || !(await hasPermission(ctx, current.membership, "movements.void"))) throw new Error("Your role cannot reverse a movement.");
     const movement = await ctx.db.get("movements", args.movementId);
     if (!movement || movement.businessId !== current.business._id) throw new Error("Movement not found.");
     if (movement.state === "void") return null;
@@ -403,7 +412,7 @@ export const createSavingsHolding = mutation({
   args: { businessId: v.id("businesses"), name: v.string(), targetUgx: v.optional(v.number()), idempotencyKey: v.string() }, returns: v.id("savingsHoldings"),
   handler: async (ctx, args) => {
     const current = await workspace(ctx, args.businessId);
-    if (!current || (current.membership.role !== "owner" && current.membership.role !== "cashier")) throw new Error("Only an active owner or cashier can manage savings holdings.");
+    if (!current || !(await hasPermission(ctx, current.membership, "savings.create"))) throw new Error("Your role cannot manage savings holdings.");
     const name = args.name.trim();
     if (name.length < 2 || name.length > 80 || args.idempotencyKey.length < 16 || args.idempotencyKey.length > 120) throw new Error("Name the savings goal using 2 to 80 characters.");
     const request = await ctx.db.query("savingsHoldings").withIndex("by_business_and_idempotency", q => q.eq("businessId", current.business._id).eq("idempotencyKey", args.idempotencyKey)).unique();
@@ -426,7 +435,8 @@ export const updateSavingsHolding = mutation({
   returns: v.null(),
   handler: async (ctx, args) => {
     const current = await workspace(ctx, args.businessId);
-    if (!current || current.membership.role !== "owner") throw new Error("Only a workspace owner can edit or archive savings holdings.");
+    const permission = args.action === "edit" || args.action === "restore" ? "savings.update" : "savings.delete";
+    if (!current || !(await hasPermission(ctx, current.membership, permission))) throw new Error("Your role cannot update or archive savings holdings.");
     const holding = await ctx.db.get("savingsHoldings", args.holdingId);
     if (!holding || holding.businessId !== current.business._id) throw new Error("Savings holding not found.");
     if (args.expectedActive !== holding.active) throw new Error("This savings holding changed in another session. Refresh and try again.");
@@ -461,7 +471,7 @@ export const recordSavingsFlow = mutation({
   returns: v.id("savingsFlows"),
   handler: async (ctx, args) => {
     const current = await workspace(ctx, args.businessId);
-    if (!current || (current.membership.role !== "owner" && current.membership.role !== "cashier")) throw new Error("Only an active owner or cashier can record savings activity.");
+    if (!current || !(await hasPermission(ctx, current.membership, "savings.create"))) throw new Error("Your role cannot record savings activity.");
     if (!Number.isSafeInteger(args.amountUgx) || args.amountUgx <= 0 || !validDay(args.occurredOn) || args.note.length > 300 || args.idempotencyKey.length < 16 || args.idempotencyKey.length > 120) throw new Error("Savings transaction details are invalid.");
     const duplicate = await ctx.db.query("savingsFlows").withIndex("by_business_and_idempotency", q => q.eq("businessId", current.business._id).eq("idempotencyKey", args.idempotencyKey)).unique();
     if (duplicate) {
@@ -487,7 +497,7 @@ export const reverseSavingsFlow = mutation({
   returns: v.null(),
   handler: async (ctx, args) => {
     const current = await workspace(ctx, args.businessId);
-    if (!current || current.membership.role !== "owner") throw new Error("Only a workspace owner can reverse savings activity.");
+    if (!current || !(await hasPermission(ctx, current.membership, "savings.delete"))) throw new Error("Your role cannot reverse savings activity.");
     const flow = await ctx.db.get("savingsFlows", args.flowId);
     if (!flow || flow.businessId !== current.business._id) throw new Error("Savings activity not found.");
     if (flow.state === "void") return null;
@@ -514,7 +524,7 @@ export const createLoan = mutation({
   returns: v.id("loans"),
   handler: async (ctx, args) => {
     const current = await workspace(ctx, args.businessId);
-    if (!current || current.membership.role !== "owner") throw new Error("Only a workspace owner can register a loan.");
+    if (!current || !(await hasPermission(ctx, current.membership, "loans.create"))) throw new Error("Your role cannot register a loan.");
     const lender = args.lender.trim();
     if (lender.length < 2 || lender.length > 100 || !Number.isSafeInteger(args.principalUgx) || args.principalUgx <= 0 || !Number.isSafeInteger(args.annualRateBps) || args.annualRateBps < 0 || args.annualRateBps > 1_000_000 || !Number.isSafeInteger(args.termMonths) || args.termMonths < 1 || args.termMonths > 600 || !validDay(args.startedOn) || args.note.length > 300 || args.idempotencyKey.length < 16 || args.idempotencyKey.length > 120) throw new Error("Loan details are invalid.");
     const duplicate = await ctx.db.query("loans").withIndex("by_business_and_idempotency", q => q.eq("businessId", current.business._id).eq("idempotencyKey", args.idempotencyKey)).unique();
@@ -536,7 +546,7 @@ export const recordLoanRepayment = mutation({
   returns: v.id("loanRepayments"),
   handler: async (ctx, args) => {
     const current = await workspace(ctx, args.businessId);
-    if (!current || current.membership.role !== "owner") throw new Error("Only a workspace owner can record loan repayments.");
+    if (!current || !(await hasPermission(ctx, current.membership, "loans.repay"))) throw new Error("Your role cannot record loan repayments.");
     if (!Number.isSafeInteger(args.principalUgx) || args.principalUgx < 0 || !Number.isSafeInteger(args.interestUgx) || args.interestUgx < 0 || (args.principalUgx === 0 && args.interestUgx === 0) || !validDay(args.paidOn) || args.idempotencyKey.length < 16 || args.idempotencyKey.length > 120) throw new Error("Repayment must include a positive principal or interest amount.");
     const duplicate = await ctx.db.query("loanRepayments").withIndex("by_business_and_idempotency", q => q.eq("businessId", current.business._id).eq("idempotencyKey", args.idempotencyKey)).unique();
     if (duplicate) {
@@ -563,7 +573,7 @@ export const reverseLoanRepayment = mutation({
   returns: v.null(),
   handler: async (ctx, args) => {
     const current = await workspace(ctx, args.businessId);
-    if (!current || current.membership.role !== "owner") throw new Error("Only a workspace owner can reverse loan repayments.");
+    if (!current || !(await hasPermission(ctx, current.membership, "loans.void"))) throw new Error("Your role cannot reverse loan repayments.");
     const repayment = await ctx.db.get("loanRepayments", args.repaymentId);
     if (!repayment || repayment.businessId !== current.business._id) throw new Error("Loan repayment not found.");
     if (repayment.state === "void") return null;
@@ -601,7 +611,7 @@ export const createBill = mutation({
   returns: v.id("bills"),
   handler: async (ctx, args) => {
     const current = await workspace(ctx, args.businessId);
-    if (!current || current.membership.role !== "owner") throw new Error("Only a workspace owner can configure recurring bills.");
+    if (!current || !(await hasPermission(ctx, current.membership, "bills.create"))) throw new Error("Your role cannot configure recurring bills.");
     const name = args.name.trim();
     const category = args.category.trim();
     if (name.length < 2 || name.length > 100 || category.length < 1 || category.length > 80 || !Number.isSafeInteger(args.amountUgx) || args.amountUgx <= 0 || !validDay(args.nextDueOn) || args.idempotencyKey.length < 16 || args.idempotencyKey.length > 120) throw new Error("Bill details are invalid.");
@@ -626,7 +636,8 @@ export const updateBillSchedule = mutation({
   returns: v.null(),
   handler: async (ctx, args) => {
     const current = await workspace(ctx, args.businessId);
-    if (!current || current.membership.role !== "owner") throw new Error("Only a workspace owner can edit or archive bill schedules.");
+    const permission = args.action === "edit" || args.action === "restore" ? "bills.update" : "bills.void";
+    if (!current || !(await hasPermission(ctx, current.membership, permission))) throw new Error("Your role cannot update or archive bill schedules.");
     const bill = await ctx.db.get("bills", args.billId);
     if (!bill || bill.businessId !== current.business._id) throw new Error("Bill schedule not found.");
     if (args.expectedActive !== bill.active || args.expectedNextDueOn !== bill.nextDueOn) throw new Error("This bill was updated in another session. Refresh the schedule before continuing.");
@@ -664,7 +675,7 @@ export const recordBillPayment = mutation({
   returns: v.id("billPayments"),
   handler: async (ctx, args) => {
     const current = await workspace(ctx, args.businessId);
-    if (!current || current.membership.role !== "owner") throw new Error("Only a workspace owner can confirm a bill payment.");
+    if (!current || !(await hasPermission(ctx, current.membership, "bills.pay"))) throw new Error("Your role cannot confirm bill payments.");
     if (!validDay(args.paidOn) || args.idempotencyKey.length < 16 || args.idempotencyKey.length > 120) throw new Error("Payment details are invalid.");
     const bill = await ctx.db.get("bills", args.billId);
     if (!bill || bill.businessId !== current.business._id) throw new Error("Bill schedule not found.");
@@ -696,7 +707,7 @@ export const reverseBillPayment = mutation({
   returns: v.null(),
   handler: async (ctx, args) => {
     const current = await workspace(ctx, args.businessId);
-    if (!current || current.membership.role !== "owner") throw new Error("Only a workspace owner can reverse bill payments.");
+    if (!current || !(await hasPermission(ctx, current.membership, "bills.void"))) throw new Error("Your role cannot reverse bill payments.");
     const payment = await ctx.db.get("billPayments", args.paymentId);
     if (!payment || payment.businessId !== current.business._id) throw new Error("Bill payment not found.");
     if (payment.state === "void") return null;
@@ -733,7 +744,7 @@ export const createReconciliation = mutation({
   returns: v.id("reconciliations"),
   handler: async (ctx, args) => {
     const current = await workspace(ctx, args.businessId);
-    if (!current || (current.membership.role !== "owner" && current.membership.role !== "cashier")) throw new Error("Only an active owner or cashier can record a reconciliation count.");
+    if (!current || !(await hasPermission(ctx, current.membership, "reconcile.create"))) throw new Error("Your role cannot record a reconciliation count.");
     if (!validDay(args.asOfDate) || !Number.isSafeInteger(args.countedBalanceUgx) || args.countedBalanceUgx < 0 || args.note.length > 300 || args.idempotencyKey.length < 16 || args.idempotencyKey.length > 120) throw new Error("Reconciliation details are invalid.");
     const duplicate = await ctx.db.query("reconciliations").withIndex("by_business_and_idempotency", q => q.eq("businessId", current.business._id).eq("idempotencyKey", args.idempotencyKey)).unique();
     if (duplicate) {
@@ -757,7 +768,7 @@ export const supersedeReconciliation = mutation({
   returns: v.id("reconciliations"),
   handler: async (ctx, args) => {
     const current = await workspace(ctx, args.businessId);
-    if (!current || current.membership.role !== "owner") throw new Error("Only a workspace owner can correct a reconciliation count.");
+    if (!current || !(await hasPermission(ctx, current.membership, "reconcile.resolve"))) throw new Error("Your role cannot correct a reconciliation count.");
     const note = args.note.trim();
     if (!Number.isSafeInteger(args.countedBalanceUgx) || args.countedBalanceUgx < 0 || note.length < 5 || note.length > 300 || args.idempotencyKey.length < 16 || args.idempotencyKey.length > 120) throw new Error("Enter a valid count and a correction reason of 5 to 300 characters.");
     const duplicate = await ctx.db.query("reconciliations").withIndex("by_business_and_idempotency", q => q.eq("businessId", current.business._id).eq("idempotencyKey", args.idempotencyKey)).unique();
@@ -790,7 +801,7 @@ export const explainReconciliation = mutation({
   args: { businessId: v.id("businesses"), reconciliationId: v.id("reconciliations"), explanation: v.string() }, returns: v.null(),
   handler: async (ctx, args) => {
     const current = await workspace(ctx, args.businessId);
-    if (!current || current.membership.role !== "owner") throw new Error("Only a workspace owner can close a reconciliation difference.");
+    if (!current || !(await hasPermission(ctx, current.membership, "reconcile.resolve"))) throw new Error("Your role cannot close a reconciliation difference.");
     const explanation = args.explanation.trim();
     if (explanation.length < 5 || explanation.length > 300) throw new Error("Explain the difference in 5 to 300 characters.");
     const row = await ctx.db.get("reconciliations", args.reconciliationId);
@@ -807,7 +818,7 @@ export const reopenReconciliation = mutation({
   returns: v.null(),
   handler: async (ctx, args) => {
     const current = await workspace(ctx, args.businessId);
-    if (!current || current.membership.role !== "owner") throw new Error("Only a workspace owner can reopen an explained reconciliation.");
+    if (!current || !(await hasPermission(ctx, current.membership, "reconcile.resolve"))) throw new Error("Your role cannot reopen an explained reconciliation.");
     const reason = args.reason.trim();
     if (reason.length < 5 || reason.length > 300) throw new Error("Explain why this reconciliation must be reopened in 5 to 300 characters.");
     const row = await ctx.db.get("reconciliations", args.reconciliationId);
@@ -823,7 +834,7 @@ export const createPartner = mutation({
   args: { businessId: v.id("businesses"), name: v.string(), ownershipBps: v.number(), idempotencyKey: v.string() }, returns: v.id("partners"),
   handler: async (ctx, args) => {
     const current = await workspace(ctx, args.businessId);
-    if (!current || current.membership.role !== "owner") throw new Error("Only a workspace owner can manage partner ownership.");
+    if (!current || !(await hasPermission(ctx, current.membership, "partners.manage"))) throw new Error("Your role cannot manage partner ownership.");
     const name = args.name.trim();
     if (name.length < 2 || name.length > 100 || !Number.isSafeInteger(args.ownershipBps) || args.ownershipBps < 0 || args.ownershipBps > 10_000 || args.idempotencyKey.length < 16 || args.idempotencyKey.length > 120) throw new Error("Partner details are invalid.");
     const previous = await ctx.db.query("partners").withIndex("by_business_and_idempotency", q => q.eq("businessId", current.business._id).eq("idempotencyKey", args.idempotencyKey)).unique();
@@ -861,7 +872,7 @@ export const updatePartnerProfile = mutation({
   returns: v.null(),
   handler: async (ctx, args) => {
     const current = await workspace(ctx, args.businessId);
-    if (!current || current.membership.role !== "owner") throw new Error("Only a workspace owner can update partner details.");
+    if (!current || !(await hasPermission(ctx, current.membership, "partners.manage"))) throw new Error("Your role cannot update partner details.");
     const partner = await ctx.db.get("partners", args.partnerId);
     if (!partner || partner.businessId !== current.business._id) throw new Error("Partner record not found.");
     if (!partner.active) throw new Error("Restore the partner record before editing its name.");
@@ -882,7 +893,7 @@ export const updatePartnerStatus = mutation({
   returns: v.null(),
   handler: async (ctx, args) => {
     const current = await workspace(ctx, args.businessId);
-    if (!current || current.membership.role !== "owner") throw new Error("Only a workspace owner can archive or restore partners.");
+    if (!current || !(await hasPermission(ctx, current.membership, "partners.manage"))) throw new Error("Your role cannot archive or restore partners.");
     const partner = await ctx.db.get("partners", args.partnerId);
     if (!partner || partner.businessId !== current.business._id) throw new Error("Partner record not found.");
     if (partner.active === args.active) return null;

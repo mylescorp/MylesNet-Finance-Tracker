@@ -4,6 +4,7 @@ import { ConvexError, v } from "convex/values";
 import { internalMutation, mutation, query } from "./_generated/server";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import type { Id } from "./_generated/dataModel";
+import { hasPermission } from "./accessControl";
 
 type Ctx = MutationCtx | QueryCtx;
 type Kind = "sale" | "expense" | "movement" | "savings" | "loan" | "unknown";
@@ -14,7 +15,7 @@ async function owner(ctx: Ctx, businessId: Id<"businesses">) {
   const membership = await ctx.db.query("memberships").withIndex("by_business_and_user", q => q.eq("businessId", businessId).eq("userId", userId)).unique();
   const business = membership?.active ? await ctx.db.get("businesses", businessId) : null;
   const current = business && membership ? { userId, membership, business } : null;
-  if (!current || current.membership.role !== "owner") throw new ConvexError("Select a workspace you own before managing Google Forms.");
+  if (!current || !(await hasPermission(ctx, current.membership, "integrations.manage"))) throw new ConvexError("Your role cannot manage Google Forms.");
   return { userId: current.userId, business: current.business };
 }
 

@@ -7,6 +7,7 @@ import { mutation, query } from "./_generated/server";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import type { Id } from "./_generated/dataModel";
 import { getSelectedWorkspace } from "./workspaceContext";
+import { hasPermission, isOwnerMembership } from "./accessControl";
 
 const role = v.union(v.literal("owner"), v.literal("partner"), v.literal("cashier"), v.literal("finance_approver"));
 function currencyMinorDigits(currency: string) {
@@ -87,7 +88,7 @@ export const overview = query({
   handler: async (ctx) => {
     const current = await activeWorkspace(ctx);
     if (!current) return { access: "pending" as const };
-    if (current.membership.role === "partner") return { access: "restricted" as const, role: "partner" as const };
+    if (!(await hasPermission(ctx, current.membership, "settings.view"))) return { access: "restricted" as const, role: current.membership.role };
     const prefs = await ctx.db.query("workspacePreferences").withIndex("by_business", q => q.eq("businessId", current.business._id)).unique();
     const firstEntry = await ctx.db.query("entries").withIndex("by_business_and_date", q => q.eq("businessId", current.business._id)).first();
     const firstOperationalRecord = await ctx.db.query("operationalRecords").withIndex("by_business_and_kind_and_date", q => q.eq("businessId", current.business._id)).first();
@@ -144,7 +145,7 @@ export const update = mutation({
   returns: v.number(),
   handler: async (ctx, args) => {
     const current = await activeWorkspace(ctx, args.businessId);
-    if (!current || current.membership.role !== "owner") throw new Error("Only the workspace owner can change settings.");
+    if (!current || !(await hasPermission(ctx, current.membership, "settings.update"))) throw new Error("Your role cannot change workspace settings.");
     const existing = await ctx.db.query("workspacePreferences").withIndex("by_business", q => q.eq("businessId", current.business._id)).unique();
     if (args.expectedSettingsUpdatedAt !== (existing?.updatedAt ?? current.business.createdAt)) {
       throw new Error("These settings changed in another session. Refresh this page before saving again.");
@@ -251,7 +252,7 @@ export const exportEntries = query({
   args: {},
   handler: async (ctx) => {
     const current = await activeWorkspace(ctx);
-    if (!current || current.membership.role !== "owner") return { access: "restricted" as const, rows: [] };
+    if (!current || !(await hasPermission(ctx, current.membership, "data.export"))) return { access: "restricted" as const, rows: [] };
     const rows = await ctx.db.query("entries").withIndex("by_business_and_date", q => q.eq("businessId", current.business._id)).order("asc").take(5000);
     const scale = 10 ** (currencyMinorDigits(current.business.currency) ?? 0);
     return { access: "ready" as const, workspace: current.business.name, currency: current.business.currency, currencyMinorDigits: currencyMinorDigits(current.business.currency), rows: rows.map(({ occurredOn, kind, category, account, amountUgx, note, source, state, createdAt }) => ({ occurredOn, kind, category, account, amount: amountUgx / scale, currency: current.business.currency, note, source, state, createdAt })) };
@@ -262,7 +263,7 @@ export const ruleReview = query({
   args: {},
   handler: async (ctx) => {
     const current = await activeWorkspace(ctx);
-    if (!current || current.membership.role === "partner" || current.membership.role === "finance_approver") return { access: "restricted" as const, currency: "UGX", highExpenses: [], weakDays: [] };
+    if (!current || !(await hasPermission(ctx, current.membership, "reports.view"))) return { access: "restricted" as const, currency: "UGX", highExpenses: [], weakDays: [] };
     const prefs = await ctx.db.query("workspacePreferences").withIndex("by_business", q => q.eq("businessId", current.business._id)).unique();
     const scale = 10 ** (currencyMinorDigits(current.business.currency) ?? 0);
     const threshold = prefs?.highExpenseReviewUgx ?? 500000 * scale;
@@ -284,7 +285,7 @@ export const monthlyTargets = query({
   args: { from: v.string(), toExclusive: v.string() },
   handler: async (ctx, args) => {
     const current = await activeWorkspace(ctx);
-    if (!current || current.membership.role === "partner" || current.membership.role === "finance_approver") return { access: "restricted" as const };
+    if (!current || !(await hasPermission(ctx, current.membership, "analytics.view"))) return { access: "restricted" as const };
     const prefs = await ctx.db.query("workspacePreferences").withIndex("by_business", q => q.eq("businessId", current.business._id)).unique();
     const days = await ctx.db.query("dailyTotals").withIndex("by_business_and_day", q => q.eq("businessId", current.business._id).gte("day", args.from).lt("day", args.toExclusive)).take(40);
     return {
@@ -302,7 +303,7 @@ export const accessOverview = query({
   args: {},
   handler: async (ctx) => {
     const current = await activeWorkspace(ctx);
-    if (!current || current.membership.role !== "owner") return { access: "restricted" as const };
+    if (!current || !(await hasPermission(ctx, current.membership, "access.view"))) return { access: "restricted" as const };
     const partners = await ctx.db.query("partners").withIndex("by_business_and_active", q => q.eq("businessId", current.business._id).eq("active", true)).take(100);
     return { access: "ready" as const, businessId: current.business._id, partners: partners.map(({ _id, name }) => ({ id: _id, name })) };
   },
@@ -312,7 +313,7 @@ export const accessMembers = query({
   args: { paginationOpts: paginationOptsValidator },
   handler: async (ctx, args) => {
     const current = await activeWorkspace(ctx);
-    if (!current || current.membership.role !== "owner") throw new Error("Only the workspace owner can view member access history.");
+    if (!current || !(await hasPermission(ctx, current.membership, "access.view"))) throw new Error("Your role cannot view member access history.");
     const result = await ctx.db.query("memberships").withIndex("by_business_and_user", q => q.eq("businessId", current.business._id)).order("asc").paginate(args.paginationOpts);
     const partners = await ctx.db.query("partners").withIndex("by_business_and_active", q => q.eq("businessId", current.business._id).eq("active", true)).take(100);
     const partnerNames = new Map(partners.map(partner => [partner._id, partner.name]));
@@ -328,7 +329,7 @@ export const accessInvitations = query({
   args: { paginationOpts: paginationOptsValidator },
   handler: async (ctx, args) => {
     const current = await activeWorkspace(ctx);
-    if (!current || current.membership.role !== "owner") throw new Error("Only the workspace owner can view invitations.");
+    if (!current || !(await hasPermission(ctx, current.membership, "access.view"))) throw new Error("Your role cannot view invitations.");
     const result = await ctx.db.query("invitations").withIndex("by_business_and_expires", q => q.eq("businessId", current.business._id)).order("desc").paginate(args.paginationOpts);
     const partners = await ctx.db.query("partners").withIndex("by_business_and_active", q => q.eq("businessId", current.business._id).eq("active", true)).take(100);
     const partnerNames = new Map(partners.map(partner => [partner._id, partner.name]));
@@ -341,7 +342,7 @@ export const accessAudit = query({
   args: { paginationOpts: paginationOptsValidator },
   handler: async (ctx, args) => {
     const current = await activeWorkspace(ctx);
-    if (!current || current.membership.role !== "owner") throw new Error("Only the workspace owner can view access audit history.");
+    if (!current || !(await hasPermission(ctx, current.membership, "audit.view"))) throw new Error("Your role cannot view access audit history.");
     const result = await ctx.db.query("auditEvents").withIndex("by_business_and_time", q => q.eq("businessId", current.business._id)).order("desc").paginate(args.paginationOpts);
     return { ...result, page: result.page.map(event => ({ id: event._id, action: event.action, summary: event.summary, occurredAt: event.occurredAt })) };
   },
@@ -352,7 +353,7 @@ export const invite = mutation({
   returns: v.string(),
   handler: async (ctx, args) => {
     const current = await activeWorkspace(ctx, args.businessId);
-    if (!current || current.membership.role !== "owner") throw new Error("Only the workspace owner can invite people.");
+    if (!current || !(await hasPermission(ctx, current.membership, "access.manage"))) throw new Error("Your role cannot invite people.");
     const email = args.email.trim().toLowerCase();
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error("Enter a valid email address.");
     if (args.role === "owner") throw new Error("Invite a partner, cashier, or finance approver. The owner role is assigned during workspace setup.");
@@ -383,7 +384,7 @@ export const revokeInvite = mutation({
   handler: async (ctx, { businessId, invitationId }) => {
     const current = await activeWorkspace(ctx, businessId);
     const invite = await ctx.db.get("invitations", invitationId);
-    if (!current || current.membership.role !== "owner" || !invite || invite.businessId !== current.business._id) throw new Error("Invitation not found or access denied.");
+    if (!current || !(await hasPermission(ctx, current.membership, "access.manage")) || !invite || invite.businessId !== current.business._id) throw new Error("Invitation not found or access denied.");
     await ctx.db.patch("invitations", invitationId, { active: false, revokedAt: Date.now() });
     await ctx.db.insert("auditEvents", { businessId: current.business._id, actorId: current.userId, action: "invitation.revoked", entityType: "invitation", entityId: invitationId, occurredAt: Date.now(), summary: `Revoked invitation for ${invite.email}.` });
     return null;
@@ -395,7 +396,7 @@ export const updateMember = mutation({
   handler: async (ctx, args) => {
     const current = await activeWorkspace(ctx, args.businessId);
     const member = await ctx.db.get("memberships", args.membershipId);
-    if (!current || current.membership.role !== "owner" || !member || member.businessId !== current.business._id) throw new Error("Member not found or access denied.");
+    if (!current || !(await hasPermission(ctx, current.membership, "access.manage")) || !member || member.businessId !== current.business._id) throw new Error("Member not found or access denied.");
     if (member.role === "owner" || args.role === "owner") throw new Error("Owner access cannot be changed here. Use the verified ownership transfer process.");
     if (member.userId === current.userId && !args.active) throw new Error("You cannot deactivate your own account.");
     let partnerId: Id<"partners"> | undefined;
@@ -420,7 +421,7 @@ export const transferOwnership = mutation({
   returns: v.null(),
   handler: async (ctx, args) => {
     const current = await activeWorkspace(ctx, args.businessId);
-    if (!current || current.membership.role !== "owner") throw new Error("Only the current workspace owner can transfer ownership.");
+    if (!current || !isOwnerMembership(current.membership)) throw new Error("Only the current workspace owner can transfer ownership.");
     const target = await ctx.db.get("memberships", args.membershipId);
     if (!target || target.businessId !== current.business._id || !target.active || target.role === "owner" || target.role === "partner" || target.userId === current.userId) throw new Error("Choose another active cashier or finance approver.");
     const targetUser = await ctx.db.get("users", target.userId);

@@ -14,9 +14,9 @@ function money(amountMinor: number, scale: number, locale: string) {
 export function GlobalSearch() {
   const [term, setTerm] = useState("");
   const [open, setOpen] = useState(false);
+  const settings = useQuery(api.settings.overview, {});
+  const results = useQuery(api.workspace.searchEntries, term.trim().length >= 2 ? { term: term.trim(), limit: 8 } : "skip");
   const showResults = open && term.trim().length >= 2;
-  const settings = useQuery(api.settings.overview, showResults ? {} : "skip");
-  const results = useQuery(api.workspace.searchEntries, showResults ? { term: term.trim(), limit: 8 } : "skip");
 
   return <div className="global-search-wrap">
     <label className="search-box" role="search">

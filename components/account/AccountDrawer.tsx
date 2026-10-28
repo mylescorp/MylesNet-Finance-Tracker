@@ -2,7 +2,7 @@
 
 import { useAuthActions } from "@convex-dev/auth/react";
 import { useMutation, useQuery } from "convex/react";
-import { Camera, Check, ChevronRight, CircleUserRound, ExternalLink, LogOut, Mail, Phone, ShieldCheck, Sun, Upload, UserRound, X } from "lucide-react";
+import { Camera, Check, ChevronRight, LogOut, Mail, Phone, Settings2, Upload, UserRound, X } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -167,9 +167,16 @@ export function AccountDrawer({ onClose }: Props) {
   const photoUrl = photoUrlDraft === undefined ? profile?.photoUrl ?? null : photoUrlDraft;
   const displayName = name.trim() || profile?.email?.split("@")[0] || "Your account";
   const activePhoto = removePhoto ? null : photoUrl;
+  const hasChanges = profile !== undefined && profile !== null && (
+    name.trim() !== profile.displayName ||
+    phone.trim() !== profile.phone ||
+    Boolean(photoId) ||
+    (removePhoto && Boolean(profile.photoUrl))
+  );
 
   return <div className="account-overlay" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !busy) onClose(); }}>
     <aside className="account-drawer" ref={drawerRef} role="dialog" aria-modal="true" aria-labelledby="account-drawer-title">
+      <div className="account-theme-row"><ThemeControl /></div>
       <header className="account-drawer-header">
         <div><span className="account-kicker">MYLESNET IDENTITY</span><h1 id="account-drawer-title">Your account</h1></div>
         <button className="account-close" type="button" onClick={onClose} aria-label="Close account drawer" disabled={busy}><X size={19} /></button>
@@ -179,9 +186,8 @@ export function AccountDrawer({ onClose }: Props) {
           <div className="account-identity-glow" aria-hidden="true" />
           <div className="account-identity-main">
             <div className="account-photo-wrap"><ProfileAvatar imageUrl={activePhoto} name={displayName} size="large" /><button className="account-photo-edit" type="button" onClick={() => fileInputRef.current?.click()} aria-label="Change profile photo" disabled={busy}><Camera size={15} /></button></div>
-            <div className="account-identity-copy"><h2>{displayName}</h2><p>{profile.email || "Google account"}</p></div>
+            <div className="account-identity-copy"><h2>{displayName}</h2><p>{profile.email || "Email unavailable"}</p></div>
           </div>
-          <div className="account-identity-footer"><span><ShieldCheck size={14} /> Protected with Google sign-in</span><span className="account-connected"><i /> Connected</span></div>
         </section>
 
         <form className="account-form" onSubmit={handleSave}>
@@ -195,19 +201,15 @@ export function AccountDrawer({ onClose }: Props) {
             </div>
           </div>
           <label className="account-field"><span>Display name</span><span className="account-input-wrap"><UserRound size={16} /><input value={name} onChange={(event) => setNameDraft(event.target.value)} maxLength={80} autoComplete="name" required placeholder="Your name" /></span></label>
-          <label className="account-field"><span>Email address <small>Google account</small></span><span className="account-input-wrap account-input-readonly"><Mail size={16} /><input value={profile.email} readOnly aria-readonly="true" /></span></label>
+          <label className="account-field"><span>Email address <small>Read only</small></span><span className="account-input-wrap account-input-readonly"><Mail size={16} /><input value={profile.email} readOnly aria-readonly="true" /></span></label>
           <label className="account-field"><span>Phone number <small>Optional</small></span><span className="account-input-wrap"><Phone size={16} /><input type="tel" value={phone} onChange={(event) => setPhoneDraft(event.target.value)} maxLength={32} autoComplete="tel" placeholder="Add a contact number" /></span></label>
           <input ref={fileInputRef} className="account-file-input" type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => void handlePhotoChange(event)} aria-label="Upload profile photo" />
           {(notice || error) && <p className={`account-feedback${error ? " account-feedback-error" : ""}`} role={error ? "alert" : "status"}>{error || <><Check size={14} />{notice}</>}</p>}
-          <button className="account-save-button" type="submit" disabled={busy || !name.trim()}>{busy ? "Saving…" : "Save changes"}<ChevronRight size={16} /></button>
+          {hasChanges && <button className="account-save-button" type="submit" disabled={busy || !name.trim()}>{busy ? "Saving…" : "Save changes"}<ChevronRight size={16} /></button>}
         </form>
 
-        <section className="account-preferences">
-          <div className="account-section-heading"><div><span className="account-section-icon"><Sun size={16} /></span><div><h2>Appearance</h2><p>Choose the look that works for you</p></div></div><ThemeControl /></div>
-        </section>
-        <Link className="account-settings-link" href="/settings/general" onClick={onClose}><span className="account-section-icon"><CircleUserRound size={16} /></span><span><strong>Workspace settings</strong><small>Business details, currency and preferences</small></span><ExternalLink size={15} /></Link>
-        <section className="account-security-row"><span className="account-section-icon"><ShieldCheck size={16} /></span><span><strong>Sign-in & security</strong><small>Authenticated with Google</small></span><span className="account-security-status">Secure</span></section>
-        <footer className="account-drawer-footer"><span>Signed in as <strong>{profile.email}</strong></span><button type="button" className="account-signout" onClick={() => void handleSignOut()} disabled={busy}><LogOut size={16} />Sign out</button></footer>
+        <Link className="account-settings-link" href="/settings/general"><span className="account-section-icon"><Settings2 size={16} /></span><span><strong>Settings</strong><small>Business details and preferences</small></span><ChevronRight size={15} /></Link>
+        <footer className="account-drawer-footer"><span><strong>{profile.email}</strong></span><button type="button" className="account-signout" onClick={() => void handleSignOut()} disabled={busy}><LogOut size={16} />Sign out</button></footer>
       </>}
     </aside>
   </div>;

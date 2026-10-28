@@ -93,7 +93,7 @@ function EditableSettings({ tab, settings }: { tab: "general" | "finance" | "rul
 }
 
 type SettingsOverview = Extract<NonNullable<ReturnType<typeof useQuery<typeof api.settings.overview>>>, { access: "ready" }>;
-type AccessMember = { id: Id<"memberships">; role: "owner" | "cashier" | "finance_approver" | "partner"; partnerId?: Id<"partners">; partnerName?: string; active: boolean; email: string; emailVerified: boolean; createdAt: number };
+type AccessMember = { id: Id<"memberships">; role: string; partnerId?: Id<"partners">; partnerName?: string; active: boolean; email: string; emailVerified: boolean; createdAt: number };
 function Field({ label, children }: { label: string; children: ReactNode }) { const id = useId().replaceAll(":", ""); const childList = Children.toArray(children); const controlIndex = childList.findIndex(child => isValidElement(child) && typeof child.type === "string" && ["input", "select", "textarea"].includes(child.type)); return <div className="field"><label htmlFor={id}>{label}</label>{childList.map((child, index) => index === controlIndex && isValidElement(child) ? cloneElement(child as React.ReactElement<{ id?: string }>, { id }) : child)}</div>; }
 function NumberField({ label, value, currency, scale = 1, disabled, onChange }: { label: string; value: number; currency: string; scale?: number; disabled: boolean; onChange: (value: number) => void }) { return <Field label={`${label} (${currency})`}><input type="number" step={1 / scale} value={value} disabled={disabled} onChange={e => onChange(Number(e.target.value))} /></Field>; }
 function LiveBalancePanel({ settings }: { settings: SettingsOverview }) {

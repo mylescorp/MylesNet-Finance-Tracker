@@ -2,13 +2,6 @@ import { authTables } from "@convex-dev/auth/server";
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
 
-const role = v.union(
-  v.literal("owner"),
-  v.literal("partner"),
-  v.literal("cashier"),
-  v.literal("finance_approver"),
-);
-
 export default defineSchema({
   ...authTables,
   userProfiles: defineTable({
@@ -43,17 +36,20 @@ export default defineSchema({
   memberships: defineTable({
     businessId: v.id("businesses"),
     userId: v.id("users"),
-    role,
+    role: v.string(),
+    roleId: v.optional(v.id("workspaceRoles")),
     partnerId: v.optional(v.id("partners")),
     active: v.boolean(),
     createdAt: v.number(),
   })
     .index("by_user", ["userId"])
     .index("by_business_and_user", ["businessId", "userId"])
+    .index("by_business_and_role_id", ["businessId", "roleId"])
     .index("by_business_and_partner_and_active", ["businessId", "partnerId", "active"]),
   invitations: defineTable({
     email: v.string(),
-    role,
+    role: v.string(),
+    roleId: v.optional(v.id("workspaceRoles")),
     partnerId: v.optional(v.id("partners")),
     businessId: v.id("businesses"),
     invitedBy: v.id("users"),
@@ -68,6 +64,17 @@ export default defineSchema({
     .index("by_business_and_active", ["businessId", "active"])
     .index("by_business_and_partner_and_active", ["businessId", "partnerId", "active"])
     .index("by_token_hash", ["tokenHash"]),
+  workspaceRoles: defineTable({
+    businessId: v.id("businesses"),
+    name: v.string(),
+    description: v.string(),
+    permissions: v.array(v.string()),
+    builtIn: v.optional(v.union(v.literal("owner"), v.literal("partner"), v.literal("cashier"), v.literal("finance_approver"))),
+    active: v.boolean(),
+    createdBy: v.id("users"),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  }).index("by_business", ["businessId"]).index("by_business_and_active", ["businessId", "active"]),
   workspacePreferences: defineTable({
     businessId: v.id("businesses"),
     locale: v.optional(v.string()),

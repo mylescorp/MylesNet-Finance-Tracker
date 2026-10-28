@@ -3,10 +3,14 @@
 import { useMutation, useQuery } from "convex/react";
 import { useRef, useState, type FormEvent } from "react";
 import { api } from "@/convex/_generated/api";
+import { RecordFormDisclosure } from "@/components/workspace/RecordFormDisclosure";
+import { useRecordEntryBusy, useRecordEntrySaved } from "@/components/workspace/RecordEntryDrawer";
 
 type RecordKind = "movement" | "holding" | "loan" | "bill";
 
 export function OperationalRecordForm({ kind, currency, scale = 1, businessDay }: { kind: RecordKind; currency: string; scale?: number; businessDay: string }) {
+  const recordSaved = useRecordEntrySaved();
+  const setDrawerBusy = useRecordEntryBusy();
   const save = useMutation(api.workspace.createOperationalRecord);
   const access = useQuery(api.workspace.currentAccess, {});
   const records = useQuery(api.workspace.operationalRecords, { kind });
@@ -28,6 +32,7 @@ export function OperationalRecordForm({ kind, currency, scale = 1, businessDay }
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setBusy(true); setFeedback(null);
+    setDrawerBusy(true);
     try {
       const scaledAmount = Number(amount) * scale;
       const roundedAmount = Math.round(scaledAmount);
@@ -38,12 +43,14 @@ export function OperationalRecordForm({ kind, currency, scale = 1, businessDay }
       requestKey.current = null;
       setTitle(""); setAmount(""); setNote(""); setDateEdited(false); setOccurredOn("");
       setFeedback({ message: `${titleFor} saved.`, error: false });
+      recordSaved(`${titleFor} saved.`);
     } catch (error) {
       setFeedback({ message: error instanceof Error ? error.message : "Could not save this record.", error: true });
-    } finally { setBusy(false); }
+    } finally { setBusy(false); setDrawerBusy(false); }
   }
 
   return <div className="settings-stack">
+    <RecordFormDisclosure title={titleFor} description="Open this form to add a record.">
     <form className="form-layout" onSubmit={event => void submit(event)}>
       <label className="field"><span>{kind === "holding" ? "Holding name" : kind === "loan" ? "Lender or loan name" : kind === "bill" ? "Bill name" : "Movement description"}</span><input value={title} onChange={event => { requestKey.current = null; setTitle(event.target.value); }} minLength={2} maxLength={100} required /></label>
       <label className="field"><span>{kind === "holding" ? "Current value" : kind === "loan" ? "Principal amount" : "Amount"} ({currency})</span><input type="number" min="0" step={1 / scale} value={amount} onChange={event => { requestKey.current = null; setAmount(event.target.value); }} required /></label>
@@ -57,6 +64,7 @@ export function OperationalRecordForm({ kind, currency, scale = 1, businessDay }
       <label className="field field-full"><span>Note (optional)</span><textarea rows={2} maxLength={300} value={note} onChange={event => { requestKey.current = null; setNote(event.target.value); }} /></label>
       <div className="form-actions"><button className="button button-accent" disabled={busy}>{busy ? "Saving…" : titleFor}</button>{feedback && <span className={`form-feedback ${feedback.error ? "form-error" : "form-success"}`} role={feedback.error ? "alert" : "status"}>{feedback.message}</span>}</div>
     </form>
+    </RecordFormDisclosure>
     <div className="table-scroll"><table className="data-table"><thead><tr><th>Date</th><th>Description</th><th>Amount</th><th>Details</th></tr></thead><tbody>{records?.map(record => <tr key={record._id}><td>{record.occurredOn}</td><td>{record.title}</td><td>{new Intl.NumberFormat("en", { maximumFractionDigits: Math.round(Math.log10(scale)) }).format(record.amountUgx / scale)} {currency}</td><td>{kind === "movement" ? `${record.movementType} · ${record.account === "cash" ? "Cash" : "Mobile money"}${record.destinationAccount ? ` → ${record.destinationAccount === "cash" ? "Cash" : "Mobile money"}` : ""}` : kind === "bill" ? `${record.cadence} · next due` : record.note || kind}</td></tr>)}</tbody></table>{records?.length === 0 && <p className="muted-note">No {kind} records yet.</p>}{records === undefined && <p className="muted-note">Loading records…</p>}</div>
     {kind === "movement" && <p className="muted-note">Transfers and withdrawals update account balances, but do not count as sales or expenses.</p>}
     {kind !== "movement" && <p className="muted-note">This operational record is tracked separately and does not post income, expense, or cashbook balance changes.</p>}

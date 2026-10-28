@@ -8,6 +8,7 @@
  * @module
  */
 
+import type * as accessControl from "../accessControl.js";
 import type * as analytics from "../analytics.js";
 import type * as auth from "../auth.js";
 import type * as centipid from "../centipid.js";
@@ -31,6 +32,7 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  accessControl: typeof accessControl;
   analytics: typeof analytics;
   auth: typeof auth;
   centipid: typeof centipid;

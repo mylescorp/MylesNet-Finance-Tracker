@@ -3,11 +3,12 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
-import type { Id } from "./_generated/dataModel";
+import type { Doc, Id } from "./_generated/dataModel";
 import { getSelectedWorkspace } from "./workspaceContext";
+import { hasPermission } from "./accessControl";
 
 type Ctx = QueryCtx | MutationCtx;
-type ActiveWorkspace = { userId: Id<"users">; membership: { role: "owner" | "partner" | "cashier" | "finance_approver"; businessId: Id<"businesses"> }; business: { _id: Id<"businesses">; currency: string; timezone: string; createdAt: number } };
+type ActiveWorkspace = { userId: Id<"users">; membership: Doc<"memberships">; business: Doc<"businesses"> };
 
 function safeAdd(a: number, b: number, label: string) {
   const result = a + b;
@@ -47,7 +48,7 @@ async function workspace(ctx: Ctx, businessId?: Id<"businesses">): Promise<Activ
 
 async function requireOwner(ctx: Ctx, businessId: Id<"businesses">) {
   const current = await workspace(ctx, businessId);
-  if (!current || current.membership.role !== "owner") throw new Error("Only a workspace owner can prepare or record partner payouts.");
+  if (!current || !(await hasPermission(ctx, current.membership, "partners.distributions.manage"))) throw new Error("Your role cannot prepare distributions or record partner payouts.");
   return current;
 }
 
@@ -185,7 +186,7 @@ export const decide = mutation({
   returns: v.null(),
   handler: async (ctx, args) => {
     const current = await workspace(ctx, args.businessId);
-    if (!current || (current.membership.role !== "owner" && current.membership.role !== "finance_approver")) throw new Error("Only an owner or finance approver can review a distribution.");
+    if (!current || !(await hasPermission(ctx, current.membership, "partners.distributions.approve"))) throw new Error("Your role cannot review a distribution.");
     const row = await ctx.db.get("partnerDistributions", args.distributionId);
     if (!row || row.businessId !== current.business._id || row.status !== "pending_approval") throw new Error("This distribution is not awaiting a decision.");
     if (row.createdBy === current.userId) throw new Error("The person who prepared a distribution cannot approve or reject it.");
@@ -298,7 +299,7 @@ export const overview = query({
   args: { businessId: v.id("businesses"), paginationOpts: paginationOptsValidator },
   handler: async (ctx, args) => {
     const current = await workspace(ctx, args.businessId);
-    if (!current || (current.membership.role !== "owner" && current.membership.role !== "finance_approver")) return { access: "restricted" as const };
+    if (!current || (!(await hasPermission(ctx, current.membership, "partners.distributions.manage")) && !(await hasPermission(ctx, current.membership, "partners.distributions.approve")))) return { access: "restricted" as const };
     if (args.paginationOpts.numItems > 20) throw new Error("Distribution history pages are limited to 20 records.");
     const page = await ctx.db.query("partnerDistributions").withIndex("by_business_and_period_start", q => q.eq("businessId", current.business._id)).order("desc").paginate(args.paginationOpts);
     const activePartners = await ctx.db.query("partners").withIndex("by_business_and_active", q => q.eq("businessId", current.business._id).eq("active", true)).take(101);
@@ -314,7 +315,8 @@ export const overview = query({
         ctx.db.query("partnerDistributionItems").withIndex("by_business_and_distribution", q => q.eq("businessId", current.business._id).eq("distributionId", row._id)).take(101),
         ctx.db.get("users", row.createdBy),
       ]);
-      return { ...row, preparedBy: author?.email ?? "Workspace owner", canDecide: row.createdBy !== current.userId && (current.membership.role === "owner" || current.membership.role === "finance_approver"), items };
+      const canApprove = await hasPermission(ctx, current.membership, "partners.distributions.approve");
+      return { ...row, preparedBy: author?.email ?? "Workspace owner", canDecide: row.createdBy !== current.userId && canApprove, items };
     }));
     const activeApprovers = await ctx.db.query("memberships").withIndex("by_business_and_user", q => q.eq("businessId", current.business._id)).take(100);
     return { access: "ready" as const, businessId: current.business._id, role: current.membership.role, distributions, continueCursor: page.continueCursor, isDone: page.isDone, hasFinanceApprover: activeApprovers.some(row => row.active && row.role === "finance_approver"), ownershipBaselines: ownershipBaselines.filter((row): row is NonNullable<typeof row> => row !== null), currency: current.business.currency };
@@ -325,7 +327,7 @@ export const payoutHistory = query({
   args: { businessId: v.id("businesses"), distributionId: v.id("partnerDistributions"), paginationOpts: paginationOptsValidator },
   handler: async (ctx, args) => {
     const current = await workspace(ctx, args.businessId);
-    if (!current || (current.membership.role !== "owner" && current.membership.role !== "finance_approver")) return { access: "restricted" as const };
+    if (!current || (!(await hasPermission(ctx, current.membership, "partners.distributions.manage")) && !(await hasPermission(ctx, current.membership, "partners.distributions.approve")))) return { access: "restricted" as const };
     if (args.paginationOpts.numItems > 50) throw new Error("Payout history pages are limited to 50 records.");
     const distribution = await ctx.db.get("partnerDistributions", args.distributionId);
     if (!distribution || distribution.businessId !== current.business._id) return { access: "restricted" as const };

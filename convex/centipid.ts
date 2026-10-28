@@ -5,6 +5,7 @@ import { internalMutation, mutation, query } from "./_generated/server";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
 import { isIgnoredCentipidEvent } from "./centipidUtils";
+import { hasPermission } from "./accessControl";
 
 function addSafeInteger(left: number, right: number, label: string) {
   const result = left + right;
@@ -18,7 +19,7 @@ async function owner(ctx: MutationCtx | QueryCtx, businessId: Id<"businesses">) 
   const membership = await ctx.db.query("memberships").withIndex("by_business_and_user", q => q.eq("businessId", businessId).eq("userId", userId)).unique();
   const business = membership?.active ? await ctx.db.get("businesses", businessId) : null;
   const current = business && membership ? { userId, membership, business } : null;
-  if (!current || current.membership.role !== "owner") throw new ConvexError("Select a workspace you own before managing the integration.");
+  if (!current || !(await hasPermission(ctx, current.membership, "integrations.manage"))) throw new ConvexError("Your role cannot manage this integration.");
   return { userId: current.userId, business: current.business };
 }
 
@@ -99,7 +100,7 @@ async function saveReceipt(ctx: MutationCtx, businessId: Id<"businesses">, prior
 
 export const processWebhook = internalMutation({
   args: {
-    tokenHash: v.string(), eventKey: v.string(), rawHash: v.string(), event: v.string(), kind: v.union(v.literal("payment"), v.literal("voucher"), v.literal("expense"), v.literal("ignored")),
+    tokenHash: v.string(), eventKey: v.string(), legacyEventKey: v.optional(v.string()), rawHash: v.string(), event: v.string(), kind: v.union(v.literal("payment"), v.literal("voucher"), v.literal("expense"), v.literal("ignored")),
     amount: v.number(), transactionId: v.string(), paymentMethod: v.string(), description: v.string(), customer: v.string(), category: v.string(), account: v.string(), paidTo: v.string(),
   },
   returns: v.object({ status: v.union(v.literal("success"), v.literal("duplicate"), v.literal("ignored"), v.literal("unauthorized")), routed: v.optional(v.string()), event: v.optional(v.string()) }),
@@ -110,6 +111,10 @@ export const processWebhook = internalMutation({
     if (!business) return { status: "unauthorized" as const };
     const prior = await ctx.db.query("webhookReceipts").withIndex("by_business_and_event", q => q.eq("businessId", business._id).eq("eventKey", args.eventKey)).unique();
     if (prior && prior.status !== "failed") return prior.status === "ignored" ? { status: "ignored" as const, event: prior.event } : { status: "duplicate" as const };
+    if (args.legacyEventKey && args.legacyEventKey !== args.eventKey) {
+      const legacyPrior = await ctx.db.query("webhookReceipts").withIndex("by_business_and_event", q => q.eq("businessId", business._id).eq("eventKey", args.legacyEventKey!)).unique();
+      if (legacyPrior?.event === args.event) return legacyPrior.status === "ignored" ? { status: "ignored" as const, event: legacyPrior.event } : { status: "duplicate" as const };
+    }
 
     const prefs = await ctx.db.query("workspacePreferences").withIndex("by_business", q => q.eq("businessId", business._id)).unique();
     const ignoredEvent = isIgnoredCentipidEvent(args.event);
