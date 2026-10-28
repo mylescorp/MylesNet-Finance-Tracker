@@ -5,6 +5,15 @@ import {
 } from "@convex-dev/auth/nextjs/server";
 
 const isSignInPage = createRouteMatcher(["/signin"]);
+const isPublicPwaRoute = createRouteMatcher([
+  "/manifest.webmanifest",
+  "/sw.js",
+  "/offline",
+  "/icon-192.png",
+  "/icon-512.png",
+  "/icon-maskable-512.png",
+  "/apple-touch-icon.png",
+]);
 const isProtectedRoute = createRouteMatcher([
   "/dashboard(.*)", "/analytics(.*)", "/sales(.*)", "/expenses(.*)",
   "/movements(.*)", "/savings(.*)", "/loans(.*)", "/daily-report(.*)",
@@ -13,6 +22,7 @@ const isProtectedRoute = createRouteMatcher([
 ]);
 
 export default convexAuthNextjsMiddleware(async (request, { convexAuth }) => {
+  if (isPublicPwaRoute(request)) return;
   if (isSignInPage(request) && (await convexAuth.isAuthenticated())) {
     return nextjsMiddlewareRedirect(request, "/dashboard");
   }
