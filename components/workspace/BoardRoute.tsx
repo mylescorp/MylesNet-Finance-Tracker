@@ -360,12 +360,12 @@ export function BoardRoute({ route }: { route: string }) {
       {screen.sections.map((section) => <Card className="board-section-card" key={section.title}>
         <div className="card-heading"><div><h2 className="card-title">{section.title}</h2><p className="card-subtitle">{section.detail}</p></div></div>
         {section.kind === "table" && screen.title === "Sales" && section.title.startsWith("Daily sales") ? <RecentEntryTable days={stats?.days} rangeStart={range.from} rangeEnd={range.toExclusive} loading={summary === undefined} formatDay={fmtDate} formatMoney={fmt} />
-        : section.kind === "table" && screen.title === "Expenses" && section.title.includes("category") ? <CashbookCategoryBreakdown entries={selectedEntries} loading={entries === undefined} currency={currency} formatMoney={fmt} capped={entries?.length === 500} />
+        : section.kind === "table" && screen.title === "Expenses" && section.title.includes("category") ? <CashbookCategoryBreakdown entries={selectedEntries} loading={entries === undefined} formatMoney={fmt} capped={entries?.length === 500} />
         : section.kind === "table" && (screen.title === "Sales" || screen.title === "Expenses") ? (
           hasRecordData ? <div className="table-scroll"><table className="data-table"><thead><tr><th>Date</th><th>Type</th><th>Category</th><th>Account</th><th>Amount</th><th>Status</th></tr></thead><tbody>{selectedEntries.map((entry) => <tr key={entry._id}><td>{fmtDate(entry.occurredOn)}</td><td>{entry.kind}</td><td>{entry.category}</td><td>{accountLabel(entry.account)}</td><td>{fmt(entry.amountUgx)}</td><td><span className={`status-chip ${entry.state === "posted" ? "status-ok" : "status-warning"}`}>{entry.state}</span></td></tr>)}</tbody></table></div> : <EmptyPanel message="No entries yet." next="Add an entry to populate this view. The design preview figures are examples, not live business data." />
         ) : section.kind === "table" && screen.title === "Daily Report" ? <DailyHistoryTable days={weekDays} today={today} loading={trailingSevenSummary === undefined} formatDay={fmtDate} formatMoney={fmt} />
           : section.kind === "table" && screen.title === "Monthly P&L" ? <MonthlyPnlTable days={yearDays} loading={yearSummary === undefined} locale={locale} formatMoney={fmt} />
-          : section.kind === "chart" && ((screen.title === "Sales" && section.title.includes("income type")) || (screen.title === "Expenses" && section.title.includes("category"))) ? <CashbookCategoryBreakdown entries={selectedEntries} loading={entries === undefined} currency={currency} formatMoney={fmt} capped={entries?.length === 500} />
+          : section.kind === "chart" && ((screen.title === "Sales" && section.title.includes("income type")) || (screen.title === "Expenses" && section.title.includes("category"))) ? <CashbookCategoryBreakdown entries={selectedEntries} loading={entries === undefined} formatMoney={fmt} capped={entries?.length === 500} />
           : section.kind === "chart" ? <ChartPanel summary={stats} title={section.title} message={section.detail} currency={currency} scale={currencyScale} locale={locale} />
           : section.kind === "workflow" ? <WorkflowPanel screen={screen} section={section.title} currency={currency} scale={currencyScale} businessDay={today} />
             : <EmptyPanel
@@ -394,7 +394,7 @@ function EmptyPanel({ message, next }: { message: string; next: string }) {
 
 type CashbookEntry = { _id: string; kind: "sale" | "expense"; amountUgx: number; occurredOn: string; account: "cash" | "mobile_money" | "unallocated"; category: string; note: string; state: "posted" | "void" };
 
-function CashbookCategoryBreakdown({ entries, loading, currency, formatMoney, capped }: { entries: CashbookEntry[] | undefined; loading: boolean; currency: string; formatMoney: (amount: number) => string; capped: boolean }) {
+function CashbookCategoryBreakdown({ entries, loading, formatMoney, capped }: { entries: CashbookEntry[] | undefined; loading: boolean; formatMoney: (amount: number) => string; capped: boolean }) {
   if (!entries) return <EmptyPanel message={loading ? "Loading category totals…" : "Category totals are not available."} next="Totals come from authorized saved cashbook records." />;
   const posted = entries.filter(entry => entry.state === "posted");
   const totals = new Map<string, number>();
@@ -402,7 +402,7 @@ function CashbookCategoryBreakdown({ entries, loading, currency, formatMoney, ca
   const rows = [...totals.entries()].sort((a, b) => b[1] - a[1]);
   const total = rows.reduce((sum, [, amount]) => sum + amount, 0);
   if (rows.length === 0) return <EmptyPanel message="No saved category activity yet." next="Category totals will appear as entries are recorded." />;
-  return <><div className="category-breakdown-list">{rows.slice(0, 8).map(([category, amount]) => <div className="category-breakdown-row" key={category}><span>{category}</span><span className="category-breakdown-track"><i style={{ width: `${total ? amount / total * 100 : 0}%` }} /></span><strong>{formatMoney(amount)} {currency}</strong><small>{total ? Math.round(amount / total * 100) : 0}%</small></div>)}</div>{capped && <p className="muted-note">Based on the latest 500 matching entries; narrow the period for complete category totals.</p>}</>;
+  return <><div className="category-breakdown-list">{rows.map(([category, amount]) => <div className="category-breakdown-row" key={category}><span>{category}</span><span className="category-breakdown-track"><i style={{ width: `${total ? amount / total * 100 : 0}%` }} /></span><strong>{formatMoney(amount)}</strong><small>{total ? Math.round(amount / total * 100) : 0}%</small></div>)}</div>{capped && <p className="muted-note">Based on the latest 500 matching entries; narrow the period for complete category totals.</p>}</>;
 }
 
 function RecentEntryTable({ days, rangeStart, rangeEnd, loading, formatDay, formatMoney }: { days: DailyTotal[] | undefined; rangeStart: string; rangeEnd: string; loading: boolean; formatDay: (day: string) => string; formatMoney: (amount: number) => string }) {
