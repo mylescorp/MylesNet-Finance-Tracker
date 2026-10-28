@@ -20,7 +20,7 @@ This plan tracks every gap found in the production-readiness audit. Financial re
 - [x] Add paginated member, invitation, and audit history; maintain revocation as an auditable inactive state. Owner access screens page members, all invitation outcomes, and audit events; invitation revocation records a timestamp.
 
 ### B. Cashbook and account lifecycle
-- [ ] Add safe correction and reversal screens for sales and expenses; retain originals and reconcile account balance and daily aggregates. Owner-only correction of posted manual rows now voids the original, links a replacement, adjusts account/day totals atomically, and records the reason and before/after values; imported rows and generated operational expenses still require their source-specific correction path.
+- [ ] Add safe correction and reversal screens for sales and expenses; retain originals and reconcile account balance and daily aggregates. Owner-only correction of posted manual rows now voids the original, links a replacement, adjusts account/day totals atomically, honors required-note and duplicate/negative-balance warnings, and records the reason and before/after values; imported rows and generated operational expenses still require their source-specific correction path.
 - [ ] Add linked reversal workflows for movement fees, bill payments, loan interest, and other generated entries.
 - [ ] Add account CRUD (create, rename/update, archive) with safeguards against removing accounts referenced by financial history.
 - [ ] Preserve owner-only balance adjustments with immutable audit history and corrected same-accounting-period behavior.

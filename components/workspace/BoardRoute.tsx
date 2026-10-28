@@ -348,17 +348,19 @@ export function BoardRoute({ route }: { route: string }) {
     const idempotencyKey = crypto.randomUUID();
     const args = { businessId: settings.businessId, entryId: entry._id, amountUgx, occurredOn, account: accountChoice, category, note, reason, idempotencyKey } as const;
     setEntryActionFeedback("");
-    try {
-      await correctEntry(args);
-      setEntryActionFeedback("Entry corrected. The original is retained, the replacement is linked, and account and daily totals were updated.");
-    } catch (error) {
-      const details = error instanceof ConvexError ? error.data as { code?: string; message?: string } : null;
-      if (details?.code === "CONFIRM_NEGATIVE" && window.confirm(`${details.message ?? "This correction may create a negative balance."} Continue and record this override?`)) {
-        try {
-          await correctEntry({ ...args, confirmNegativeBalance: true });
-          setEntryActionFeedback("Entry corrected with a negative-balance override recorded in the audit trail.");
-        } catch (retryError) { setEntryActionFeedback(retryError instanceof Error ? retryError.message : "Could not correct this entry."); }
-      } else if (!details) setEntryActionFeedback(error instanceof Error ? error.message : "Could not correct this entry.");
+    const overrides: { confirmNegativeBalance?: boolean; confirmPossibleDuplicate?: boolean } = {};
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        await correctEntry({ ...args, ...overrides });
+        setEntryActionFeedback("Entry corrected. The original is retained, the replacement is linked, and account and daily totals were updated.");
+        return;
+      } catch (error) {
+        const details = error instanceof ConvexError ? error.data as { code?: string; message?: string } : null;
+        if (details?.code === "CONFIRM_NEGATIVE" && !overrides.confirmNegativeBalance && window.confirm(`${details.message ?? "This correction may create a negative balance."} Continue and record this override?`)) { overrides.confirmNegativeBalance = true; continue; }
+        if (details?.code === "CONFIRM_DUPLICATE" && !overrides.confirmPossibleDuplicate && window.confirm(`${details.message ?? "This correction resembles another entry."} Continue and record this override?`)) { overrides.confirmPossibleDuplicate = true; continue; }
+        setEntryActionFeedback(details?.message ?? (error instanceof Error ? error.message : "Could not correct this entry."));
+        return;
+      }
     }
   }
   const operationalScreen = ["Movements", "Savings", "Loans", "Partners", "Bills", "Reconcile"].includes(screen.title);
