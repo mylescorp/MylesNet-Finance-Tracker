@@ -38,8 +38,36 @@ async function dailyTotals(ctx: QueryCtx, businessId: Id<"businesses">, from: st
     .take(limit);
 }
 
+async function accountDailyTotals(ctx: QueryCtx, businessId: Id<"businesses">, from: string, toExclusive: string, account: "cash" | "mobile_money" | "unallocated") {
+  const [sales, expenses] = await Promise.all([
+    ctx.db.query("entries").withIndex("by_business_and_kind_and_date", q => q.eq("businessId", businessId).eq("kind", "sale").gte("occurredOn", from).lt("occurredOn", toExclusive)).take(5001),
+    ctx.db.query("entries").withIndex("by_business_and_kind_and_date", q => q.eq("businessId", businessId).eq("kind", "expense").gte("occurredOn", from).lt("occurredOn", toExclusive)).take(1001),
+  ]);
+  const byDay = new Map<string, { salesUgx: number; expensesUgx: number; saleCount: number; expenseCount: number }>();
+  const add = (day: string, kind: "sale" | "expense", amountUgx: number) => {
+    const totals = byDay.get(day) ?? { salesUgx: 0, expensesUgx: 0, saleCount: 0, expenseCount: 0 };
+    if (kind === "sale") {
+      totals.salesUgx = safeAdd(totals.salesUgx, amountUgx, "Account-filtered sales");
+      totals.saleCount += 1;
+    } else {
+      totals.expensesUgx = safeAdd(totals.expensesUgx, amountUgx, "Account-filtered expenses");
+      totals.expenseCount += 1;
+    }
+    byDay.set(day, totals);
+  };
+  for (const entry of sales) if (entry.state === "posted" && entry.account === account) add(entry.occurredOn, "sale", entry.amountUgx);
+  for (const entry of expenses) if (entry.state === "posted" && entry.account === account) add(entry.occurredOn, "expense", entry.amountUgx);
+  return {
+    rows: [...byDay].map(([day, totals]) => ({ day, ...totals })),
+    salesEntries: sales.filter(entry => entry.state === "posted" && entry.account === account),
+    expenseEntries: expenses.filter(entry => entry.state === "posted" && entry.account === account),
+    salesComplete: sales.length < 5001,
+    expensesComplete: expenses.length < 1001,
+  };
+}
+
 export const overview = query({
-  args: { businessId: v.id("businesses"), from: v.string(), toExclusive: v.string(), today: v.string() },
+  args: { businessId: v.id("businesses"), from: v.string(), toExclusive: v.string(), today: v.string(), account: v.optional(v.union(v.literal("cash"), v.literal("mobile_money"), v.literal("unallocated"))) },
   handler: async (ctx, args) => {
     if (!validDay(args.from) || !validDay(args.toExclusive) || !validDay(args.today) || args.from >= args.toExclusive || args.toExclusive > shiftDay(args.today, 1)) throw new Error("Choose a valid reporting range that ends no later than today.");
     const rangeLength = (Date.parse(`${args.toExclusive}T00:00:00.000Z`) - Date.parse(`${args.from}T00:00:00.000Z`)) / 86_400_000;
@@ -63,27 +91,43 @@ export const overview = query({
       dailyTotals(ctx, business._id, weakFrom, shiftDay(args.today, 1), 14),
       ctx.db.query("accountBalances").withIndex("by_business_and_account", q => q.eq("businessId", business._id)).take(2),
       ctx.db.query("partners").withIndex("by_business_and_active", q => q.eq("businessId", business._id).eq("active", true)).take(101),
-      ctx.db.query("entries").withIndex("by_business_and_kind_and_date", q => q.eq("businessId", business._id).eq("kind", "sale").gte("occurredOn", args.from).lt("occurredOn", args.toExclusive)).take(5001),
-      ctx.db.query("entries").withIndex("by_business_and_kind_and_date", q => q.eq("businessId", business._id).eq("kind", "expense").gte("occurredOn", args.from).lt("occurredOn", args.toExclusive)).take(1001),
+      args.account ? Promise.resolve([]) : ctx.db.query("entries").withIndex("by_business_and_kind_and_date", q => q.eq("businessId", business._id).eq("kind", "sale").gte("occurredOn", args.from).lt("occurredOn", args.toExclusive)).take(5001),
+      args.account ? Promise.resolve([]) : ctx.db.query("entries").withIndex("by_business_and_kind_and_date", q => q.eq("businessId", business._id).eq("kind", "expense").gte("occurredOn", args.from).lt("occurredOn", args.toExclusive)).take(1001),
       ctx.db.query("reconciliations").withIndex("by_business_and_date", q => q.eq("businessId", business._id).gte("asOfDate", shiftDay(args.today, -89)).lte("asOfDate", args.today)).take(101),
     ]);
+    const accountRecentFrom = month.from < runwayFrom ? month.from : runwayFrom;
+    const scoped = args.account ? await Promise.all([
+      accountDailyTotals(ctx, business._id, args.from, args.toExclusive, args.account),
+      accountDailyTotals(ctx, business._id, accountRecentFrom, shiftDay(args.today, 1), args.account),
+    ]) : null;
+    const scopedPeriodRows = scoped?.[0].rows ?? periodRows;
+    const scopedRecentRows = scoped?.[1].rows ?? [];
+    const scopedSalesEntries = scoped?.[0].salesEntries ?? salesEntries;
+    const scopedExpenseEntries = scoped?.[0].expenseEntries ?? expenseEntries;
+    const scopedPeriodSalesComplete = scoped ? scoped[0].salesComplete : salesEntries.length < 5001;
+    const scopedPeriodExpensesComplete = scoped ? scoped[0].expensesComplete : expenseEntries.length < 1001;
+    const scopedPeriodComplete = scopedPeriodSalesComplete && scopedPeriodExpensesComplete;
+    const scopedRecentComplete = scoped ? scoped[1].salesComplete && scoped[1].expensesComplete : true;
+    const scopedMonthRows = args.account ? scopedRecentRows.filter(row => row.day >= month.from) : monthRows;
+    const scopedRunwayRows = args.account ? scopedRecentRows.filter(row => row.day >= runwayFrom) : runwayRows;
+    const scopedWeakRows = args.account ? scopedRecentRows.filter(row => row.day >= weakFrom) : weakRows;
     if (partners.length > 100) throw new Error("This workspace has more active partner records than analytics can safely summarize.");
 
-    const byDay = new Map(periodRows.map(row => [row.day, row]));
+    const byDay = new Map(scopedPeriodRows.map(row => [row.day, row]));
     const days = Array.from({ length: rangeLength }, (_, index) => {
       const day = shiftDay(args.from, index);
       const row = byDay.get(day);
       return { day, salesUgx: row?.salesUgx ?? 0, expensesUgx: row?.expensesUgx ?? 0, hasActivity: Boolean(row && (row.saleCount || row.expenseCount)) };
     });
-    const salesUgx = periodRows.reduce((sum, row) => safeAdd(sum, row.salesUgx, "Sales total"), 0);
-    const expensesUgx = periodRows.reduce((sum, row) => safeAdd(sum, row.expensesUgx, "Expense total"), 0);
+    const salesUgx = scopedPeriodRows.reduce((sum, row) => safeAdd(sum, row.salesUgx, "Sales total"), 0);
+    const expensesUgx = scopedPeriodRows.reduce((sum, row) => safeAdd(sum, row.expensesUgx, "Expense total"), 0);
     const netUgx = safeAdd(salesUgx, -expensesUgx, "Cashbook net");
-    const cashUgx = balances.find(row => row.account === "cash")?.balanceUgx ?? 0;
-    const mobileUgx = balances.find(row => row.account === "mobile_money")?.balanceUgx ?? 0;
+    const cashUgx = (!args.account || args.account === "cash") ? balances.find(row => row.account === "cash")?.balanceUgx ?? 0 : 0;
+    const mobileUgx = (!args.account || args.account === "mobile_money") ? balances.find(row => row.account === "mobile_money")?.balanceUgx ?? 0 : 0;
     const liquidUgx = safeAdd(cashUgx, mobileUgx, "Liquid balance");
-    const monthSales = monthRows.reduce((sum, row) => safeAdd(sum, row.salesUgx, "Month sales"), 0);
-    const monthExpenses = monthRows.reduce((sum, row) => safeAdd(sum, row.expensesUgx, "Month expenses"), 0);
-    const runwayExpenses = runwayRows.reduce((sum, row) => safeAdd(sum, row.expensesUgx, "Recent expenses"), 0);
+    const monthSales = scopedMonthRows.reduce((sum, row) => safeAdd(sum, row.salesUgx, "Month sales"), 0);
+    const monthExpenses = scopedMonthRows.reduce((sum, row) => safeAdd(sum, row.expensesUgx, "Month expenses"), 0);
+    const runwayExpenses = scopedRunwayRows.reduce((sum, row) => safeAdd(sum, row.expensesUgx, "Recent expenses"), 0);
     const dailyBurnUgx = Math.round(runwayExpenses / 30);
     const currencyScale = 10 ** (new Intl.NumberFormat("en", { style: "currency", currency: business.currency }).resolvedOptions().maximumFractionDigits ?? 0);
     const displayMoney = (amount: number) => new Intl.NumberFormat(preferences?.locale ?? "en-UG", { style: "currency", currency: business.currency }).format(amount / currencyScale);
@@ -110,25 +154,25 @@ export const overview = query({
     }));
 
     const issues: { id: string; title: string; detail: string; severity: "review" | "warning" | "action"; href: string; amountUgx: number }[] = [];
-    const weakDays = weakRows.filter(row => row.salesUgx > 0 && row.salesUgx < weakThreshold);
+    const weakDays = scopedWeakRows.filter(row => row.salesUgx > 0 && row.salesUgx < weakThreshold);
     for (const row of weakDays.slice(0, 7)) issues.push({ id: `weak-${row.day}`, title: "Low-sales day", detail: `${row.day}: recorded sales are below the workspace review threshold. Confirm the day is complete.`, severity: "review", href: "/analytics", amountUgx: row.salesUgx });
-    const recentSales = new Set(weakRows.filter(row => row.salesUgx > 0).map(row => row.day));
-    const recentActivityExists = weakRows.some(row => row.saleCount > 0 || row.expenseCount > 0);
+    const recentSales = new Set(scopedWeakRows.filter(row => row.salesUgx > 0).map(row => row.day));
+    const recentActivityExists = scopedWeakRows.some(row => row.saleCount > 0 || row.expenseCount > 0);
     if (recentActivityExists) {
       const missingDays = Array.from({ length: 14 }, (_, index) => shiftDay(weakFrom, index)).filter(day => day <= args.today && !recentSales.has(day));
       if (missingDays.length > 0) issues.push({ id: "missing-sales-days", title: "Days with no sales entry", detail: `${missingDays.length} of the last 14 days have no recorded sales. Check whether those were closed days or missing entries.`, severity: "review", href: "/sales", amountUgx: missingDays.length });
     }
-    const unallocated = salesEntries.filter(row => row.state === "posted" && row.account === "unallocated");
+    const unallocated = scopedSalesEntries.filter(row => row.state === "posted" && row.account === "unallocated");
     const unallocatedUgx = unallocated.reduce((sum, row) => safeAdd(sum, row.amountUgx, "Unallocated sales"), 0);
-    const unallocatedComplete = salesEntries.length < 5001;
+    const unallocatedComplete = scopedPeriodSalesComplete;
     if (unallocatedUgx > 0) issues.push({ id: "unallocated-sales", title: "Sales need account allocation", detail: unallocatedComplete ? `${unallocated.length} sales totaling ${displayMoney(unallocatedUgx)} are not assigned to cash or mobile money.` : `At least ${unallocated.length} unallocated sales were found; narrow the period to review all records.`, severity: "action", href: "/sales", amountUgx: unallocatedUgx });
     const cashThresholdEnabled = lowCashThreshold > 0;
     if (cashThresholdEnabled && liquidUgx < lowCashThreshold) issues.push({ id: "low-cash", title: "Cash is below the alert threshold", detail: `Recorded cash and mobile money total ${displayMoney(liquidUgx)}; configured threshold is ${displayMoney(lowCashThreshold)}.`, severity: "warning", href: "/settings/rules", amountUgx: liquidUgx });
     if (salesTarget > 0 && month.elapsedDays < month.daysInMonth && monthSales < Math.ceil(salesTarget * month.elapsedDays / month.daysInMonth)) issues.push({ id: "sales-target-pace", title: "Behind monthly sales pace", detail: `Month-to-date sales of ${displayMoney(monthSales)} are below the straight-line pace for the ${displayMoney(salesTarget)} target.`, severity: "warning", href: "/settings/rules", amountUgx: monthSales });
     const openReconciliations = reconciliations.filter(row => row.status === "open");
     if (openReconciliations.length > 0) issues.push({ id: "open-reconciliations", title: "Reconciliation differences need review", detail: `${openReconciliations.length}${reconciliations.length === 101 ? " or more" : ""} open account differences were recorded in the last 90 days.`, severity: "action", href: "/reconcile", amountUgx: openReconciliations.reduce((sum, row) => safeAdd(sum, Math.abs(row.varianceUgx), "Reconciliation differences"), 0) });
-    const largeExpenses = expenseEntries.filter(row => row.state === "posted" && row.amountUgx >= (preferences?.highExpenseReviewUgx ?? 500000 * currencyScale));
-    if (largeExpenses.length > 0) issues.push({ id: "high-expense-review", title: "Large expenses to review", detail: `${largeExpenses.length}${expenseEntries.length === 1001 ? " or more" : ""} posted expenses crossed the configured review threshold.`, severity: "review", href: "/expenses", amountUgx: largeExpenses.reduce((sum, row) => safeAdd(sum, row.amountUgx, "Large expenses"), 0) });
+    const largeExpenses = scopedExpenseEntries.filter(row => row.state === "posted" && row.amountUgx >= (preferences?.highExpenseReviewUgx ?? 500000 * currencyScale));
+    if (largeExpenses.length > 0) issues.push({ id: "high-expense-review", title: "Large expenses to review", detail: `${largeExpenses.length}${!scopedPeriodExpensesComplete ? " or more" : ""} posted expenses crossed the configured review threshold.`, severity: "review", href: "/expenses", amountUgx: largeExpenses.reduce((sum, row) => safeAdd(sum, row.amountUgx, "Large expenses"), 0) });
     const expenseWarning = preferences?.monthlyExpenseWarningUgx ?? 0;
     if (expenseWarning > 0 && monthExpenses > expenseWarning) issues.push({ id: "monthly-expense-warning", title: "Monthly expenses crossed the warning level", detail: `Recorded month-to-date expenses are ${displayMoney(monthExpenses)} against a ${displayMoney(expenseWarning)} warning level.`, severity: "warning", href: "/expenses", amountUgx: monthExpenses });
     if (partners.length > 0 && !ownershipComplete) issues.push({ id: "ownership-incomplete", title: "Partner ownership does not total 100%", detail: `Active ownership currently totals ${(ownershipBps / 100).toFixed(2)}%. Partner profit shares are withheld until ownership is complete.`, severity: "warning", href: "/partners", amountUgx: ownershipBps });
@@ -163,8 +207,8 @@ export const overview = query({
       unallocated: { count: unallocated.length, amountUgx: unallocatedUgx, complete: unallocatedComplete },
       issues: issueRows,
       reviewers: reviewerOptions,
-      issuesComplete: reconciliations.length < 101 && expenseEntries.length < 1001 && salesEntries.length < 5001,
-      periodActivity: { salesRowsComplete: salesEntries.length < 5001, expenseRowsComplete: expenseEntries.length < 1001 },
+      issuesComplete: reconciliations.length < 101 && (args.account ? scopedPeriodComplete && scopedRecentComplete : expenseEntries.length < 1001 && salesEntries.length < 5001),
+      periodActivity: { salesRowsComplete: scopedPeriodSalesComplete, expenseRowsComplete: scopedPeriodExpensesComplete },
     };
   },
 });
