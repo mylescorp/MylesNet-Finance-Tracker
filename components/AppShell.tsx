@@ -75,6 +75,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   const menuButtonRef = useRef<HTMLButtonElement>(null);
   const sidebarCloseRef = useRef<HTMLButtonElement>(null);
   const accountLabel = access?.access === "ready" ? access.businessName : "My account";
+  const sidebarWorkspaceLabel = /^MylesNet Finance Tracker$/i.test(accountLabel) ? "Finance" : accountLabel;
   const permissions = access?.access === "ready" ? access.permissions : [];
   useEffect(() => {
     let active = true;
@@ -177,8 +178,7 @@ export function AppShell({ children }: { children: ReactNode }) {
         </div>
         <div className="sidebar-workspace" aria-label={`Current workspace: ${accountLabel}`} title={accountLabel}>
           <span className="sidebar-workspace-mark" aria-hidden="true">M</span>
-          <span className="sidebar-workspace-copy"><strong>{accountLabel}</strong><small>FINANCE WORKSPACE</small></span>
-          <ChevronDown className="sidebar-workspace-chevron" size={15} aria-hidden="true" />
+          <span className="sidebar-workspace-copy"><strong>{sidebarWorkspaceLabel}</strong></span>
         </div>
         <nav className="sidebar-nav" aria-label="Main navigation">
           {visibleNavGroups.map(group => <section className="sidebar-nav-group" key={group.label} aria-label={group.label}>
