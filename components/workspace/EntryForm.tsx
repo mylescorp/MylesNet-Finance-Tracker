@@ -72,8 +72,9 @@ export function EntryForm({ kind }: { kind: EntryKind }) {
       setFeedback({ message: error instanceof Error ? error.message : "Could not save this entry. Try again.", error: true });
     } finally { setBusy(false); }
   }
-  if (access?.access === "ready" && access.role === "partner") {
-    return <div className="empty-state" role="status"><strong>Partner accounts can’t add ledger entries.</strong><span>Your scoped partner statement will be available here after partner reporting is connected.</span></div>;
+  const createPermission = kind === "sale" ? "sales.create" : "expenses.create";
+  if (access?.access === "ready" && !access.permissions.includes(createPermission)) {
+    return <div className="empty-state" role="status"><strong>Your role cannot create {kind === "sale" ? "sales" : "expenses"}.</strong><span>Ask a workspace administrator to update your role permissions.</span></div>;
   }
   return <form ref={formRef} className="form-layout" onSubmit={submit}>
     <div className="field"><label htmlFor="entry-amount">Amount ({currency})</label><input id="entry-amount" name="amount" inputMode="decimal" type="number" min={1 / currencyScale} step={1 / currencyScale} placeholder={currencyScale === 1 ? "e.g. 25,000" : "e.g. 25.00"} required /></div>

@@ -242,8 +242,10 @@ function formatMoney(value: number | undefined, currency = "UGX", scale = 1, loc
 export function BoardRoute({ route }: { route: string }) {
   const screen = specs[route];
   const [period, setPeriod] = useState<(typeof periods)[number]>("Month");
+  const [entryLimit, setEntryLimit] = useState(100);
   const [shareFeedback, setShareFeedback] = useState("");
   const settings = useQuery(api.workspace.businessSettings, {});
+  const access = useQuery(api.workspace.currentAccess, {});
   const preferences = useQuery(api.settings.overview, {});
   const timezone = settings?.access === "ready" ? settings.timezone : "Africa/Kampala";
   const weekStartsOn = settings?.access === "ready" ? settings.weekStartsOn : "monday";
@@ -258,9 +260,23 @@ export function BoardRoute({ route }: { route: string }) {
   const range = useMemo(() => rangeFor(period, today, weekStartsOn, fiscalStartMonth), [period, today, weekStartsOn, fiscalStartMonth]);
   const rangeLastDay = new Date(`${range.toExclusive}T00:00:00.000Z`); rangeLastDay.setUTCDate(rangeLastDay.getUTCDate() - 1);
   const summary = useQuery(api.workspace.dashboardSummary, range);
-  const entries = useQuery(api.workspace.recentEntries, { limit: 50 });
+  const entryKind = screen?.title === "Sales" ? "sale" : screen?.title === "Expenses" ? "expense" : undefined;
+  const entries = useQuery(api.workspace.recentEntries, { limit: entryLimit, kind: entryKind, from: range.from, toExclusive: range.toExclusive });
+  const yearRange = useMemo(() => rangeFor("Year", today, weekStartsOn, fiscalStartMonth), [today, weekStartsOn, fiscalStartMonth]);
+  const yearSummary = useQuery(api.workspace.dashboardSummary, yearRange);
 
   if (!screen) return <WorkspaceTitle eyebrow="MylesNet" title="Page not found" description="Choose a section from the navigation." />;
+
+  const requiredPermission: Record<string, string> = {
+    dashboard: "dashboard.view", analytics: "analytics.view", sales: "sales.view", expenses: "expenses.view",
+    movements: "movements.view", savings: "savings.view", loans: "loans.view", "daily-report": "dailyReport.view",
+    "monthly-pnl": "monthlyPnl.view", partners: "partners.view", bills: "bills.view", reconcile: "reconcile.view",
+    issues: "audit.view", "settings/finance": "settings.view", "settings/rules": "settings.view",
+    "settings/data": "data.export", "settings/access": "access.view", "settings/releases": "settings.view",
+  };
+  const permission = requiredPermission[route];
+  if (access?.access === "pending") return <><WorkspaceTitle eyebrow={screen.eyebrow} title={screen.title} description={screen.description} /><Card><p className="muted-note">Your workspace access is pending approval. An administrator can assign your role from the Access settings.</p></Card></>;
+  if (access?.access === "ready" && permission && !access.permissions.includes(permission)) return <><WorkspaceTitle eyebrow={screen.eyebrow} title={screen.title} description={screen.description} /><Card><p className="muted-note">Your role does not include access to this feature. Ask a workspace administrator to review your permissions.</p></Card></>;
 
   const stats = summary?.access === "ready" ? summary : null;
   const metricValues: Record<string, string> = {
@@ -274,20 +290,17 @@ export function BoardRoute({ route }: { route: string }) {
     "Mobile money": fmt(stats?.mobileMoneyBalanceUgx),
     "Sales today": stats ? fmt(stats.days.find((day) => day.day === today)?.salesUgx ?? 0) : "—",
     "Expenses": fmt(stats?.expensesUgx),
-    "Average per day": stats ? fmt(Math.round(stats.salesUgx / Math.max(1, stats.days.length))) : "—",
+    "Average per day": stats ? fmt(Math.round((screen?.title === "Expenses" ? stats.expensesUgx : stats.salesUgx) / Math.max(1, stats.days.length))) : "—",
     "Entry basis": "Recorded",
     "Approval queue": "—",
-    "Sales YTD": fmt(stats?.salesUgx),
+    "Sales YTD": fmt(yearSummary?.access === "ready" ? yearSummary.salesUgx : undefined),
     "Operating costs": fmt(stats?.expensesUgx),
     "Operating profit": stats ? fmt(stats.salesUgx - stats.expensesUgx) : "—",
     // A net profit figure is withheld until equipment and other adjustments are modeled.
-    "Balance difference": stats ? fmt(0) : "—",
+    "Balance difference": "—",
     Currency: currency,
   };
-  const entryKind = screen.title === "Sales" ? "sale" : screen.title === "Expenses" ? "expense" : undefined;
-  const selectedEntries = entries?.filter((entry) =>
-    entry.state === "posted" && entry.occurredOn >= range.from && entry.occurredOn < range.toExclusive && (!entryKind || entry.kind === entryKind),
-  );
+  const selectedEntries = entries?.filter((entry) => entry.state === "posted");
   const hasRecordData = selectedEntries && selectedEntries.length > 0;
 
   async function shareReport() {
@@ -334,13 +347,13 @@ export function BoardRoute({ route }: { route: string }) {
         <div className="card-heading"><div><h2 className="card-title">{section.title}</h2><p className="card-subtitle">{section.detail}</p></div></div>
         {section.kind === "table" && screen.title === "Sales" || section.kind === "table" && screen.title === "Expenses" ? (
           hasRecordData ? <div className="table-scroll"><table className="data-table"><thead><tr><th>Date</th><th>Type</th><th>Category</th><th>Account</th><th>Amount</th><th>Status</th></tr></thead><tbody>{selectedEntries.map((entry) => <tr key={entry._id}><td>{fmtDate(entry.occurredOn)}</td><td>{entry.kind}</td><td>{entry.category}</td><td>{entry.account === "cash" ? "Cash" : "Mobile money"}</td><td>{fmt(entry.amountUgx)}</td><td><span className={`status-chip ${entry.state === "posted" ? "status-ok" : "status-warning"}`}>{entry.state}</span></td></tr>)}</tbody></table></div> : <EmptyPanel message="No entries yet." next="Add an entry to populate this view. The design preview figures are examples, not live business data." />
-        ) : section.kind === "chart" ? <ChartPanel summary={stats} message={section.detail} currency={currency} scale={currencyScale} locale={locale} dateFormat={dateFormat} />
+        ) : section.kind === "chart" ? <ChartPanel summary={stats} title={section.title} message={section.detail} currency={currency} scale={currencyScale} locale={locale} />
           : section.kind === "workflow" ? <WorkflowPanel screen={screen} section={section.title} />
             : <EmptyPanel message={hasRecordData ? "Live records are available for the selected period." : "No records yet."} next={section.detail} />}
       </Card>)}
       {screen.title === "Sales" || screen.title === "Expenses" ? <Card className="board-section-card">
         <div className="card-heading"><div><h2 className="card-title">Recent cashbook entries</h2><p className="card-subtitle">Latest saved records in this workspace.</p></div></div>
-        {hasRecordData ? <div className="entry-list">{selectedEntries.map((entry) => <div className="entry-row" key={entry._id}><div className="entry-main"><span className="entry-icon">{entry.kind === "sale" ? <ArrowUpRight size={15} /> : <ArrowDownRight size={15} />}</span><div><div className="entry-description">{entry.note || entry.category}</div><div className="entry-meta">{fmtDate(entry.occurredOn)} · {entry.category} · {entry.account === "cash" ? "Cash" : "Mobile money"}</div></div></div><span className={`entry-amount ${entry.kind === "sale" ? "amount-positive" : "amount-negative"}`}>{entry.kind === "sale" ? "+" : "−"}{fmt(entry.amountUgx)}</span></div>)}</div> : <EmptyPanel message="No entries have been recorded." next="Use the form to save the first entry." />}
+        {hasRecordData ? <><div className="entry-list">{selectedEntries.map((entry) => <div className="entry-row" key={entry._id}><div className="entry-main"><span className="entry-icon">{entry.kind === "sale" ? <ArrowUpRight size={15} /> : <ArrowDownRight size={15} />}</span><div><div className="entry-description">{entry.note || entry.category}</div><div className="entry-meta">{fmtDate(entry.occurredOn)} · {entry.category} · {entry.account === "cash" ? "Cash" : "Mobile money"}</div></div></div><span className={`entry-amount ${entry.kind === "sale" ? "amount-positive" : "amount-negative"}`}>{entry.kind === "sale" ? "+" : "−"}{fmt(entry.amountUgx)}</span></div>)}</div>{entries?.length === entryLimit && entryLimit < 500 && <button className="button" type="button" onClick={() => setEntryLimit(limit => Math.min(limit + 100, 500))}>Load more entries</button>}{entries?.length === 500 && <p className="muted-note">Showing the latest 500 matching records. Narrow the date range to review older entries.</p>}</> : <EmptyPanel message="No entries have been recorded." next="Use the form to save the first entry." />}
       </Card> : null}
     </div>
     <div className="board-source-note">{screen.source} · Values shown here come from authorized Convex records. Sample values from the design references are not loaded into the workspace.</div>
@@ -351,18 +364,25 @@ function EmptyPanel({ message, next }: { message: string; next: string }) {
   return <div className="empty-state compact-empty"><strong>{message}</strong><span>{next}</span></div>;
 }
 
-function ChartPanel({ summary, message, currency, scale, locale, dateFormat }: { summary: { days: { day: string; salesUgx: number; expensesUgx: number }[] } | null; message: string; currency: string; scale: number; locale: string; dateFormat: "DD/MM/YYYY" | "MM/DD/YYYY" | "YYYY-MM-DD" }) {
+function ChartPanel({ summary, title, message, currency, scale, locale }: { summary: { days: { day: string; salesUgx: number; expensesUgx: number }[] } | null; title: string; message: string; currency: string; scale: number; locale: string }) {
+  const weekday = title.toLowerCase().includes("weekday") || title.toLowerCase().includes("best days");
+  const daily = title.toLowerCase().includes("14 days") || title.toLowerCase().includes("daily");
+  if (!weekday && !daily) return <EmptyPanel message="This chart is not available yet." next="The selected comparison needs categorized or workflow-specific records that are not stored in the cashbook yet." />;
   const days = summary?.days.slice(-14) ?? [];
-  const max = Math.max(1, ...days.map((day) => Math.max(day.salesUgx, day.expensesUgx)));
-  if (days.length === 0 || !days.some((day) => day.salesUgx || day.expensesUgx)) return <EmptyPanel message="No chart data yet." next="Recorded activity will appear here. Mock chart values are not treated as real." />;
+  const bars = weekday ? Array.from({ length: 7 }, (_, weekdayIndex) => {
+    const matching = (summary?.days ?? []).filter(day => new Date(`${day.day}T00:00:00.000Z`).getUTCDay() === weekdayIndex);
+    return { key: String(weekdayIndex), label: new Intl.DateTimeFormat(locale, { weekday: "short", timeZone: "UTC" }).format(new Date(Date.UTC(2024, 0, 7 + weekdayIndex))), salesUgx: matching.reduce((total, day) => total + day.salesUgx, 0), expensesUgx: matching.reduce((total, day) => total + day.expensesUgx, 0) };
+  }) : days.map(day => ({ key: day.day, label: day.day.slice(8), salesUgx: day.salesUgx, expensesUgx: day.expensesUgx }));
+  const max = Math.max(1, ...bars.map((day) => Math.max(day.salesUgx, day.expensesUgx)));
+  if (bars.length === 0 || !bars.some((day) => day.salesUgx || day.expensesUgx)) return <EmptyPanel message="No chart data yet." next="Recorded activity will appear here. Mock chart values are not treated as real." />;
   return <>
-    <div className="board-bars" role="img" aria-label={message}>{days.map((day) => <div className="board-bar-day" key={day.day} title={`${formatBusinessDay(day.day, dateFormat)}: sales ${formatMoney(day.salesUgx, currency, scale, locale)}; expenses ${formatMoney(day.expensesUgx, currency, scale, locale)}`}><div className="board-bar-pair"><span className="board-bar-sales" style={{ height: `${Math.max(2, day.salesUgx / max * 100)}%` }} /><span className="board-bar-expenses" style={{ height: `${Math.max(2, day.expensesUgx / max * 100)}%` }} /></div><span>{day.day.slice(8)}</span></div>)}</div>
+    <div className="board-bars" role="img" aria-label={message}>{bars.map((day) => <div className="board-bar-day" key={day.key} title={`${day.label}: sales ${formatMoney(day.salesUgx, currency, scale, locale)}; expenses ${formatMoney(day.expensesUgx, currency, scale, locale)}`}><div className="board-bar-pair"><span className="board-bar-sales" style={{ height: `${Math.max(2, day.salesUgx / max * 100)}%` }} /><span className="board-bar-expenses" style={{ height: `${Math.max(2, day.expensesUgx / max * 100)}%` }} /></div><span>{day.label}</span></div>)}</div>
     <div className="chart-legend"><span><i className="legend-sales" /> Sales</span><span><i className="legend-expenses" /> Expenses</span></div>
   </>;
 }
 
 function WorkflowPanel({ screen, section }: { screen: BoardSpec; section: string }) {
   if (section === "Add an expense" || section === "Add a sale") return <div className="empty-state compact-empty"><strong>Entry capture is available above.</strong><span>Use the saved cashbook form so the balance and audit trail update together.</span></div>;
-  const target = screen.title === "Bills" ? "/settings/finance" : screen.title === "Reconcile" ? "/settings/rules" : screen.settings ? "/settings/general" : "/sales";
-  return <div className="workflow-callout"><span className="workflow-indicator" /><div><strong>{section} is ready for workspace configuration</strong><p className="muted-note">Configure the required account, record type, role, or provider before using this workflow.</p><Link href={target} className="text-link">Open related settings →</Link></div></div>;
+  const settingsWorkflow = screen.settings || screen.title === "Bills" || screen.title === "Reconcile";
+  return <div className="workflow-callout"><span className="workflow-indicator" /><div><strong>{settingsWorkflow ? `${section} is not configured yet` : `${section} is not available yet`}</strong><p className="muted-note">{settingsWorkflow ? "Review the related Finance or Rules settings. This card does not create financial records." : "This workflow is a product roadmap item; it does not yet save records or change account balances."}</p>{settingsWorkflow && <Link href={screen.title === "Reconcile" ? "/settings/rules" : "/settings/finance"} className="text-link">Review related settings →</Link>}</div></div>;
 }

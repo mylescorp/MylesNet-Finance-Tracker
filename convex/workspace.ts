@@ -4,6 +4,7 @@ import { ConvexError, v } from "convex/values";
 import { mutation, query } from "./_generated/server";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import type { Id } from "./_generated/dataModel";
+import { hasPermission, PERMISSIONS, permissionsForMembership } from "./accessControl";
 
 function addSafeInteger(left: number, right: number, label: string) {
   const result = left + right;
@@ -25,11 +26,8 @@ const accessResult = v.union(
   v.object({
     access: v.literal("ready"),
     businessName: v.string(),
-    role: v.union(
-      v.literal("owner"),
-      v.literal("partner"),
-      v.literal("cashier"),
-    ),
+    role: v.string(),
+    permissions: v.array(v.string()),
   }),
 );
 
@@ -107,6 +105,11 @@ export const claimFirstOwner = mutation({
       createdBy: userId,
       createdAt: now,
     });
+    for (const template of [
+      { name: "Owner", builtIn: "owner" as const, permissions: [...PERMISSIONS], description: "Full workspace control." },
+      { name: "Cashier", builtIn: "cashier" as const, permissions: ["dashboard.view", "sales.view", "sales.create", "expenses.view", "expenses.create", "reports.view"], description: "Record sales and expenses and view standard reports." },
+      { name: "Partner", builtIn: "partner" as const, permissions: ["dashboard.view", "partners.view"], description: "View partner area only; financial totals are not exposed." },
+    ]) await ctx.db.insert("workspaceRoles", { businessId, ...template, active: true, createdBy: userId, createdAt: now, updatedAt: now });
     await ctx.db.insert("memberships", {
       businessId,
       userId,
@@ -146,6 +149,7 @@ export const currentAccess = query({
       access: "ready" as const,
       businessName: current.business.name,
       role: current.membership.role,
+      permissions: await permissionsForMembership(ctx, current.membership),
     };
   },
 });
@@ -162,7 +166,7 @@ export const businessSettings = query({
       currency: v.string(),
       timezone: v.string(),
       weekStartsOn: v.union(v.literal("monday"), v.literal("sunday")),
-      role: v.union(v.literal("owner"), v.literal("partner"), v.literal("cashier")),
+      role: v.string(),
     }),
   ),
   handler: async (ctx) => {
@@ -171,6 +175,7 @@ export const businessSettings = query({
       const businesses = await ctx.db.query("businesses").take(1);
       return { access: businesses.length === 0 ? "setup" as const : "pending" as const };
     }
+    if (!(await hasPermission(ctx, current.membership, "settings.view"))) return { access: "pending" as const };
     return {
       access: "ready" as const,
       businessName: current.business.name,
@@ -192,8 +197,8 @@ export const updateBusinessSettings = mutation({
   returns: v.null(),
   handler: async (ctx, args) => {
     const current = await getMembership(ctx);
-    if (!current || current.membership.role !== "owner") {
-      throw new Error("Only a workspace owner can change general settings.");
+    if (!current || !(await hasPermission(ctx, current.membership, "settings.update"))) {
+      throw new Error("Your role does not have permission to change workspace settings.");
     }
     const businessName = args.businessName.trim();
     const timezone = args.timezone.trim();
@@ -290,7 +295,7 @@ export const dashboardSummary = query({
     }
     // Partner statement data is not yet linked to partner-specific ledger rows.
     // Hide business-wide finance totals until that scope is implemented.
-    if (current.membership.role === "partner") return { access: "restricted" as const };
+    if (!(await hasPermission(ctx, current.membership, "dashboard.view")) || !(await hasPermission(ctx, current.membership, "reports.view"))) return { access: "restricted" as const };
     const days = await ctx.db
       .query("dailyTotals")
       .withIndex("by_business_and_day", (q) =>
@@ -335,7 +340,7 @@ export const dashboardSummary = query({
 });
 
 export const recentEntries = query({
-  args: { limit: v.optional(v.number()) },
+  args: { limit: v.optional(v.number()), kind: v.optional(v.union(v.literal("sale"), v.literal("expense"))), from: v.optional(v.string()), toExclusive: v.optional(v.string()) },
   returns: v.array(
     v.object({
       _id: v.id("entries"),
@@ -351,16 +356,22 @@ export const recentEntries = query({
   handler: async (ctx, args) => {
     const current = await getMembership(ctx);
     if (!current) return [];
-    if (current.membership.role === "partner") return [];
-    const limit = Math.max(1, Math.min(Math.floor(args.limit ?? 10), 50));
-    const rows = await ctx.db
-      .query("entries")
-      .withIndex("by_business_and_date", (q) =>
-        q.eq("businessId", current.business._id),
-      )
-      .order("desc")
-      .take(limit);
-    return rows.map(({ _id, kind, amountUgx, occurredOn, account, category, note, state }) => ({
+    if (args.kind ? !(await hasPermission(ctx, current.membership, args.kind === "sale" ? "sales.view" : "expenses.view")) : (!(await hasPermission(ctx, current.membership, "sales.view")) && !(await hasPermission(ctx, current.membership, "expenses.view")))) return [];
+    const limit = Math.max(1, Math.min(Math.floor(args.limit ?? 10), 500));
+    if ((args.from && !isIsoDay(args.from)) || (args.toExclusive && !isIsoDay(args.toExclusive)) || (args.from && args.toExclusive && args.from >= args.toExclusive)) throw new Error("Choose a valid entry date range.");
+    const rows = args.kind
+      ? await ctx.db.query("entries").withIndex("by_business_and_kind_and_date", q =>
+        args.from && args.toExclusive ? q.eq("businessId", current.business._id).eq("kind", args.kind!).gte("occurredOn", args.from).lt("occurredOn", args.toExclusive)
+          : args.from ? q.eq("businessId", current.business._id).eq("kind", args.kind!).gte("occurredOn", args.from)
+          : args.toExclusive ? q.eq("businessId", current.business._id).eq("kind", args.kind!).lt("occurredOn", args.toExclusive)
+          : q.eq("businessId", current.business._id).eq("kind", args.kind!)).order("desc").take(limit)
+      : await ctx.db.query("entries").withIndex("by_business_and_date", q =>
+        args.from && args.toExclusive ? q.eq("businessId", current.business._id).gte("occurredOn", args.from).lt("occurredOn", args.toExclusive)
+          : args.from ? q.eq("businessId", current.business._id).gte("occurredOn", args.from)
+          : args.toExclusive ? q.eq("businessId", current.business._id).lt("occurredOn", args.toExclusive)
+          : q.eq("businessId", current.business._id)).order("desc").take(limit);
+    const visibleRows = await Promise.all(rows.map(async row => ({ row, visible: await hasPermission(ctx, current.membership, row.kind === "sale" ? "sales.view" : "expenses.view") })));
+    return visibleRows.filter(({ visible }) => visible).map(({ row: { _id, kind, amountUgx, occurredOn, account, category, note, state } }) => ({
       _id,
       kind,
       amountUgx,
@@ -386,14 +397,15 @@ export const searchEntries = query({
   handler: async (ctx, args) => {
     const current = await getMembership(ctx);
     const term = args.term.trim();
-    if (!current || current.membership.role === "partner" || term.length < 2 || term.length > 80) return [];
+    if (!current || (!(await hasPermission(ctx, current.membership, "sales.view")) && !(await hasPermission(ctx, current.membership, "expenses.view"))) || term.length < 2 || term.length > 80) return [];
     const limit = Math.max(1, Math.min(Math.floor(args.limit ?? 8), 12));
     const [notes, categories] = await Promise.all([
       ctx.db.query("entries").withSearchIndex("search_note", (q) => q.search("note", term).eq("businessId", current.business._id)).take(limit),
       ctx.db.query("entries").withSearchIndex("search_category", (q) => q.search("category", term).eq("businessId", current.business._id)).take(limit),
     ]);
     const unique = new Map([...notes, ...categories].map((entry) => [entry._id, entry]));
-    return [...unique.values()]
+    const visible = await Promise.all([...unique.values()].map(async entry => ({ entry, allowed: await hasPermission(ctx, current.membership, entry.kind === "sale" ? "sales.view" : "expenses.view") })));
+    return visible.filter(x => x.allowed).map(x => x.entry)
       .sort((a, b) => b.occurredOn.localeCompare(a.occurredOn) || b.createdAt - a.createdAt)
       .slice(0, limit)
       .map(({ _id, kind, amountUgx, occurredOn, category, note }) => ({ _id, kind, amountUgx, occurredOn, category, note }));
@@ -416,9 +428,7 @@ export const createEntry = mutation({
   handler: async (ctx, args) => {
     const current = await getMembership(ctx);
     if (!current) throw new Error("Access is pending. Ask an owner for an invitation.");
-    if (current.membership.role === "partner") {
-      throw new Error("Partner accounts cannot add ledger entries.");
-    }
+    if (!(await hasPermission(ctx, current.membership, args.kind === "sale" ? "sales.create" : "expenses.create"))) throw new Error("Your role cannot create this kind of ledger entry.");
     if (!Number.isSafeInteger(args.amountUgx) || args.amountUgx <= 0) {
       throw new Error(`Amount must be a positive valid amount in ${current.business.currency}.`);
     }
@@ -549,13 +559,14 @@ export const voidEntry = mutation({
   returns: v.null(),
   handler: async (ctx, args) => {
     const current = await getMembership(ctx);
-    if (!current || current.membership.role !== "owner") {
-      throw new Error("Only an owner can void an entry.");
+    if (!current || !(await hasPermission(ctx, current.membership, "sales.void")) && !(await hasPermission(ctx, current.membership, "expenses.void"))) {
+      throw new Error("Your role cannot void ledger entries.");
     }
     const entry = await ctx.db.get("entries", args.entryId);
     if (!entry || entry.businessId !== current.business._id) {
       throw new Error("Entry not found.");
     }
+    if (!(await hasPermission(ctx, current.membership, entry.kind === "sale" ? "sales.void" : "expenses.void"))) throw new Error("Your role cannot void this kind of ledger entry.");
     if (entry.state === "void") return null;
     const reason = args.reason.trim();
     if (reason.length < 3 || reason.length > 300) {

@@ -86,6 +86,9 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .settings-facts div { display:flex; flex-direction:column; gap:5px; padding:12px; border-radius:var(--mn-radius-sm); background:var(--mn-inset); min-width:0; }
 .settings-facts span { color:var(--mn-muted); font-size:11px; }
 .settings-facts strong { overflow-wrap:anywhere; font-size:12px; }
+.role-permission-group { min-width:0; border:1px solid var(--mn-line); border-radius:var(--mn-radius-sm); padding:8px 12px 4px; }
+.role-permission-group legend { padding:0 6px; color:var(--mn-muted); font-size:11px; font-weight:600; }
+.settings-role-card { padding:14px; border:1px solid var(--mn-line); border-radius:var(--mn-radius-sm); }
 .search-box { height:36px; width:min(340px, 28vw); display:flex; align-items:center; gap:9px; border:1px solid var(--mn-line-strong); border-radius:var(--mn-radius-sm); background:var(--mn-card); color:var(--mn-muted); padding:0 10px; }
 .search-box input { border:0; outline:0; min-width:0; width:100%; background:transparent; color:var(--mn-ink); }
 .search-box input:focus-visible { outline:0; }

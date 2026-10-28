@@ -62,15 +62,29 @@ export default function DashboardPage() {
       document.removeEventListener("visibilitychange", refreshBusinessDay);
     };
   }, [timezone]);
+  const customRangeError = useMemo(() => {
+    if (period !== "custom") return "";
+    const isIsoDay = (value: string) => {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+      const parsed = new Date(`${value}T00:00:00.000Z`);
+      return Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
+    };
+    if (!isIsoDay(customFrom) || !isIsoDay(customTo)) return "Choose both valid dates.";
+    if (customFrom > customTo) return "The end date must be on or after the start date.";
+    if ((Date.parse(`${customTo}T00:00:00.000Z`) - Date.parse(`${customFrom}T00:00:00.000Z`)) / 86400000 + 1 > 370) return "Choose a period of 370 days or less.";
+    return "";
+  }, [period, customFrom, customTo]);
+  const customDatesValid = !customRangeError;
   const range = useMemo(() => {
     if (period === "custom") {
+      if (!customDatesValid) return periodRange("today", businessDay, weekStartsOn, fiscalStartMonth);
       const end = new Date(`${customTo}T00:00:00.000Z`);
       end.setUTCDate(end.getUTCDate() + 1);
       return { from: customFrom, toExclusive: end.toISOString().slice(0, 10) };
     }
     return periodRange(period, businessDay, weekStartsOn, fiscalStartMonth);
-  }, [period, businessDay, weekStartsOn, fiscalStartMonth, customFrom, customTo]);
-  const summary = useQuery(api.workspace.dashboardSummary, range);
+  }, [period, businessDay, weekStartsOn, fiscalStartMonth, customFrom, customTo, customDatesValid]);
+  const summary = useQuery(api.workspace.dashboardSummary, period !== "custom" || customDatesValid ? range : "skip");
   const todayRange = useMemo(() => periodRange("today", businessDay, weekStartsOn, fiscalStartMonth), [businessDay, weekStartsOn, fiscalStartMonth]);
   const todaySummary = useQuery(api.workspace.dashboardSummary, todayRange);
   const weekRange = useMemo(() => periodRange("week", businessDay, weekStartsOn, fiscalStartMonth), [businessDay, weekStartsOn, fiscalStartMonth]);
@@ -100,7 +114,7 @@ export default function DashboardPage() {
 
   return <>
     <WorkspaceTitle eyebrow="MylesNet · Finance" title="Dashboard" description="A clear view of your recorded business activity." action={<label className="period-control">Period <select value={period} onChange={(event) => setPeriod(event.target.value)} aria-label="Dashboard period"><option value="today">Today</option><option value="week">This week</option><option value="month">This month</option><option value="year">This year</option><option value="custom">Custom</option></select></label>} />
-    {period === "custom" && <div className="custom-period-row"><label>From <input type="date" value={customFrom} onChange={(event) => setCustomFrom(event.target.value)} /></label><label>To <input type="date" value={customTo} min={customFrom} onChange={(event) => setCustomTo(event.target.value)} /></label></div>}
+    {period === "custom" && <div className="custom-period-row"><label>From <input type="date" value={customFrom} onChange={(event) => setCustomFrom(event.target.value)} /></label><label>To <input type="date" value={customTo} min={customFrom || undefined} onChange={(event) => setCustomTo(event.target.value)} /></label>{customRangeError && <span className="form-feedback form-error" role="alert">{customRangeError}</span>}</div>}
     <div className="dashboard-banner"><Image src="/brand/banner.png" alt="MylesNet Finance Tracker" fill priority sizes="(max-width: 760px) 100vw, 1100px" /><div className="banner-caption">Your business, clearly in view.</div></div>
     <div className="board-toolbar no-print">
       <span className="status-chip status-live">Live · Convex data</span>
@@ -127,7 +141,7 @@ export default function DashboardPage() {
       <Metric label="Mobile money" value={readySummary?.mobileMoneyBalanceUgx ?? null} note="From entries recorded here" currency={currency} scale={currencyScale} locale={locale} icon={<Wallet size={16} />} />
     </div>
     {summary?.access === "setup" && <Card className="workspace-setup-card"><div className="card-heading"><div><h2 className="card-title">Set up the first workspace owner</h2><p className="card-subtitle">Use this one-time setup only for a new workspace. It grants the signed-in Google account the owner role.</p></div></div><OwnerSetup /></Card>}
-    {summary?.access === "pending" && <Card className="workspace-setup-card"><div className="card-heading"><div><h2 className="card-title">Workspace access pending</h2><p className="card-subtitle">Ask the workspace owner to invite your Google account. Owner setup is only available before a workspace exists.</p></div></div></Card>}
+    {summary?.access === "pending" && <Card className="workspace-setup-card"><div className="card-heading"><div><h2 className="card-title">Workspace access pending</h2><p className="card-subtitle">Your account will appear in the workspace owner’s pending users list. The owner can approve it or send you an invitation.</p></div></div></Card>}
     <div className="dashboard-grid">
       <Card>
         <div className="card-heading"><div><h2 className="card-title">Sales activity</h2><p className="card-subtitle">Daily recorded sales in the selected period</p></div></div>
@@ -138,12 +152,12 @@ export default function DashboardPage() {
       </Card>
       <Card>
         <div className="card-heading"><div><h2 className="card-title">Recent entries</h2><p className="card-subtitle">Latest cashbook activity</p></div><Link className="muted-note" href="/sales">View all</Link></div>
-        {recent === undefined ? <Empty message="Loading entries…" /> : recent.length === 0 ? <Empty message={isReady ? "No entries yet. Add a sale or expense to begin." : summary?.access === "restricted" ? "Partner entry details are hidden until statement access is scoped." : "Entries appear here after you are invited to a workspace."} /> : <div className="entry-list">{recent.map((entry) => <div className="entry-row" key={entry._id}><div className="entry-main"><span className="entry-icon">{entry.kind === "sale" ? <Receipt size={16} /> : <Wallet size={16} />}</span><div style={{ minWidth: 0 }}><div className="entry-description">{entry.note || entry.category}</div><div className="entry-meta">{entry.category} · {fmtDate(entry.occurredOn)} · {entry.account === "cash" ? "Cash" : "Mobile money"}{entry.state === "void" ? " · Voided" : ""}</div></div></div><span className={`entry-amount ${entry.state === "void" ? "muted-note" : entry.kind === "sale" ? "amount-positive" : "amount-negative"}`}>{entry.kind === "sale" ? "+" : "−"}{formatMoney(entry.amountUgx)}</span></div>)}</div>}
+        {recent === undefined ? <Empty message="Loading entries…" /> : recent.length === 0 ? <Empty message={isReady ? "No entries yet. Add a sale or expense to begin." : summary?.access === "restricted" ? "Partner entry details are hidden until statement access is scoped." : "Entries appear here after workspace access is approved."} /> : <div className="entry-list">{recent.map((entry) => <div className="entry-row" key={entry._id}><div className="entry-main"><span className="entry-icon">{entry.kind === "sale" ? <Receipt size={16} /> : <Wallet size={16} />}</span><div style={{ minWidth: 0 }}><div className="entry-description">{entry.note || entry.category}</div><div className="entry-meta">{entry.category} · {fmtDate(entry.occurredOn)} · {entry.account === "cash" ? "Cash" : "Mobile money"}{entry.state === "void" ? " · Voided" : ""}</div></div></div><span className={`entry-amount ${entry.state === "void" ? "muted-note" : entry.kind === "sale" ? "amount-positive" : "amount-negative"}`}>{entry.kind === "sale" ? "+" : "−"}{formatMoney(entry.amountUgx)}</span></div>)}</div>}
       </Card>
     </div>
     <div className="dashboard-insight-grid">
       <Card><div className="card-heading"><div><h2 className="card-title">Cash flow this period</h2><p className="card-subtitle">Sales, expenses, and net from saved entries.</p></div></div><FlowRow label="Sales" value={readySummary?.salesUgx ?? 0} max={Math.max(1, readySummary?.salesUgx ?? 0, readySummary?.expensesUgx ?? 0)} tone="sales" currency={currency} scale={currencyScale} locale={locale} /><FlowRow label="Expenses" value={readySummary?.expensesUgx ?? 0} max={Math.max(1, readySummary?.salesUgx ?? 0, readySummary?.expensesUgx ?? 0)} tone="expenses" currency={currency} scale={currencyScale} locale={locale} /><FlowRow label="Net" value={readySummary?.netUgx ?? 0} max={Math.max(1, readySummary?.salesUgx ?? 0, readySummary?.expensesUgx ?? 0)} tone="net" currency={currency} scale={currencyScale} locale={locale} /></Card>
-      <Card><div className="card-heading"><div><h2 className="card-title">Account balances</h2><p className="card-subtitle">Balances reflect entries recorded in this workspace.</p></div></div><div className="balance-detail"><span>Cash on hand</span><strong>{isReady ? `${formatMoney(readySummary?.cashBalanceUgx ?? 0)} {currency}` : "—"}</strong></div><div className="balance-detail"><span>Mobile money</span><strong>{isReady ? `${formatMoney(readySummary?.mobileMoneyBalanceUgx ?? 0)} {currency}` : "—"}</strong></div><p className="muted-note">Add opening balances in Finance settings before using these as a full business position.</p></Card>
+      <Card><div className="card-heading"><div><h2 className="card-title">Account balances</h2><p className="card-subtitle">Balances reflect entries recorded in this workspace.</p></div></div><div className="balance-detail"><span>Cash on hand</span><strong>{isReady ? `${formatMoney(readySummary?.cashBalanceUgx ?? 0)} ${currency}` : "—"}</strong></div><div className="balance-detail"><span>Mobile money</span><strong>{isReady ? `${formatMoney(readySummary?.mobileMoneyBalanceUgx ?? 0)} ${currency}` : "—"}</strong></div><p className="muted-note">Add opening balances in Finance settings before using these as a full business position.</p></Card>
       <Card><div className="card-heading"><div><h2 className="card-title">Data health</h2><p className="card-subtitle">Coverage follows configured finance workflows.</p></div></div><div className="health-row"><span>Sales and expenses</span><span className="status-chip status-ok">Live</span></div><div className="health-row"><span>Recurring bills</span><span className="status-chip status-warning">Setup needed</span></div><div className="health-row"><span>Opening balance</span><span className="status-chip status-warning">Review</span></div><Link className="text-link" href="/reconcile">Review reconciliation →</Link></Card>
     </div>
   </>;

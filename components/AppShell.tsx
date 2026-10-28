@@ -16,19 +16,19 @@ import { GlobalSearch } from "@/components/workspace/GlobalSearch";
 import { api } from "@/convex/_generated/api";
 
 const nav = [
-  { label: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
-  { label: "Analytics", href: "/analytics", icon: BarChart3 },
-  { label: "Sales", href: "/sales", icon: Receipt },
-  { label: "Expenses", href: "/expenses", icon: Wallet },
-  { label: "Movements", href: "/movements", icon: ArrowDownUp },
-  { label: "Savings", href: "/savings", icon: HandCoins },
-  { label: "Loans", href: "/loans", icon: FileBarChart },
-  { label: "Daily Report", href: "/daily-report", icon: Activity },
-  { label: "Monthly P&L", href: "/monthly-pnl", icon: FileBarChart },
-  { label: "Partners", href: "/partners", icon: HandCoins },
-  { label: "Bills", href: "/bills", icon: Receipt },
-  { label: "Reconcile", href: "/reconcile", icon: ArrowDownUp },
-  { label: "Settings", href: "/settings/general", icon: Settings },
+  { label: "Dashboard", href: "/dashboard", icon: LayoutDashboard, permission: "dashboard.view" },
+  { label: "Analytics", href: "/analytics", icon: BarChart3, permission: "analytics.view" },
+  { label: "Sales", href: "/sales", icon: Receipt, permission: "sales.view" },
+  { label: "Expenses", href: "/expenses", icon: Wallet, permission: "expenses.view" },
+  { label: "Movements", href: "/movements", icon: ArrowDownUp, permission: "movements.view" },
+  { label: "Savings", href: "/savings", icon: HandCoins, permission: "savings.view" },
+  { label: "Loans", href: "/loans", icon: FileBarChart, permission: "loans.view" },
+  { label: "Daily Report", href: "/daily-report", icon: Activity, permission: "dailyReport.view" },
+  { label: "Monthly P&L", href: "/monthly-pnl", icon: FileBarChart, permission: "monthlyPnl.view" },
+  { label: "Partners", href: "/partners", icon: HandCoins, permission: "partners.view" },
+  { label: "Bills", href: "/bills", icon: Receipt, permission: "bills.view" },
+  { label: "Reconcile", href: "/reconcile", icon: ArrowDownUp, permission: "reconcile.view" },
+  { label: "Settings", href: "/settings/general", icon: Settings, permission: "settings.view" },
 ];
 
 export function AppShell({ children }: { children: ReactNode }) {
@@ -38,6 +38,11 @@ export function AppShell({ children }: { children: ReactNode }) {
   const preferences = useQuery(api.settings.overview, {});
   const [mobileOpen, setMobileOpen] = useState(false);
   const accountLabel = access?.access === "ready" ? access.businessName : "My account";
+  const permissions = access?.access === "ready" ? access.permissions ?? [] : null;
+  const visibleNav = nav.filter(item => {
+    if (permissions === null) return item.href === "/dashboard";
+    return permissions.includes(item.permission) || item.label === "Settings" && ["access.view", "roles.manage", "data.export"].some(p => permissions.includes(p));
+  });
 
   return (
     <div className="app-frame">
@@ -60,7 +65,7 @@ export function AppShell({ children }: { children: ReactNode }) {
         </div>
       </header>
       <nav className={`primary-nav ${mobileOpen ? "primary-nav-open" : ""}`} aria-label="Main navigation">
-        {nav.map((item, index) => {
+        {visibleNav.map((item, index) => {
           const Icon = item.icon;
           const active = pathname === item.href || pathname.startsWith(`${item.href}/`);
           return <span className="nav-item-wrap" key={item.href}>
@@ -70,9 +75,9 @@ export function AppShell({ children }: { children: ReactNode }) {
             </Link>
           </span>;
         })}
-        <Link className="button button-accent nav-add-entry" href="/sales" onClick={() => setMobileOpen(false)}>+ Add entry <ChevronDown size={14} /></Link>
+        {access?.access === "ready" && (access.permissions.includes("sales.create") || access.permissions.includes("expenses.create")) && <Link className="button button-accent nav-add-entry" href={access.permissions.includes("sales.create") ? "/sales" : "/expenses"} onClick={() => setMobileOpen(false)}>+ Add entry <ChevronDown size={14} /></Link>}
       </nav>
-      {access?.access === "pending" && <div className="access-pending" role="status"><strong>Access awaiting invitation</strong><span>This Google account is signed in but is not yet linked to a MylesNet workspace.</span></div>}
+      {access?.access === "pending" && <div className="access-pending" role="status"><strong>Workspace access pending</strong><span>Your account is signed in but has no active membership. A workspace owner can approve it or send you an invitation.</span></div>}
       <main className="page-content">{children}</main>
       <footer className="app-footer"><span>MylesNet Finance Tracker · {preferences?.access === "ready" ? preferences.currency : "UGX"}</span><span>Workspace data is protected by your assigned role.</span></footer>
     </div>
