@@ -1,6 +1,6 @@
 "use client";
 
-import { useQuery } from "convex/react";
+import { useMutation, useQuery } from "convex/react";
 import {
   Activity, ArrowDownUp, BarChart3, Bell, CalendarDays, ChevronDown,
   ChevronsLeft, ChevronsRight, FileBarChart, HandCoins, LayoutDashboard,
@@ -11,6 +11,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import { AccountDrawer, ProfileAvatar } from "@/components/account/AccountDrawer";
+import { AccountMenu } from "@/components/account/AccountMenu";
 import { GlobalSearch } from "@/components/workspace/GlobalSearch";
 import { api } from "@/convex/_generated/api";
 
@@ -44,13 +45,18 @@ export function AppShell({ children }: { children: ReactNode }) {
   const access = useQuery(api.workspace.currentAccess, {});
   const context = useQuery(api.settings.runtimeContext, {});
   const profile = useQuery(api.users.profile, {});
+  const requestWorkspaceAccess = useMutation(api.settings.requestWorkspaceAccess);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
+  const [accountMenuOpen, setAccountMenuOpen] = useState(false);
   const [accountReturnTo, setAccountReturnTo] = useState("/dashboard");
   const menuButtonRef = useRef<HTMLButtonElement>(null);
   const sidebarCloseRef = useRef<HTMLButtonElement>(null);
   const accountLabel = access?.access === "ready" ? access.businessName : "My account";
   const permissions = access?.access === "ready" ? access.permissions : [];
+  useEffect(() => {
+    if (access?.access === "pending") void requestWorkspaceAccess({}).catch(() => {});
+  }, [access?.access, requestWorkspaceAccess]);
   const visibleNavGroups = navGroups.map(group => ({
     ...group,
     items: group.items.filter(item => access?.access !== "ready"
@@ -63,12 +69,18 @@ export function AppShell({ children }: { children: ReactNode }) {
     general: "General settings", finance: "Finance settings", rules: "Rules",
     data: "Data", access: "Access", releases: "Releases",
   };
-  const routePageLabel = pathname === "/account" ? "Your account" : pathname === "/add-entry" ? "Add an entry" : activePage?.label
+  const routePageLabel = pathname === "/account" ? "Your account" : pathname === "/staff/access" ? "Staff & access" : pathname === "/audits" ? "Audit log" : pathname === "/add-entry" ? "Add an entry" : activePage?.label
     ?? (pathname.startsWith("/settings/") ? settingsPageLabels[pathname.split("/")[2]] ?? "Settings" : undefined)
     ?? (pathname === "/issues" ? "Needs attention" : "Workspace");
   const closeAccount = useCallback(() => {
     router.replace(accountReturnTo === "/account" ? "/dashboard" : accountReturnTo);
   }, [accountReturnTo, router]);
+  const closeAccountMenu = useCallback(() => setAccountMenuOpen(false), []);
+  const openProfile = useCallback(() => {
+    setAccountReturnTo(pathname);
+    setAccountMenuOpen(false);
+    router.push("/account");
+  }, [pathname, router]);
   useEffect(() => {
     const media = window.matchMedia("(max-width: 760px)");
     if (!mobileOpen || !media.matches) return;
@@ -145,7 +157,7 @@ export function AppShell({ children }: { children: ReactNode }) {
         <div className="header-actions">
           {!financeApproverOnly && <GlobalSearch />}
           {!financeApproverOnly && permissions.includes("audit.view") && <Link className="utility-link" href="/issues" aria-label="Needs attention"><Bell size={17} /><span>Needs attention</span></Link>}
-          <button className="user-menu" type="button" aria-label="Open your account" title="Manage your account" onClick={() => { setAccountReturnTo(pathname); router.push("/account"); }}>
+          <button className="user-menu" type="button" aria-label="Open your account menu" aria-haspopup="dialog" aria-expanded={accountMenuOpen} title="Manage your account" onClick={() => setAccountMenuOpen(open => !open)}>
             <ProfileAvatar imageUrl={profile?.photoUrl} name={profile?.displayName || accountLabel} />
             <span className="user-menu-label">{profile?.displayName || accountLabel}</span>
             <ChevronDown size={15} aria-hidden="true" />
@@ -157,6 +169,7 @@ export function AppShell({ children }: { children: ReactNode }) {
       <footer className="app-footer"><span>MylesNet Finance Tracker · {context?.access === "ready" ? context.currency : "UGX"}</span><span>Workspace data is protected by your assigned role.</span></footer>
       </div>
       {pathname === "/account" && <AccountDrawer onClose={closeAccount} />}
+      {accountMenuOpen && <AccountMenu displayName={profile?.displayName || accountLabel} email={profile?.email} photoUrl={profile?.photoUrl} workspaceName={accountLabel} canManageStaff={permissions.includes("access.view") || permissions.includes("access.manage") || permissions.includes("roles.manage")} canViewAudit={permissions.includes("audit.view")} onClose={closeAccountMenu} onProfile={openProfile} />}
     </div>
   );
 }

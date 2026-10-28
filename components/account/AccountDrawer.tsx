@@ -9,7 +9,6 @@ import { useRouter } from "next/navigation";
 import { ChangeEvent, FormEvent, useEffect, useRef, useState } from "react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
-import { ThemeControl } from "@/components/ThemeControl";
 
 type Props = { onClose: () => void };
 
@@ -176,7 +175,6 @@ export function AccountDrawer({ onClose }: Props) {
 
   return <div className="account-overlay" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !busy) onClose(); }}>
     <aside className="account-drawer" ref={drawerRef} role="dialog" aria-modal="true" aria-labelledby="account-drawer-title">
-      <div className="account-theme-row"><ThemeControl /></div>
       <header className="account-drawer-header">
         <div><span className="account-kicker">MYLESNET IDENTITY</span><h1 id="account-drawer-title">Your account</h1></div>
         <button className="account-close" type="button" onClick={onClose} aria-label="Close account drawer" disabled={busy}><X size={19} /></button>
