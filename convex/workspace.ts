@@ -35,10 +35,19 @@ const accessResult = v.union(
       v.literal("cashier"),
       v.literal("finance_approver"),
     ),
+    workspaces: v.array(v.object({ businessId: v.id("businesses"), businessName: v.string(), role: v.union(v.literal("owner"), v.literal("partner"), v.literal("cashier"), v.literal("finance_approver")) })),
   }),
 );
 
-async function getMembership(ctx: QueryCtx | MutationCtx) { return await getSelectedWorkspace(ctx); }
+async function getMembership(ctx: QueryCtx | MutationCtx, businessId?: Id<"businesses">) {
+  if (!businessId) return await getSelectedWorkspace(ctx);
+  const userId = await getAuthUserId(ctx);
+  if (!userId) return null;
+  const membership = await ctx.db.query("memberships").withIndex("by_business_and_user", q => q.eq("businessId", businessId).eq("userId", userId)).unique();
+  if (!membership?.active) return null;
+  const business = await ctx.db.get("businesses", businessId);
+  return business ? { userId, membership, business } : null;
+}
 
 async function applyAccountEffect(
   ctx: MutationCtx,
@@ -624,6 +633,7 @@ export const createOperationalRecord = mutation({
 
 export const createEntry = mutation({
   args: {
+    businessId: v.id("businesses"),
     kind: v.union(v.literal("sale"), v.literal("expense")),
     amountUgx: v.number(),
     occurredOn: v.string(),
@@ -636,7 +646,7 @@ export const createEntry = mutation({
   },
   returns: v.id("entries"),
   handler: async (ctx, args) => {
-    const current = await getMembership(ctx);
+    const current = await getMembership(ctx, args.businessId);
     if (!current) throw new Error("Access is pending. Ask an owner for an invitation.");
     if (current.membership.role !== "owner" && current.membership.role !== "cashier") throw new Error("This account cannot add ledger entries.");
     if (!Number.isSafeInteger(args.amountUgx) || args.amountUgx <= 0) {

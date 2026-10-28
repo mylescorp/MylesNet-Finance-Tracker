@@ -221,7 +221,7 @@ export const receive = internalMutation({
         await ctx.db.insert("auditEvents", { businessId: business._id, actorId: authorizedSubmitter!._id, action: "entry.google_form_posted", entityType: "entry", entityId: entryId, occurredAt: now, summary: `${entry.kind} received from Google Form · ${date} · ${entry.category}.` });
       }
     }
-    const receiptValues = { businessId: business._id, sourceKey: input.sourceKey, submissionKind: input.kind, status, occurredOn: validDay(date) ? date : undefined, amountUgx: totalUgx || undefined, summary, detailsJson: JSON.stringify(fields).slice(0, 16_000), attemptCount: (existing?.attemptCount ?? 0) + 1, lastAttemptAt: now };
+    const receiptValues = { businessId: business._id, sourceKey: input.sourceKey, submissionKind: input.kind, status, occurredOn: validDay(date) ? date : undefined, amountUgx: totalUgx || undefined, summary, detailsJson: JSON.stringify(fields).slice(0, 16_000), attemptCount: (existing?.attemptCount ?? 1) + 1, lastAttemptAt: now };
     if (existing) await ctx.db.patch("googleFormReceipts", existing._id, receiptValues);
     else await ctx.db.insert("googleFormReceipts", { ...receiptValues, createdAt: now });
     return { status, message: summary };
