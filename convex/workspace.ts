@@ -553,6 +553,41 @@ export const recentEntries = query({
   },
 });
 
+export const entriesForExport = query({
+  args: {
+    businessId: v.id("businesses"),
+    kind: v.optional(v.union(v.literal("sale"), v.literal("expense"))),
+    from: v.string(),
+    toExclusive: v.string(),
+    paginationOpts: paginationOptsValidator,
+  },
+  returns: paginationResultValidator(v.object({
+    entryId: v.id("entries"),
+    kind: v.union(v.literal("sale"), v.literal("expense")),
+    amountUgx: v.number(),
+    occurredOn: v.string(),
+    account: v.union(v.literal("cash"), v.literal("mobile_money"), v.literal("unallocated")),
+    category: v.string(),
+    note: v.string(),
+    state: v.union(v.literal("posted"), v.literal("void")),
+    source: v.union(v.literal("manual"), v.literal("import"), v.literal("webhook"), v.literal("google_form")),
+    createdAt: v.number(),
+    createdBy: v.id("users"),
+  })),
+  handler: async (ctx, args) => {
+    const current = await getMembership(ctx, args.businessId);
+    if (!current || (current.membership.role !== "owner" && current.membership.role !== "cashier")) throw new Error("Only active owners and cashiers can export cashbook entries.");
+    if (!isIsoDay(args.from) || !isIsoDay(args.toExclusive) || args.from >= args.toExclusive) throw new Error("Choose a valid export date range.");
+    const rangeDays = (Date.parse(`${args.toExclusive}T00:00:00.000Z`) - Date.parse(`${args.from}T00:00:00.000Z`)) / 86_400_000;
+    if (rangeDays > 370 || args.paginationOpts.numItems > 100) throw new Error("Cashbook exports are limited to 370 days and 100 rows per page. Narrow the date range if needed.");
+    const rows = args.kind
+      ? ctx.db.query("entries").withIndex("by_business_and_kind_and_date", q => q.eq("businessId", current.business._id).eq("kind", args.kind!).gte("occurredOn", args.from).lt("occurredOn", args.toExclusive))
+      : ctx.db.query("entries").withIndex("by_business_and_date", q => q.eq("businessId", current.business._id).gte("occurredOn", args.from).lt("occurredOn", args.toExclusive));
+    const page = await rows.order("desc").paginate(args.paginationOpts);
+    return { ...page, page: page.page.map(({ _id, kind, amountUgx, occurredOn, account, category, note, state, source, createdAt, createdBy }) => ({ entryId: _id, kind, amountUgx, occurredOn, account, category, note, state, source, createdAt, createdBy })) };
+  },
+});
+
 export const searchEntries = query({
   args: { term: v.string(), limit: v.optional(v.number()) },
   returns: v.array(v.object({

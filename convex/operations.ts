@@ -177,7 +177,7 @@ export const overview = query({
       loans: loans.map(row => ({ _id: row._id, lender: row.lender, principalUgx: row.principalUgx, outstandingPrincipalUgx: row.outstandingPrincipalUgx, annualRateBps: row.annualRateBps, termMonths: row.termMonths, startedOn: row.startedOn, account: row.account, status: row.status })),
       loanRepayments: loanRepayments.map(row => ({ _id: row._id, lender: loanById.get(row.loanId) ?? "Loan", amountUgx: row.amountUgx, principalUgx: row.principalUgx, interestUgx: row.interestUgx, account: row.account, paidOn: row.paidOn, state: row.state ?? "posted", voidReason: row.voidReason })),
       bills: bills.map(row => ({ _id: row._id, name: row.name, category: row.category, amountUgx: row.amountUgx, account: row.account, recurrence: row.recurrence, nextDueOn: row.nextDueOn, active: row.active })),
-      billPayments: billPayments.map(row => { const bill = billById.get(row.billId); return { _id: row._id, billName: bill?.name ?? "Inactive bill", amountUgx: row.amountUgx, account: row.account, paidOn: row.paidOn, state: row.state ?? "posted", voidReason: row.voidReason, canReverse: row.state !== "void" && !!row.priorNextDueOn && !!row.nextDueOnAfter && bill?.nextDueOn === row.nextDueOnAfter }; }),
+      billPayments: billPayments.map(row => { const bill = billById.get(row.billId); return { _id: row._id, billName: bill?.name ?? "Inactive bill", amountUgx: row.amountUgx, account: row.account, paidOn: row.paidOn, state: row.state ?? "posted", voidReason: row.voidReason, canReverse: row.state !== "void" && !!row.priorNextDueOn && !!row.nextDueOnAfter && row.priorScheduleStartDueOn !== undefined && row.priorScheduleAnchorDay !== undefined && row.priorScheduleEndOfMonth !== undefined && row.nextScheduleStartDueOn !== undefined && row.nextScheduleAnchorDay !== undefined && row.nextScheduleEndOfMonth !== undefined && bill?.nextDueOn === row.nextDueOnAfter && bill.scheduleStartDueOn === row.nextScheduleStartDueOn && bill.scheduleAnchorDay === row.nextScheduleAnchorDay && bill.scheduleEndOfMonth === row.nextScheduleEndOfMonth }; }),
       reconciliations: reconciliations.map(row => ({ _id: row._id, account: row.account, asOfDate: row.asOfDate, bookBalanceUgx: row.bookBalanceUgx, countedBalanceUgx: row.countedBalanceUgx, varianceUgx: row.varianceUgx, status: row.status, note: row.note, explanation: row.explanation, supersedesId: row.supersedesId })),
       partners: currentPartnerShares.map(row => ({ _id: row._id, name: row.name, ownershipBps: row.ownershipBps, active: row.active })),
     };
@@ -422,34 +422,36 @@ export const createSavingsHolding = mutation({
 });
 
 export const updateSavingsHolding = mutation({
-  args: { businessId: v.id("businesses"), holdingId: v.id("savingsHoldings"), name: v.string(), targetUgx: v.optional(v.number()), active: v.boolean() },
+  args: { businessId: v.id("businesses"), holdingId: v.id("savingsHoldings"), action: v.union(v.literal("edit"), v.literal("archive"), v.literal("restore")), expectedActive: v.boolean(), name: v.string(), targetUgx: v.optional(v.number()) },
   returns: v.null(),
   handler: async (ctx, args) => {
     const current = await workspace(ctx, args.businessId);
     if (!current || current.membership.role !== "owner") throw new Error("Only a workspace owner can edit or archive savings holdings.");
     const holding = await ctx.db.get("savingsHoldings", args.holdingId);
     if (!holding || holding.businessId !== current.business._id) throw new Error("Savings holding not found.");
-    if (args.active !== holding.active) {
-      if (!args.active && holding.balanceUgx !== 0) throw new Error("Withdraw or reassign the full holding balance before archiving it.");
-      if (args.active) {
+    if (args.expectedActive !== holding.active) throw new Error("This savings holding changed in another session. Refresh and try again.");
+    if (args.action !== "edit") {
+      const active = args.action === "restore";
+      if (active === holding.active) throw new Error("This savings holding already has that status. Refresh the page.");
+      if (!active && holding.balanceUgx !== 0) throw new Error("Withdraw or reassign the full holding balance before archiving it.");
+      if (active) {
         const activeRows = await ctx.db.query("savingsHoldings").withIndex("by_business_and_active", q => q.eq("businessId", current.business._id).eq("active", true)).take(101);
         if (activeRows.length >= 100) throw new Error("A workspace can have up to 100 active savings holdings.");
         if (activeRows.some(row => row.name.toLowerCase() === holding.name.toLowerCase())) throw new Error("An active savings holding with this name already exists.");
       }
-      await ctx.db.patch("savingsHoldings", holding._id, { active: args.active });
-      await ctx.db.insert("auditEvents", { businessId: current.business._id, actorId: current.userId, action: args.active ? "savings.holding_restored" : "savings.holding_archived", entityType: "savingsHolding", entityId: holding._id, occurredAt: Date.now(), summary: `${args.active ? "Restored" : "Archived"} savings holding: ${holding.name}.` });
+      await ctx.db.patch("savingsHoldings", holding._id, { active });
+      await ctx.db.insert("auditEvents", { businessId: current.business._id, actorId: current.userId, action: active ? "savings.holding_restored" : "savings.holding_archived", entityType: "savingsHolding", entityId: holding._id, occurredAt: Date.now(), summary: `${active ? "Restored" : "Archived"} savings holding: ${holding.name}.` });
       return null;
     }
+    if (!holding.active) throw new Error("Restore this savings holding before editing it.");
     const name = args.name.trim();
     if (name.length < 2 || name.length > 80 || (args.targetUgx !== undefined && (!Number.isSafeInteger(args.targetUgx) || args.targetUgx <= 0))) throw new Error("Savings holding details are invalid.");
-    if (!args.active && holding.balanceUgx !== 0) throw new Error("Withdraw or reassign the full holding balance before archiving it.");
     const active = await ctx.db.query("savingsHoldings").withIndex("by_business_and_active", q => q.eq("businessId", current.business._id).eq("active", true)).take(101);
-    if (args.active && !holding.active && active.length >= 100) throw new Error("A workspace can have up to 100 active savings holdings.");
-    if (args.active && active.some(row => row._id !== holding._id && row.name.toLowerCase() === name.toLowerCase())) throw new Error("An active savings holding with this name already exists.");
+    if (active.some(row => row._id !== holding._id && row.name.toLowerCase() === name.toLowerCase())) throw new Error("An active savings holding with this name already exists.");
     const before = { name: holding.name, targetUgx: holding.targetUgx, active: holding.active };
-    const after = { name, targetUgx: args.targetUgx, active: args.active };
+    const after = { name, targetUgx: args.targetUgx, active: true };
     await ctx.db.patch("savingsHoldings", holding._id, after);
-    await ctx.db.insert("auditEvents", { businessId: current.business._id, actorId: current.userId, action: args.active ? "savings.holding_updated" : "savings.holding_archived", entityType: "savingsHolding", entityId: holding._id, occurredAt: Date.now(), summary: `${args.active ? "Updated" : "Archived"} savings holding: ${name}.`, details: JSON.stringify({ before, after }) });
+    await ctx.db.insert("auditEvents", { businessId: current.business._id, actorId: current.userId, action: "savings.holding_updated", entityType: "savingsHolding", entityId: holding._id, occurredAt: Date.now(), summary: `Updated savings holding: ${name}.`, details: JSON.stringify({ before, after }) });
     return null;
   },
 });
@@ -620,28 +622,29 @@ export const createBill = mutation({
 });
 
 export const updateBillSchedule = mutation({
-  args: { businessId: v.id("businesses"), billId: v.id("bills"), expectedNextDueOn: v.string(), name: v.string(), category: v.string(), amountUgx: v.number(), account: accountV, recurrence: v.union(v.literal("weekly"), v.literal("monthly"), v.literal("quarterly"), v.literal("yearly")), nextDueOn: v.string(), active: v.boolean() },
+  args: { businessId: v.id("businesses"), billId: v.id("bills"), action: v.union(v.literal("edit"), v.literal("archive"), v.literal("restore")), expectedActive: v.boolean(), expectedNextDueOn: v.string(), name: v.string(), category: v.string(), amountUgx: v.number(), account: accountV, recurrence: v.union(v.literal("weekly"), v.literal("monthly"), v.literal("quarterly"), v.literal("yearly")), nextDueOn: v.string() },
   returns: v.null(),
   handler: async (ctx, args) => {
     const current = await workspace(ctx, args.businessId);
     if (!current || current.membership.role !== "owner") throw new Error("Only a workspace owner can edit or archive bill schedules.");
     const bill = await ctx.db.get("bills", args.billId);
     if (!bill || bill.businessId !== current.business._id) throw new Error("Bill schedule not found.");
-    if (args.active && !bill.active) {
+    if (args.expectedActive !== bill.active || args.expectedNextDueOn !== bill.nextDueOn) throw new Error("This bill was updated in another session. Refresh the schedule before continuing.");
+    if (args.action !== "edit") {
+      const active = args.action === "restore";
+      if (active === bill.active) throw new Error("This bill schedule already has that status. Refresh the page.");
+      if (active) {
       const activeBills = await ctx.db.query("bills").withIndex("by_business_and_active_due", q => q.eq("businessId", current.business._id).eq("active", true)).take(101);
       if (activeBills.length >= 100) throw new Error("A workspace can have up to 100 active bill schedules.");
-    }
-    if (args.active !== bill.active) {
-      await ctx.db.patch("bills", bill._id, { active: args.active });
-      await ctx.db.insert("auditEvents", { businessId: current.business._id, actorId: current.userId, action: args.active ? "bill.schedule_restored" : "bill.schedule_archived", entityType: "bill", entityId: bill._id, occurredAt: Date.now(), summary: `${args.active ? "Restored" : "Archived"} bill schedule: ${bill.name}.` });
+      }
+      await ctx.db.patch("bills", bill._id, { active });
+      await ctx.db.insert("auditEvents", { businessId: current.business._id, actorId: current.userId, action: active ? "bill.schedule_restored" : "bill.schedule_archived", entityType: "bill", entityId: bill._id, occurredAt: Date.now(), summary: `${active ? "Restored" : "Archived"} bill schedule: ${bill.name}.` });
       return null;
     }
-    if (args.expectedNextDueOn !== bill.nextDueOn) throw new Error("This bill was updated after you opened it. Refresh the schedule and review your change before saving.");
+    if (!bill.active) throw new Error("Restore this bill schedule before editing it.");
     const name = args.name.trim();
     const category = args.category.trim();
     if (name.length < 2 || name.length > 100 || category.length < 1 || category.length > 80 || !Number.isSafeInteger(args.amountUgx) || args.amountUgx <= 0 || !validDay(args.nextDueOn)) throw new Error("Bill schedule details are invalid.");
-    const activeBills = await ctx.db.query("bills").withIndex("by_business_and_active_due", q => q.eq("businessId", current.business._id).eq("active", true)).take(101);
-    if (args.active && !bill.active && activeBills.length >= 100) throw new Error("A workspace can have up to 100 active bill schedules.");
     const dateChanged = args.nextDueOn !== bill.nextDueOn;
     const startDate = new Date(`${args.nextDueOn}T00:00:00.000Z`);
     const anchorDate = new Date(`${bill.scheduleStartDueOn ?? bill.nextDueOn}T00:00:00.000Z`);
@@ -649,9 +652,9 @@ export const updateBillSchedule = mutation({
     const anchorMonthEnd = new Date(Date.UTC(anchorDate.getUTCFullYear(), anchorDate.getUTCMonth() + 1, 0)).getUTCDate();
     const endOfMonth = dateChanged ? anchorDay === new Date(Date.UTC(startDate.getUTCFullYear(), startDate.getUTCMonth() + 1, 0)).getUTCDate() : bill.scheduleEndOfMonth ?? anchorDay === anchorMonthEnd;
     const before = { name: bill.name, category: bill.category, amountUgx: bill.amountUgx, account: bill.account, recurrence: bill.recurrence, nextDueOn: bill.nextDueOn, active: bill.active };
-    const after = { name, category, amountUgx: args.amountUgx, account: args.account, recurrence: args.recurrence, nextDueOn: args.nextDueOn, active: args.active };
+    const after = { name, category, amountUgx: args.amountUgx, account: args.account, recurrence: args.recurrence, nextDueOn: args.nextDueOn, active: true };
     await ctx.db.patch("bills", bill._id, { ...after, scheduleStartDueOn: dateChanged ? args.nextDueOn : bill.scheduleStartDueOn ?? bill.nextDueOn, scheduleAnchorDay: anchorDay, scheduleEndOfMonth: endOfMonth });
-    await ctx.db.insert("auditEvents", { businessId: current.business._id, actorId: current.userId, action: args.active ? "bill.schedule_updated" : "bill.schedule_archived", entityType: "bill", entityId: bill._id, occurredAt: Date.now(), summary: `${args.active ? "Updated" : "Archived"} bill schedule: ${name}.`, details: JSON.stringify({ before, after }) });
+    await ctx.db.insert("auditEvents", { businessId: current.business._id, actorId: current.userId, action: "bill.schedule_updated", entityType: "bill", entityId: bill._id, occurredAt: Date.now(), summary: `Updated bill schedule: ${name}.`, details: JSON.stringify({ before, after }) });
     return null;
   },
 });
@@ -682,7 +685,7 @@ export const recordBillPayment = mutation({
     const scheduleEndOfMonth = bill.scheduleEndOfMonth ?? scheduleAnchorDay === new Date(Date.UTC(startDate.getUTCFullYear(), startDate.getUTCMonth() + 1, 0)).getUTCDate();
     const nextDueOnAfter = nextOccurrence(bill.nextDueOn, bill.recurrence, scheduleAnchorDay, scheduleEndOfMonth);
     await ctx.db.patch("bills", bill._id, { nextDueOn: nextDueOnAfter, scheduleStartDueOn, scheduleAnchorDay, scheduleEndOfMonth });
-    const paymentId = await ctx.db.insert("billPayments", { businessId: current.business._id, billId: bill._id, entryId, amountUgx, account: args.account, paidOn: args.paidOn, priorNextDueOn: bill.nextDueOn, nextDueOnAfter, idempotencyKey: args.idempotencyKey, createdBy: current.userId, createdAt: Date.now() });
+    const paymentId = await ctx.db.insert("billPayments", { businessId: current.business._id, billId: bill._id, entryId, amountUgx, account: args.account, paidOn: args.paidOn, priorNextDueOn: bill.nextDueOn, nextDueOnAfter, priorScheduleStartDueOn: bill.scheduleStartDueOn ?? bill.nextDueOn, priorScheduleAnchorDay: bill.scheduleAnchorDay ?? scheduleAnchorDay, priorScheduleEndOfMonth: bill.scheduleEndOfMonth ?? scheduleEndOfMonth, nextScheduleStartDueOn: scheduleStartDueOn, nextScheduleAnchorDay: scheduleAnchorDay, nextScheduleEndOfMonth: scheduleEndOfMonth, idempotencyKey: args.idempotencyKey, createdBy: current.userId, createdAt: Date.now() });
     await audit(ctx, current, "bill.payment_recorded", "billPayment", paymentId, `${bill.name} · ${amountUgx} · ${args.paidOn}`);
     return paymentId;
   },
@@ -708,7 +711,7 @@ export const reverseBillPayment = mutation({
     if (!latestPosted || latestPosted._id !== payment._id) throw new Error("Reverse later posted payments for this bill first so the due date can be restored safely.");
     const bill = await ctx.db.get("bills", payment.billId);
     if (!bill || bill.businessId !== current.business._id) throw new Error("The linked bill schedule is unavailable.");
-    if (!payment.nextDueOnAfter || bill.nextDueOn !== payment.nextDueOnAfter) throw new Error("The bill schedule changed after this payment. Restore or reconcile the schedule before reversing it.");
+    if (!payment.nextDueOnAfter || bill.nextDueOn !== payment.nextDueOnAfter || payment.priorScheduleStartDueOn === undefined || payment.priorScheduleAnchorDay === undefined || payment.priorScheduleEndOfMonth === undefined || payment.nextScheduleStartDueOn === undefined || payment.nextScheduleAnchorDay === undefined || payment.nextScheduleEndOfMonth === undefined || bill.scheduleStartDueOn !== payment.nextScheduleStartDueOn || bill.scheduleAnchorDay !== payment.nextScheduleAnchorDay || bill.scheduleEndOfMonth !== payment.nextScheduleEndOfMonth) throw new Error("The bill schedule changed after this payment or lacks a complete schedule snapshot. Reconcile it before reversing.");
     const entry = await ctx.db.get("entries", payment.entryId);
     if (!entry || entry.businessId !== current.business._id || entry.state !== "posted" || entry.kind !== "expense" || entry.amountUgx !== payment.amountUgx || entry.operationSource !== "bill_payment" || entry.operationKey !== payment.idempotencyKey || entry.idempotencyKey !== `bill-expense:${payment.idempotencyKey}`) {
       throw new Error("The linked bill expense is missing or changed. Reconcile the payment before reversing it.");
@@ -717,7 +720,7 @@ export const reverseBillPayment = mutation({
     if (!account) throw new Error("The account used for this payment is unavailable.");
     await reverseLinkedExpense(ctx, current, `bill-expense:${payment.idempotencyKey}`, payment.idempotencyKey, "bill_payment", reason);
     await applyAccountDelta(ctx, current.business._id, account, payment.amountUgx);
-    await ctx.db.patch("bills", bill._id, { nextDueOn: payment.priorNextDueOn });
+    await ctx.db.patch("bills", bill._id, { nextDueOn: payment.priorNextDueOn, scheduleStartDueOn: payment.priorScheduleStartDueOn, scheduleAnchorDay: payment.priorScheduleAnchorDay, scheduleEndOfMonth: payment.priorScheduleEndOfMonth });
     const now = Date.now();
     await ctx.db.patch("billPayments", payment._id, { state: "void", voidedAt: now, voidedBy: current.userId, voidReason: reason });
     await audit(ctx, current, "bill.payment_reversed", "billPayment", payment._id, reason);

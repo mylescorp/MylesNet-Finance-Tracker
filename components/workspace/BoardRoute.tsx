@@ -1,6 +1,6 @@
 "use client";
 
-import { useMutation, useQuery } from "convex/react";
+import { useConvex, useMutation, useQuery } from "convex/react";
 import { ConvexError } from "convex/values";
 import { ArrowDownRight, ArrowUpRight, Download, Printer, Share2 } from "lucide-react";
 import Link from "next/link";
@@ -27,6 +27,7 @@ type BoardSpec = {
   settings?: boolean;
   entryKind?: "sale" | "expense";
 };
+const EXPORT_ENTRY_LIMIT = 10_000;
 
 const specs: Record<string, BoardSpec> = {
   sales: {
@@ -389,7 +390,7 @@ export function BoardRoute({ route }: { route: string }) {
       <ConvexLiveStatus />
       <span className="toolbar-range">{fmtDate(range.from)} — {fmtDate(rangeLastDay.toISOString().slice(0, 10))}</span>
       <button className="button" type="button" onClick={() => window.print()}><Printer size={14} />Print</button>
-      <button className="button" type="button" onClick={() => window.print()}><Download size={14} />Export PDF</button>
+      <button className="button" type="button" onClick={() => window.print()}><Download size={14} />Print / Save PDF</button>
       <button className="button button-dark" type="button" onClick={() => void shareReport()}><Share2 size={14} />Share report</button>
       {shareFeedback && <span className="form-feedback" role="status">{shareFeedback}</span>}
     </div>
@@ -408,7 +409,7 @@ export function BoardRoute({ route }: { route: string }) {
         <EntryForm kind={screen.entryKind} />
       </Card>}
       {screen.sections.map((section) => <Card className="board-section-card" key={section.title}>
-        <div className="card-heading"><div><h2 className="card-title">{section.title}</h2><p className="card-subtitle">{section.detail}</p></div></div>
+        <div className="card-heading"><div><h2 className="card-title">{section.title}</h2><p className="card-subtitle">{section.detail}</p></div>{section.kind === "table" && section.title === (entryKind === "sale" ? "Daily sales · last 14 days" : "Expenses by category") && entryKind && settings?.access === "ready" && (settings.role === "owner" || settings.role === "cashier") && <EntryCsvExportControl businessId={settings.businessId} kind={entryKind} from={range.from} toExclusive={range.toExclusive} currency={currency} scale={currencyScale} />}</div>
         {section.kind === "table" && (screen.title === "Sales" || screen.title === "Expenses") ? (
           hasRecordData ? <div className="table-scroll"><table className="data-table"><thead><tr><th>Date</th><th>Type</th><th>Category</th><th>Account</th><th>Amount</th><th>Status</th><th>Actions</th></tr></thead><tbody>{selectedEntries.map((entry) => <tr key={entry._id}><td>{fmtDate(entry.occurredOn)}</td><td>{entry.kind}</td><td>{entry.category}</td><td>{accountLabel(entry.account)}</td><td>{fmt(entry.amountUgx)}</td><td><span className={`status-chip ${entry.state === "posted" ? "status-ok" : "status-warning"}`}>{entry.state}</span></td><td>{canVoidEntries && entry.state === "posted" && entry.canCorrect && <button className="button" type="button" onClick={() => void requestEntryCorrection(entry)}>Correct…</button>} {canVoidEntries && entry.state === "posted" && entry.canVoid && <button className="button" type="button" onClick={() => void requestEntryVoid(entry._id)}>Void…</button>}</td></tr>)}</tbody></table></div> : <EmptyPanel message="No entries yet." next="Add an entry to populate this view. The design preview figures are examples, not live business data." />
         ) : section.kind === "table" && screen.title === "Daily Report" ? <DailyHistoryTable days={weekDays} today={today} loading={trailingSevenSummary === undefined} formatDay={fmtDate} formatMoney={fmt} />
@@ -438,6 +439,48 @@ export function BoardRoute({ route }: { route: string }) {
 
 function EmptyPanel({ message, next }: { message: string; next: string }) {
   return <div className="empty-state compact-empty"><strong>{message}</strong><span>{next}</span></div>;
+}
+
+function EntryCsvExportControl({ businessId, kind, from, toExclusive, currency, scale }: { businessId: Id<"businesses">; kind: "sale" | "expense"; from: string; toExclusive: string; currency: string; scale: number }) {
+  const convex = useConvex();
+  const [exporting, setExporting] = useState(false);
+  const [message, setMessage] = useState("");
+  async function exportCsv() {
+    setExporting(true);
+    setMessage("");
+    try {
+      let cursor: string | null = null;
+      const results: Array<{ entryId: Id<"entries">; kind: "sale" | "expense"; amountUgx: number; occurredOn: string; account: "cash" | "mobile_money" | "unallocated"; category: string; note: string; state: "posted" | "void"; source: "manual" | "import" | "webhook" | "google_form"; createdAt: number; createdBy: Id<"users"> }> = [];
+      let done = false;
+      while (!done) {
+        const page: { page: typeof results; isDone: boolean; continueCursor: string } = await convex.query(api.workspace.entriesForExport, { businessId, kind, from, toExclusive, paginationOpts: { numItems: 100, cursor } });
+        if (results.length + page.page.length > EXPORT_ENTRY_LIMIT || (results.length + page.page.length === EXPORT_ENTRY_LIMIT && !page.isDone)) {
+          setMessage("This range contains more than 10,000 entries. Narrow the date range before exporting.");
+          return;
+        }
+        results.push(...page.page);
+        cursor = page.continueCursor;
+        done = page.isDone;
+      }
+    const headers = ["Date", "Type", "Category", "Account", `Amount (${currency})`, "Currency", "Status", "Source", "Entry ID", "Created at (UTC)", "Actor ID", "Description"];
+    const escape = (value: string) => `"${value.replaceAll('"', '""')}"`;
+    const rows = results.map(row => [row.occurredOn, row.kind, row.category, accountLabel(row.account), String(row.amountUgx / scale), currency, row.state, row.source, row.entryId, new Date(row.createdAt).toISOString(), row.createdBy, row.note]);
+    const csv = [headers, ...rows].map(row => row.map(escape).join(",")).join("\r\n");
+    const url = URL.createObjectURL(new Blob([`\uFEFF${csv}`], { type: "text/csv;charset=utf-8" }));
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `mylesnet-${kind}-${from}-to-${toExclusive}.csv`;
+    anchor.click();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+    setMessage(`${rows.length.toLocaleString()} ${kind} entries exported.`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Could not export this range.");
+    } finally {
+      setExporting(false);
+    }
+  }
+
+  return <div className="form-actions"><button className="button" type="button" disabled={exporting} onClick={() => void exportCsv()}><Download size={14} />{exporting ? "Preparing CSV…" : "Export CSV"}</button>{message && <span className="muted-note" role="status">{message}</span>}</div>;
 }
 
 type DailyTotal = { day: string; salesUgx: number; expensesUgx: number };
