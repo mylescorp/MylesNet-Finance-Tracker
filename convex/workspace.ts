@@ -345,8 +345,8 @@ export const dashboardSummary = query({
       salesUgx: v.number(),
       expensesUgx: v.number(),
       netUgx: v.number(),
-      cashBalanceUgx: v.number(),
-      mobileMoneyBalanceUgx: v.number(),
+      cashBalanceUgx: v.union(v.number(), v.null()),
+      mobileMoneyBalanceUgx: v.union(v.number(), v.null()),
       days: v.array(
         v.object({
           day: v.string(),
@@ -423,8 +423,8 @@ export const dashboardSummary = query({
       salesUgx,
       expensesUgx,
       netUgx: salesUgx - expensesUgx,
-      cashBalanceUgx: canViewBalances ? cashBalanceUgx : 0,
-      mobileMoneyBalanceUgx: canViewBalances ? mobileMoneyBalanceUgx : 0,
+      cashBalanceUgx: canViewBalances ? cashBalanceUgx : null,
+      mobileMoneyBalanceUgx: canViewBalances ? mobileMoneyBalanceUgx : null,
       days: days.map(({ day, salesUgx, expensesUgx }) => ({
         day,
         salesUgx,
