@@ -1,14 +1,20 @@
 import { paginationOptsValidator } from "convex/server";
+import { getAuthUserId } from "@convex-dev/auth/server";
 import { ConvexError, v } from "convex/values";
 import { mutation, query } from "./_generated/server";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
-import { getSelectedWorkspace } from "./workspaceContext";
+import type { Id } from "./_generated/dataModel";
 
 const account = v.union(v.literal("cash"), v.literal("mobile_money"), v.literal("unallocated"));
 const importType = v.union(v.literal("cashbook"), v.literal("centipid_analytics"));
 
-async function ownerContext(ctx: MutationCtx | QueryCtx) {
-  const current = await getSelectedWorkspace(ctx);
+async function ownerContext(ctx: MutationCtx | QueryCtx, businessId: Id<"businesses">) {
+  const userId = await getAuthUserId(ctx);
+  if (!userId) throw new ConvexError("Sign in to manage imports.");
+  const membership = await ctx.db.query("memberships").withIndex("by_business_and_user", q => q.eq("businessId", businessId).eq("userId", userId)).unique();
+  if (!membership?.active) throw new ConvexError("Select an active workspace membership before importing data.");
+  const business = await ctx.db.get("businesses", businessId);
+  const current = business ? { userId, membership, business } : null;
   if (!current || current.membership.role !== "owner") throw new ConvexError("Select a workspace you own before importing data.");
   return { userId: current.userId, business: current.business };
 }
@@ -25,6 +31,7 @@ function safeAdd(a: number, b: number, label: string) {
 
 export const importRows = mutation({
   args: {
+    businessId: v.id("businesses"),
     batchId: v.id("importBatches"),
     startRow: v.number(),
     rows: v.array(v.object({
@@ -35,7 +42,7 @@ export const importRows = mutation({
   },
   returns: v.object({ imported: v.number(), skipped: v.number() }),
   handler: async (ctx, args) => {
-    const { userId, business } = await ownerContext(ctx);
+    const { userId, business } = await ownerContext(ctx, args.businessId);
     const batch = await ctx.db.get("importBatches", args.batchId);
     if (!batch || batch.businessId !== business._id || batch.currency !== business.currency || batch.status !== "in_progress" || args.startRow !== batch.progressRows || args.rows.length < 1 || args.rows.length > 25 || batch.progressRows + args.rows.length > batch.totalRows) {
       throw new ConvexError("Import batch is invalid. Use batches of 1 to 25 rows.");
@@ -89,11 +96,12 @@ export const importRows = mutation({
 
 export const beginBatch = mutation({
   args: {
+    businessId: v.id("businesses"),
     sourceHash: v.string(), fileName: v.string(), importType, currency: v.string(), totalRows: v.number(), reportSummary: v.optional(v.string()),
   },
   returns: v.object({ batchId: v.id("importBatches"), status: v.union(v.literal("in_progress"), v.literal("completed")), progressRows: v.number(), importedCount: v.number(), skippedCount: v.number() }),
   handler: async (ctx, args) => {
-    const { userId, business } = await ownerContext(ctx);
+    const { userId, business } = await ownerContext(ctx, args.businessId);
     if (!/^[a-f0-9]{64}$/.test(args.sourceHash) || args.fileName.trim().length < 1 || args.fileName.length > 180 || !Number.isSafeInteger(args.totalRows) || args.totalRows < 0 || args.totalRows > 10_000 || (args.reportSummary?.length ?? 0) > 64_000) throw new ConvexError("Import summary is invalid.");
     if (args.currency !== business.currency) throw new ConvexError("Workspace currency changed while you prepared the import. Reload the page and review the CSV again.");
     if (args.importType === "centipid_analytics" && business.currency !== "UGX") throw new ConvexError("Centipid analytics reports are denominated in UGX. Set the workspace currency to UGX first.");
@@ -119,9 +127,9 @@ export const beginBatch = mutation({
 });
 
 export const completeBatch = mutation({
-  args: { batchId: v.id("importBatches") }, returns: v.null(),
+  args: { businessId: v.id("businesses"), batchId: v.id("importBatches") }, returns: v.null(),
   handler: async (ctx, args) => {
-    const { userId, business } = await ownerContext(ctx);
+    const { userId, business } = await ownerContext(ctx, args.businessId);
     const batch = await ctx.db.get("importBatches", args.batchId);
     if (!batch || batch.businessId !== business._id) throw new ConvexError("Import batch not found.");
     if (batch.status === "completed") return null;
@@ -134,9 +142,9 @@ export const completeBatch = mutation({
 });
 
 export const cancelBatch = mutation({
-  args: { batchId: v.id("importBatches") }, returns: v.null(),
+  args: { businessId: v.id("businesses"), batchId: v.id("importBatches") }, returns: v.null(),
   handler: async (ctx, args) => {
-    const { userId, business } = await ownerContext(ctx);
+    const { userId, business } = await ownerContext(ctx, args.businessId);
     const batch = await ctx.db.get("importBatches", args.batchId);
     if (!batch || batch.businessId !== business._id) throw new ConvexError("Import batch not found.");
     if (batch.status !== "in_progress") return null;
@@ -147,10 +155,10 @@ export const cancelBatch = mutation({
 });
 
 export const startBatchReversal = mutation({
-  args: { batchId: v.id("importBatches"), reason: v.string() },
+  args: { businessId: v.id("businesses"), batchId: v.id("importBatches"), reason: v.string() },
   returns: v.object({ status: v.union(v.literal("reversing"), v.literal("reversed")), rollbackProgressRows: v.number(), cursor: v.union(v.string(), v.null()) }),
   handler: async (ctx, args) => {
-    const { userId, business } = await ownerContext(ctx);
+    const { userId, business } = await ownerContext(ctx, args.businessId);
     const batch = await ctx.db.get("importBatches", args.batchId);
     if (!batch || batch.businessId !== business._id) throw new ConvexError("Import batch not found.");
     if (batch.status === "reversed") return { status: "reversed" as const, rollbackProgressRows: batch.rollbackProgressRows ?? 0, cursor: null };
@@ -167,10 +175,10 @@ export const startBatchReversal = mutation({
 });
 
 export const reverseBatchChunk = mutation({
-  args: { batchId: v.id("importBatches"), cursor: v.union(v.string(), v.null()) },
+  args: { businessId: v.id("businesses"), batchId: v.id("importBatches"), cursor: v.union(v.string(), v.null()) },
   returns: v.object({ status: v.union(v.literal("reversing"), v.literal("reversed")), rollbackProgressRows: v.number(), cursor: v.union(v.string(), v.null()), processedRows: v.number() }),
   handler: async (ctx, args) => {
-    const { userId, business } = await ownerContext(ctx);
+    const { userId, business } = await ownerContext(ctx, args.businessId);
     const batch = await ctx.db.get("importBatches", args.batchId);
     if (!batch || batch.businessId !== business._id) throw new ConvexError("Import batch not found.");
     if (batch.status === "reversed") return { status: "reversed" as const, rollbackProgressRows: batch.rollbackProgressRows ?? 0, cursor: null, processedRows: 0 };
@@ -219,19 +227,19 @@ export const reverseBatchChunk = mutation({
 });
 
 export const history = query({
-  args: { paginationOpts: paginationOptsValidator },
+  args: { businessId: v.id("businesses"), paginationOpts: paginationOptsValidator },
   handler: async (ctx, args) => {
-    const { business } = await ownerContext(ctx);
+    const { business } = await ownerContext(ctx, args.businessId);
     const result = await ctx.db.query("importBatches").withIndex("by_business_and_created", q => q.eq("businessId", business._id)).order("desc").paginate(args.paginationOpts);
     return { ...result, page: result.page.map(({ _id, fileName, importType, totalRows, importedCount, skippedCount, progressRows, status, rollbackProgressRows, createdAt }) => ({ _id, fileName, importType, totalRows, importedCount, skippedCount, progressRows, status, rollbackProgressRows: rollbackProgressRows ?? 0, createdAt })) };
   },
 });
 
 export const reportDetails = query({
-  args: { batchId: v.id("importBatches") },
+  args: { businessId: v.id("businesses"), batchId: v.id("importBatches") },
   returns: v.union(v.string(), v.null()),
   handler: async (ctx, args) => {
-    const { business } = await ownerContext(ctx);
+    const { business } = await ownerContext(ctx, args.businessId);
     const batch = await ctx.db.get("importBatches", args.batchId);
     if (!batch || batch.businessId !== business._id || batch.importType !== "centipid_analytics") return null;
     return (await ctx.db.query("importReportDetails").withIndex("by_batch", q => q.eq("batchId", batch._id)).unique())?.reportSummary ?? null;
