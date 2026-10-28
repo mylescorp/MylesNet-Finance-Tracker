@@ -202,6 +202,15 @@ export const billArchive = query({
   },
 });
 
+export const partnerArchive = query({
+  args: { businessId: v.id("businesses"), paginationOpts: paginationOptsValidator },
+  handler: async (ctx, args) => {
+    const current = await workspace(ctx, args.businessId);
+    if (!current || current.membership.role !== "owner") throw new Error("Archived partner records are available to workspace owners only.");
+    return await ctx.db.query("partners").withIndex("by_business_and_active", q => q.eq("businessId", current.business._id).eq("active", false)).order("desc").paginate(args.paginationOpts);
+  },
+});
+
 // Partner accounts receive only their own identity, ownership percentage, and
 // attributed capital contributions. Business-wide ledger totals stay private.
 export const partnerStatement = query({
@@ -838,5 +847,59 @@ export const createPartner = mutation({
     await ctx.db.insert("partnerOwnershipHistory", { businessId: current.business._id, partnerId, ownershipBps: args.ownershipBps, effectiveOn: today, createdBy: current.userId, createdAt: now, idempotencyKey: `${args.idempotencyKey}:ownership` });
     await audit(ctx, current, "partner.created", "partner", partnerId, `${name} added with ${args.ownershipBps / 100}% ownership.`);
     return partnerId;
+  },
+});
+
+export const updatePartnerProfile = mutation({
+  args: { businessId: v.id("businesses"), partnerId: v.id("partners"), name: v.string() },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const current = await workspace(ctx, args.businessId);
+    if (!current || current.membership.role !== "owner") throw new Error("Only a workspace owner can update partner details.");
+    const partner = await ctx.db.get("partners", args.partnerId);
+    if (!partner || partner.businessId !== current.business._id) throw new Error("Partner record not found.");
+    if (!partner.active) throw new Error("Restore the partner record before editing its name.");
+    const name = args.name.trim();
+    if (name.length < 2 || name.length > 100) throw new Error("Partner name must use 2 to 100 characters.");
+    const duplicate = await ctx.db.query("partners").withIndex("by_business_and_active", q => q.eq("businessId", current.business._id).eq("active", partner.active)).take(101);
+    if (duplicate.some(row => row._id !== partner._id && row.name.toLocaleLowerCase() === name.toLocaleLowerCase())) throw new Error("A partner with this name already exists in the same record list.");
+    const before = partner.name;
+    if (before === name) return null;
+    await ctx.db.patch("partners", partner._id, { name });
+    await audit(ctx, current, "partner.profile_updated", "partner", partner._id, `Updated partner profile name: ${before} → ${name}.`, JSON.stringify({ before: { name: before }, after: { name } }));
+    return null;
+  },
+});
+
+export const updatePartnerStatus = mutation({
+  args: { businessId: v.id("businesses"), partnerId: v.id("partners"), active: v.boolean() },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const current = await workspace(ctx, args.businessId);
+    if (!current || current.membership.role !== "owner") throw new Error("Only a workspace owner can archive or restore partners.");
+    const partner = await ctx.db.get("partners", args.partnerId);
+    if (!partner || partner.businessId !== current.business._id) throw new Error("Partner record not found.");
+    if (partner.active === args.active) return null;
+    if (!args.active) {
+      const today = dayInZone(Date.now(), current.business.timezone);
+      const share = await ownershipAtDay(ctx, current.business._id, partner, today);
+      if (share !== 0) throw new Error("Reallocate this partner’s ownership to zero with an effective-dated ownership update before archiving.");
+      const scheduled = await ctx.db.query("partnerOwnershipHistory")
+        .withIndex("by_business_and_partner_and_effectiveOn", q => q.eq("businessId", current.business._id).eq("partnerId", partner._id).gt("effectiveOn", today))
+        .take(101);
+      if (scheduled.length > 100 || scheduled.some(row => row.ownershipBps > 0)) throw new Error("Resolve future ownership changes before archiving this partner.");
+      const [memberships, invitations] = await Promise.all([
+        ctx.db.query("memberships").withIndex("by_business_and_partner_and_active", q => q.eq("businessId", current.business._id).eq("partnerId", partner._id).eq("active", true)).take(1),
+        ctx.db.query("invitations").withIndex("by_business_and_partner_and_active", q => q.eq("businessId", current.business._id).eq("partnerId", partner._id).eq("active", true)).take(1),
+      ]);
+      if (memberships.length || invitations.length) throw new Error("Unlink or revoke the partner’s active workspace access and invitations before archiving.");
+    } else {
+      const active = await ctx.db.query("partners").withIndex("by_business_and_active", q => q.eq("businessId", current.business._id).eq("active", true)).take(101);
+      if (active.length >= 100) throw new Error("A workspace can have up to 100 active partners.");
+      if (active.some(row => row.name.toLocaleLowerCase() === partner.name.toLocaleLowerCase())) throw new Error("An active partner already has this name.");
+    }
+    await ctx.db.patch("partners", partner._id, { active: args.active });
+    await audit(ctx, current, args.active ? "partner.restored" : "partner.archived", "partner", partner._id, `${args.active ? "Restored" : "Archived"} partner record: ${partner.name}.`);
+    return null;
   },
 });

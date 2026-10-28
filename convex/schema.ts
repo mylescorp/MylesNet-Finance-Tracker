@@ -93,7 +93,7 @@ export default defineSchema({
     capitalContributedUgx: v.optional(v.number()),
     active: v.boolean(),
     idempotencyKey: v.optional(v.string()),
-  }).index("by_business_and_active", ["businessId", "active"]).index("by_business_and_idempotency", ["businessId", "idempotencyKey"]),
+  }).index("by_business", ["businessId"]).index("by_business_and_active", ["businessId", "active"]).index("by_business_and_idempotency", ["businessId", "idempotencyKey"]),
   partnerOwnershipHistory: defineTable({
     businessId: v.id("businesses"),
     partnerId: v.id("partners"),

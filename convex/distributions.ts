@@ -95,7 +95,16 @@ export const setOwnership = mutation({
     if (!validDay(args.effectiveOn) || args.effectiveOn < today) throw new Error("Ownership changes can take effect today or later; earlier periods cannot be rewritten.");
     if (args.idempotencyKey.length < 16 || args.idempotencyKey.length > 120) throw new Error("Refresh the ownership form and try again.");
     const prior = await ctx.db.query("partnerOwnershipHistory").withIndex("by_business_and_idempotency", q => q.eq("businessId", current.business._id).eq("idempotencyKey", `${args.idempotencyKey}:batch`)).unique();
-    if (prior) return null;
+    if (prior) {
+      const savedRows = await Promise.all(args.changes.map(async row => {
+        const saved = await ctx.db.query("partnerOwnershipHistory").withIndex("by_business_and_idempotency", q => q.eq("businessId", current.business._id).eq("idempotencyKey", `${args.idempotencyKey}:${row.partnerId}`)).unique();
+        return saved;
+      }));
+      if (prior.effectiveOn !== args.effectiveOn || savedRows.some((saved, index) => saved?.partnerId !== args.changes[index].partnerId || saved.ownershipBps !== args.changes[index].ownershipBps || saved.effectiveOn !== args.effectiveOn)) {
+        throw new Error("This ownership request key was already used for different shares or an effective date.");
+      }
+      return null;
+    }
     const partners = await ctx.db.query("partners").withIndex("by_business_and_active", q => q.eq("businessId", current.business._id).eq("active", true)).take(101);
     if (partners.length === 0 || partners.length > 100) throw new Error("Add or review the active partner records before changing ownership.");
     if (args.changes.length !== partners.length || new Set(args.changes.map(row => row.partnerId)).size !== partners.length) throw new Error("Submit one ownership share for every active partner.");
@@ -152,9 +161,9 @@ export const create = mutation({
     const profitUgx = safeAdd(salesUgx, -expensesUgx, "Cashbook net");
     if (profitUgx <= 0) throw new Error("This period has no positive recorded cashbook net available for distribution.");
     if (args.distributionUgx > profitUgx) throw new Error("The proposed distribution cannot exceed positive recorded cashbook net for this period.");
-    const partners = await ctx.db.query("partners").withIndex("by_business_and_active", q => q.eq("businessId", business._id).eq("active", true)).take(101);
-    if (partners.length === 0 || partners.length > 100) throw new Error("Add or review active partner records before preparing a distribution.");
-    const ownership = (await ownershipAt(ctx, business._id, partners, shiftDay(args.periodToExclusive, -1))).filter(row => row.existedAtPeriodEnd);
+    const partnerHistory = await ctx.db.query("partners").withIndex("by_business", q => q.eq("businessId", business._id)).take(501);
+    if (partnerHistory.length === 0 || partnerHistory.length > 500) throw new Error("Review partner history before preparing a distribution; this workspace exceeds the safe historical partner limit.");
+    const ownership = (await ownershipAt(ctx, business._id, partnerHistory, shiftDay(args.periodToExclusive, -1))).filter(row => row.existedAtPeriodEnd && row.ownershipBps > 0);
     const totalBps = ownership.reduce((sum, row) => safeAdd(sum, row.ownershipBps, "Partner ownership"), 0);
     if (totalBps !== 10000) throw new Error(`Active ownership for ${shiftDay(args.periodToExclusive, -1)} must total exactly 100%; it currently totals ${(totalBps / 100).toFixed(2)}%.`);
     const balances = await ctx.db.query("accountBalances").withIndex("by_business_and_account", q => q.eq("businessId", business._id)).take(2);
