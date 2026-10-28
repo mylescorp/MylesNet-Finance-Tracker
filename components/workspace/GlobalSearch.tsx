@@ -53,6 +53,12 @@ export function GlobalSearch({ searchScope }: { searchScope: string | null }) {
   const recentSearches = recentSearchState.key === recentSearchesKey ? recentSearchState.values : [];
   const resultCount = normalizedTerm.length >= 2 ? results?.length ?? 0 : 0;
   const itemCount = showRecent ? recentSearches.length : resultCount;
+  const selectedIndex = itemCount === 0 ? 0 : Math.min(activeIndex, itemCount - 1);
+
+  useEffect(() => {
+    if (!open || itemCount === 0) return;
+    document.getElementById(`global-search-option-${selectedIndex}`)?.scrollIntoView({ block: "nearest" });
+  }, [itemCount, open, selectedIndex]);
 
   const openSearch = useCallback(() => {
     setRecentSearchState({ key: recentSearchesKey, values: readRecentSearches(recentSearchesKey) });
@@ -118,22 +124,23 @@ export function GlobalSearch({ searchScope }: { searchScope: string | null }) {
   function handleKeyDown(event: React.KeyboardEvent<HTMLInputElement>) {
     if (event.key === "Escape") {
       event.preventDefault();
+      event.stopPropagation();
       closeSearch();
       return;
     }
     if (event.key === "ArrowDown" && itemCount > 0) {
       event.preventDefault();
-      setActiveIndex((index) => (index + 1) % itemCount);
+      setActiveIndex((selectedIndex + 1) % itemCount);
     } else if (event.key === "ArrowUp" && itemCount > 0) {
       event.preventDefault();
-      setActiveIndex((index) => (index - 1 + itemCount) % itemCount);
+      setActiveIndex((selectedIndex - 1 + itemCount) % itemCount);
     } else if (event.key === "Enter" && itemCount > 0) {
       event.preventDefault();
       if (showRecent) {
-        setTerm(recentSearches[activeIndex] ?? "");
+        setTerm(recentSearches[selectedIndex] ?? "");
         setActiveIndex(0);
-      } else if (results?.[activeIndex]) {
-        selectResult(results[activeIndex]);
+      } else if (results?.[selectedIndex]) {
+        selectResult(results[selectedIndex]);
       }
     }
   }
@@ -141,6 +148,7 @@ export function GlobalSearch({ searchScope }: { searchScope: string | null }) {
   function handleDialogKeyDown(event: React.KeyboardEvent<HTMLElement>) {
     if (event.key === "Escape") {
       event.preventDefault();
+      event.stopPropagation();
       closeSearch();
       return;
     }
@@ -172,7 +180,7 @@ export function GlobalSearch({ searchScope }: { searchScope: string | null }) {
             ref={inputRef}
             aria-label="Search anything in this workspace"
             aria-controls="global-search-options"
-            aria-activedescendant={itemCount ? `global-search-option-${activeIndex}` : undefined}
+            aria-activedescendant={itemCount ? `global-search-option-${selectedIndex}` : undefined}
             placeholder="Search anything…"
             value={term}
             onChange={(event) => { setTerm(event.target.value); setActiveIndex(0); }}
@@ -184,11 +192,11 @@ export function GlobalSearch({ searchScope }: { searchScope: string | null }) {
         <div className="global-search-body" id="global-search-options" role="listbox" aria-label={showRecent ? "Recent searches" : "Matching records"}>
           {showRecent ? <>
             <div className="global-search-section-heading"><span>Recent</span>{recentSearches.length > 0 && <button type="button" onClick={() => { setRecentSearchState({ key: recentSearchesKey, values: [] }); try { if (recentSearchesKey) window.localStorage.removeItem(recentSearchesKey); } catch { /* Ignore unavailable storage. */ } }}>Clear</button>}</div>
-            {recentSearches.length === 0 ? <p className="global-search-empty">Search saved sales and expenses in this workspace.</p> : recentSearches.map((recent, index) => <button className={`global-search-recent${activeIndex === index ? " is-active" : ""}`} id={`global-search-option-${index}`} role="option" aria-selected={activeIndex === index} type="button" key={recent} onMouseEnter={() => setActiveIndex(index)} onClick={() => { setTerm(recent); setActiveIndex(0); inputRef.current?.focus(); }}><Clock3 size={16} aria-hidden="true" /><span>{recent}</span></button>)}
+            {recentSearches.length === 0 ? <p className="global-search-empty">Search saved sales and expenses in this workspace.</p> : recentSearches.map((recent, index) => <button className={`global-search-recent${selectedIndex === index ? " is-active" : ""}`} id={`global-search-option-${index}`} role="option" aria-selected={selectedIndex === index} type="button" key={recent} onMouseEnter={() => setActiveIndex(index)} onClick={() => { setTerm(recent); setActiveIndex(0); inputRef.current?.focus(); }}><Clock3 size={16} aria-hidden="true" /><span>{recent}</span></button>)}
           </> : normalizedTerm.length < 2 ? <p className="global-search-empty">Type at least 2 characters to search saved records.</p>
             : results === undefined ? <p className="global-search-empty">Searching this workspace…</p>
               : results.length === 0 ? <p className="global-search-empty">No matching saved records.</p>
-                : results.map((entry, index) => <button className={`global-search-result${activeIndex === index ? " is-active" : ""}`} id={`global-search-option-${index}`} role="option" aria-selected={activeIndex === index} type="button" key={entry._id} onMouseEnter={() => setActiveIndex(index)} onClick={() => selectResult(entry)}>
+                : results.map((entry, index) => <button className={`global-search-result${selectedIndex === index ? " is-active" : ""}`} id={`global-search-option-${index}`} role="option" aria-selected={selectedIndex === index} type="button" key={entry._id} onMouseEnter={() => setActiveIndex(index)} onClick={() => selectResult(entry)}>
                   <span className={`search-result-icon ${entry.kind === "sale" ? "search-result-sale" : "search-result-expense"}`}>{entry.kind === "sale" ? "+" : "−"}</span>
                   <span className="search-result-main"><strong>{entry.note || entry.category}</strong><small>{entry.occurredOn} · {entry.category} · {entry.kind === "sale" ? "Sale" : "Expense"}</small></span>
                   <span className="search-result-amount">{money(entry.amountUgx, 10 ** (settings?.access === "ready" ? settings.currencyMinorDigits : 0), settings?.access === "ready" ? settings.locale : "en-UG")} {settings?.access === "ready" ? settings.currency : "UGX"}</span>
