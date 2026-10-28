@@ -7,8 +7,8 @@ const pages = {
   finance: { title: "Finance settings", description: "Configure cashbook categories, targets, and classification." },
   rules: { title: "Rules", description: "Set review thresholds, entry requirements, and data-quality checks." },
   data: { title: "Data and privacy", description: "Export records, review data quality, and inspect integration and backup readiness." },
-  access: { title: "Access", description: "Invite teammates and review workspace roles and access changes." },
-  releases: { title: "Releases", description: "Review the running application version and verified release notes." },
+  access: { title: "Access", description: "Approve users, assign workspace roles, and review permissions and access changes." },
+  releases: { title: "Product updates", description: "Review improvements to your finance workspace and service continuity information." },
 } as const;
 
 export default async function SettingsPage({ params }: { params: Promise<{ tab: string }> }) {

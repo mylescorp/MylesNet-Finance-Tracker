@@ -8,8 +8,9 @@
  * @module
  */
 
-import type * as auth from "../auth.js";
+import type * as accessControl from "../accessControl.js";
 import type * as analytics from "../analytics.js";
+import type * as auth from "../auth.js";
 import type * as centipid from "../centipid.js";
 import type * as centipidHttp from "../centipidHttp.js";
 import type * as centipidUtils from "../centipidUtils.js";
@@ -30,8 +31,9 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
-  auth: typeof auth;
+  accessControl: typeof accessControl;
   analytics: typeof analytics;
+  auth: typeof auth;
   centipid: typeof centipid;
   centipidHttp: typeof centipidHttp;
   centipidUtils: typeof centipidUtils;

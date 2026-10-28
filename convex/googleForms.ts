@@ -2,6 +2,7 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import { ConvexError, v } from "convex/values";
 import { internalMutation, mutation, query } from "./_generated/server";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
+import { hasPermission } from "./accessControl";
 
 type Ctx = MutationCtx | QueryCtx;
 type Kind = "sale" | "expense" | "movement" | "savings" | "loan" | "unknown";
@@ -11,7 +12,7 @@ async function owner(ctx: Ctx) {
   if (!userId) throw new ConvexError("Sign in before managing the Google Forms connection.");
   const memberships = await ctx.db.query("memberships").withIndex("by_user", q => q.eq("userId", userId)).take(20);
   const active = memberships.filter(item => item.active);
-  if (memberships.length >= 20 || active.length !== 1 || active[0].role !== "owner") throw new ConvexError("Only the owner of one active workspace can manage Google Forms.");
+  if (memberships.length >= 20 || active.length !== 1 || !(await hasPermission(ctx, active[0], "integrations.manage"))) throw new ConvexError("Your role cannot manage Google Forms.");
   const business = await ctx.db.get("businesses", active[0].businessId);
   if (!business) throw new ConvexError("Workspace not found.");
   return { userId, business };
@@ -120,7 +121,10 @@ export const receive = internalMutation({
     if (existing) return { status: "duplicate" as const };
     const submitter = input.submittedByEmail ? await ctx.db.query("users").withIndex("email", q => q.eq("email", input.submittedByEmail)).first() : null;
     const member = submitter ? await ctx.db.query("memberships").withIndex("by_business_and_user", q => q.eq("businessId", business._id).eq("userId", submitter._id)).first() : null;
-    const authorizedSubmitter = submitter && member?.active && (member.role === "owner" || member.role === "cashier") ? submitter : null;
+    const canSubmitThisKind = member?.active && (input.kind === "sale"
+      ? await hasPermission(ctx, member, "sales.create")
+      : input.kind === "expense" ? await hasPermission(ctx, member, "expenses.create") : false);
+    const authorizedSubmitter = submitter && canSubmitThisKind ? submitter : null;
     const prefs = await ctx.db.query("workspacePreferences").withIndex("by_business", q => q.eq("businessId", business._id)).unique();
     const digits = 0; // The legacy Google Form labels its finance amounts in UGX.
     const now = Date.now();
@@ -130,7 +134,7 @@ export const receive = internalMutation({
     let totalUgx = 0;
     let summary = authorizedSubmitter
       ? "Submission received and held for review; this form does not provide enough detail to post it safely."
-      : "Submission needs review because the respondent email is not linked to an active owner or cashier account.";
+      : "Submission needs review because the respondent does not have permission to create this type of record.";
     const changes: { kind: "sale" | "expense"; amountUgx: number; category: string; account: "cash" | "mobile_money"; note: string }[] = [];
     if (authorizedSubmitter && input.kind === "sale" && validDay(date)) {
       const sales = [

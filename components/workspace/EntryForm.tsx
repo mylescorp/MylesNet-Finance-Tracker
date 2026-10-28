@@ -16,12 +16,11 @@ export function EntryForm({ kind }: { kind: EntryKind }) {
   const setDrawerBusy = useRecordEntryBusy();
   const createEntry = useMutation(api.workspace.createEntry);
   const access = useQuery(api.workspace.currentAccess, {});
-  const settings = useQuery(api.workspace.businessSettings, {});
-  const preferences = useQuery(api.settings.overview, {});
-  const timezone = settings?.access === "ready" ? settings.timezone : "Africa/Kampala";
-  const currency = settings?.access === "ready" ? settings.currency : "UGX";
-  const currencyScale = 10 ** (preferences?.access === "ready" ? (preferences.currencyMinorDigits ?? 0) : 0);
-  const categories = preferences?.access === "ready" ? (kind === "sale" ? preferences.incomeCategories : preferences.expenseCategories) : [kind === "sale" ? "Product sales" : "Other expense"];
+  const context = useQuery(api.settings.runtimeContext, {});
+  const timezone = context?.access === "ready" ? context.timezone : "Africa/Kampala";
+  const currency = context?.access === "ready" ? context.currency : "UGX";
+  const currencyScale = 10 ** (context?.access === "ready" ? context.currencyMinorDigits : 0);
+  const categories = context?.access === "ready" ? (kind === "sale" ? context.incomeCategories : context.expenseCategories) : [kind === "sale" ? "Product sales" : "Other expense"];
   const [account, setAccount] = useState<"cash" | "mobile_money">("cash");
   const [occurredOn, setOccurredOn] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -77,8 +76,9 @@ export function EntryForm({ kind }: { kind: EntryKind }) {
       setFeedback({ message: error instanceof Error ? error.message : "Could not save this entry. Try again.", error: true });
     } finally { setBusy(false); setDrawerBusy(false); }
   }
-  if (access?.access === "ready" && access.role === "partner") {
-    return <div className="empty-state" role="status"><strong>Partner accounts can’t add ledger entries.</strong><span>Your scoped partner statement will be available here after partner reporting is connected.</span></div>;
+  const createPermission = kind === "sale" ? "sales.create" : "expenses.create";
+  if (access?.access === "ready" && !access.permissions.includes(createPermission)) {
+    return <div className="empty-state" role="status"><strong>Your role cannot create {kind === "sale" ? "sales" : "expenses"}.</strong><span>Ask a workspace administrator to update your role permissions.</span></div>;
   }
   return <form ref={formRef} className="form-layout" onSubmit={submit}>
     <div className="field"><label htmlFor="entry-amount">Amount ({currency})</label><input id="entry-amount" name="amount" inputMode="decimal" type="number" min={1 / currencyScale} step={1 / currencyScale} placeholder={currencyScale === 1 ? "e.g. 25,000" : "e.g. 25.00"} required /></div>

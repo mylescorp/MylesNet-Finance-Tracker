@@ -21,7 +21,7 @@ export function CentipidWebhookPanel() {
     setBusy(true); setMessage("");
     try {
       const base = siteBase();
-      if (!base) throw new Error("Convex site URL is unavailable. Check NEXT_PUBLIC_CONVEX_URL in the deployment environment.");
+      if (!base) throw new Error("This integration is unavailable right now. Contact your administrator.");
       const token = await create({});
       setWebhookUrl(`${base}/centipid?token=${encodeURIComponent(token)}`);
       setMessage("Token created. Copy this URL into Centipid now; the token is only shown once. The current Apps Script URL stays active until you replace it.");

@@ -2,6 +2,7 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import { ConvexError, v } from "convex/values";
 import { internalMutation, mutation, query } from "./_generated/server";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
+import { hasPermission } from "./accessControl";
 import { isIgnoredCentipidEvent } from "./centipidUtils";
 
 function addSafeInteger(left: number, right: number, label: string) {
@@ -15,7 +16,7 @@ async function owner(ctx: MutationCtx | QueryCtx) {
   if (!userId) throw new ConvexError("Sign in before managing Centipid integration.");
   const memberships = await ctx.db.query("memberships").withIndex("by_user", q => q.eq("userId", userId)).take(20);
   const active = memberships.filter(item => item.active);
-  if (memberships.length >= 20 || active.length !== 1 || active[0].role !== "owner") throw new ConvexError("Only the owner of one active workspace can manage the integration.");
+  if (memberships.length >= 20 || active.length !== 1 || !(await hasPermission(ctx, active[0], "integrations.manage"))) throw new ConvexError("Your role cannot manage the integration.");
   const business = await ctx.db.get("businesses", active[0].businessId);
   if (!business) throw new ConvexError("Workspace not found.");
   return { userId, business };

@@ -29,9 +29,9 @@ export function PartnerDistributions({ range, currency, scale, locale, dateForma
   const [reserve, setReserve] = useState("");
   const [minimumPayout, setMinimumPayout] = useState("");
   const fmt = (minor: number) => new Intl.NumberFormat(locale, { style: "currency", currency, maximumFractionDigits: Math.round(Math.log10(scale)) }).format(minor / scale);
-  if (!state || state.access !== "ready") return <Card><div className="empty-state" role="status"><strong>{state?.access === "restricted" ? "Partner distribution controls are restricted." : "Loading distribution controls…"}</strong><span>Workspace owner and finance approver permissions are checked by Convex.</span></div></Card>;
-  const owner = state.role === "owner";
-  const reviewer = owner || state.role === "finance_approver";
+  if (!state || state.access !== "ready") return <Card><div className="empty-state" role="status"><strong>{state?.access === "restricted" ? "Partner distribution controls are restricted." : "Loading distribution controls…"}</strong><span>These controls require distribution management or approval permission.</span></div></Card>;
+  const owner = state.canManage;
+  const reviewer = state.canApprove;
   async function run(action: () => Promise<unknown>, success: string) {
     setBusy(true); setDrawerBusy(true); setFeedback("");
     try {

@@ -3,6 +3,7 @@ import { v } from "convex/values";
 import { query } from "./_generated/server";
 import type { QueryCtx } from "./_generated/server";
 import type { Id } from "./_generated/dataModel";
+import { hasPermission } from "./accessControl";
 
 function safeAdd(a: number, b: number, label: string) {
   const result = a + b;
@@ -50,7 +51,7 @@ export const overview = query({
     const membership = active[0];
     const business = await ctx.db.get("businesses", membership.businessId);
     if (!business) return { access: "pending" as const };
-    if (membership.role === "partner" || membership.role === "finance_approver") return { access: "restricted" as const };
+    if (!(await hasPermission(ctx, membership, "analytics.view"))) return { access: "restricted" as const };
 
     const month = monthBounds(args.today);
     const runwayFrom = shiftDay(args.today, -29);

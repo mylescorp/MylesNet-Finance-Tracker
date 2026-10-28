@@ -9,7 +9,6 @@ import { api } from "@/convex/_generated/api";
 import { accountLabel } from "@/lib/finance";
 import { Card, WorkspaceTitle } from "@/components/AppShell";
 import { OwnerSetup } from "@/components/workspace/OwnerSetup";
-import { ConvexLiveStatus } from "@/components/workspace/ConvexLiveStatus";
 import { formatBusinessDay } from "@/lib/format";
 import { AnalyticsInsights } from "@/components/workspace/AnalyticsInsights";
 
@@ -42,8 +41,9 @@ export default function DashboardPage() {
   const [customFrom, setCustomFrom] = useState(todayKey("Africa/Kampala"));
   const [customTo, setCustomTo] = useState(todayKey("Africa/Kampala"));
   const [shareFeedback, setShareFeedback] = useState("");
-  const settings = useQuery(api.workspace.businessSettings, {});
-  const preferences = useQuery(api.settings.overview, {});
+  const settings = useQuery(api.settings.runtimeContext, {});
+  const access = useQuery(api.workspace.currentAccess, {});
+  const preferences = settings;
   const timezone = settings?.access === "ready" ? settings.timezone : "Africa/Kampala";
   const weekStartsOn = settings?.access === "ready" ? settings.weekStartsOn : "monday";
   const currency = settings?.access === "ready" ? settings.currency : "UGX";
@@ -132,14 +132,13 @@ export default function DashboardPage() {
     {period === "custom" && <div className="custom-period-row"><label>From <input type="date" value={customFrom} onChange={(event) => setCustomFrom(event.target.value)} /></label><label>To <input type="date" value={customTo} min={customFrom || undefined} onChange={(event) => setCustomTo(event.target.value)} /></label>{customRangeError && <span className="form-feedback form-error" role="alert">{customRangeError}</span>}</div>}
     <div className="dashboard-banner"><Image src="/brand/banner.png" alt="MylesNet Finance Tracker" fill priority sizes="(max-width: 760px) 100vw, 1100px" /><div className="banner-caption">Your business, clearly in view.</div></div>
     <div className="board-toolbar no-print">
-      <ConvexLiveStatus />
       {customRangeInvalid ? <span className="toolbar-range">Complete the custom date range</span> : <span className="toolbar-range">{fmtDate(range.from)} — {fmtDate(rangeLastDay.toISOString().slice(0, 10))}</span>}
       <button className="button" type="button" onClick={() => window.print()}><Printer size={14} />Print</button>
       <button className="button" type="button" onClick={() => window.print()}><Download size={14} />Export PDF</button>
       <button className="button button-dark" type="button" onClick={() => void shareDashboard()}><Share2 size={14} />Share report</button>
       {shareFeedback && <span className="form-feedback" role="status">{shareFeedback}</span>}
     </div>
-    {settings?.role !== "finance_approver" && <Card className="quick-add-strip no-print"><span className="eyebrow">Quick add</span><Link className="button" href="/sales">+ Add sale</Link><Link className="button" href="/expenses">+ Add expense</Link><Link className="button" href="/movements">Record withdrawal</Link><Link className="button" href="/partners">Record payout</Link><span className="quick-add-note">Saved entries update cashbook totals and account balances.</span></Card>}
+    {access?.access === "ready" && (access.permissions.includes("sales.create") || access.permissions.includes("expenses.create")) && <Card className="quick-add-strip no-print"><span className="eyebrow">Quick add</span>{access.permissions.includes("sales.create") && <Link className="button" href="/sales">+ Add sale</Link>}{access.permissions.includes("expenses.create") && <Link className="button" href="/expenses">+ Add expense</Link>}{access.permissions.includes("movements.create") && <Link className="button" href="/movements">Record withdrawal</Link>}{access.permissions.includes("partners.manage") && <Link className="button" href="/partners">Record payout</Link>}<span className="quick-add-note">Saved entries update cashbook totals and account balances.</span></Card>}
     <Card className="dashboard-sales-hero">
       <div className="hero-sales-number"><span className="eyebrow">Today’s sales · {fmtDate(today)}</span><strong>{isReady ? formatMoney(todaySales) : "—"}<small>{currency}</small></strong><span className="muted-note">Recorded sales only</span></div>
       <div className="hero-sales-trend"><div className="card-heading"><div><h2 className="card-title">Sales activity</h2><p className="card-subtitle">Daily totals · last 14 days</p></div></div>{customRangeInvalid ? <Empty message={customRangeError} /> : trendSummary === undefined ? <Empty message="Loading workspace data…" /> : trendSummary.access !== "ready" ? <Empty message="Trend data is not available for this workspace." /> : dayBars.length === 0 ? <Empty message="No sales have been recorded in the last 14 days." /> : <><div className="chart-bars" role="img" aria-label={`Sales over ${dayBars.length} days. Total ${formatMoney(trendSummary.salesUgx)} ${currency}.`}>{dayBars.map((day) => <div className="chart-day" key={day.day} title={`${fmtDate(day.day)}: ${formatMoney(day.salesUgx)} ${currency}`}><div className="chart-bar" style={{ height: `${Math.max(2, day.salesUgx / peak * 100)}%`, opacity: day.day === today ? 1 : 0.45 }} /></div>)}</div><div className="chart-labels"><span>{dayBars[0] ? fmtDate(dayBars[0].day) : ""}</span><span>{dayBars.at(-1) ? fmtDate(dayBars.at(-1)!.day) : ""}</span></div></>}</div>
@@ -159,8 +158,8 @@ export default function DashboardPage() {
       <Card className="dashboard-period-card"><div className="card-heading"><div><h2 className="card-title">Year to date</h2><p className="card-subtitle">From your configured financial year</p></div></div><div className="dashboard-ytd-metrics"><div><span>Sales</span><strong>{yearSummary?.access === "ready" ? `${formatMoney(yearSummary.salesUgx)} ${currency}` : "—"}</strong></div><div><span>Expenses</span><strong>{yearSummary?.access === "ready" ? `${formatMoney(yearSummary.expensesUgx)} ${currency}` : "—"}</strong></div><div><span>Net</span><strong>{yearSummary?.access === "ready" ? `${formatMoney(yearSummary.netUgx)} ${currency}` : "—"}</strong></div></div></Card>
       <Card className="dashboard-period-card dashboard-trend-card"><div className="card-heading"><div><h2 className="card-title">Daily sales trend</h2><p className="card-subtitle">Last 14 days</p></div></div>{trendSummary?.access === "ready" ? <div className="mini-trend" role="img" aria-label="Daily sales trend for the last 14 days">{dayBars.map((day) => <span key={day.day} title={`${fmtDate(day.day)} · ${formatMoney(day.salesUgx)} ${currency}`} style={{ height: `${Math.max(4, day.salesUgx / peak * 100)}%` }} />)}</div> : <div className="muted-note">Trend is unavailable.</div>}</Card>
     </div>
-    {summary?.access === "setup" && <Card className="workspace-setup-card"><div className="card-heading"><div><h2 className="card-title">Set up the first workspace owner</h2><p className="card-subtitle">Use this one-time setup only for a new workspace. It grants the signed-in Google account the owner role.</p></div></div><OwnerSetup /></Card>}
-    {summary?.access === "pending" && <Card className="workspace-setup-card"><div className="card-heading"><div><h2 className="card-title">Workspace access pending</h2><p className="card-subtitle">Ask the workspace owner to invite your Google account. Owner setup is only available before a workspace exists.</p></div></div></Card>}
+    {summary?.access === "setup" && <Card className="workspace-setup-card"><div className="card-heading"><div><h2 className="card-title">Set up the first workspace owner</h2><p className="card-subtitle">Use this one-time setup only for a new workspace. It grants your account the owner role.</p></div></div><OwnerSetup /></Card>}
+    {summary?.access === "pending" && <Card className="workspace-setup-card"><div className="card-heading"><div><h2 className="card-title">Workspace access pending</h2><p className="card-subtitle">Your account will appear in the workspace owner’s pending users list. The owner can approve it or send you an invitation.</p></div></div></Card>}
     <div className="dashboard-grid">
       <Card>
         <div className="card-heading"><div><h2 className="card-title">Performance by period</h2><p className="card-subtitle">Sales, expenses, and net from saved cashbook entries</p></div></div>

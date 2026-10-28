@@ -23,7 +23,7 @@ export function GoogleFormsPanel() {
     setBusy(true); setMessage("");
     try {
       const base = siteBase();
-      if (!base) throw new Error("Convex site URL is unavailable. Check the deployment environment.");
+      if (!base) throw new Error("This integration is unavailable right now. Contact your administrator.");
       const token = await create({});
       setEndpoint(`${base}/google-form?token=${encodeURIComponent(token)}`);
       setMessage("Connection key created. It is shown only in this URL; keep the URL private. This connection is separate from Centipid.");

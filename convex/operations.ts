@@ -3,6 +3,7 @@ import { ConvexError, v } from "convex/values";
 import { mutation, query } from "./_generated/server";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import type { Id } from "./_generated/dataModel";
+import { hasPermission } from "./accessControl";
 
 type Ctx = MutationCtx | QueryCtx;
 type Account = "cash" | "mobile_money";
@@ -103,7 +104,7 @@ async function audit(ctx: MutationCtx, current: NonNullable<Awaited<ReturnType<t
 }
 
 const accountV = v.union(v.literal("cash"), v.literal("mobile_money"));
-const membershipRoleV = v.union(v.literal("owner"), v.literal("cashier"), v.literal("partner"), v.literal("finance_approver"));
+const membershipRoleV = v.string();
 
 export const overview = query({
   args: { from: v.string(), toExclusive: v.string() },
@@ -112,6 +113,9 @@ export const overview = query({
     v.object({ access: v.literal("restricted") }),
     v.object({
       access: v.literal("ready"), role: membershipRoleV,
+      partnerStatementOnly: v.boolean(),
+      canManageMovements: v.boolean(), canManageSavings: v.boolean(), canManageLoans: v.boolean(), canRepayLoans: v.boolean(), canManageBills: v.boolean(), canPayBills: v.boolean(),
+      canManageReconciliation: v.boolean(), canResolveReconciliation: v.boolean(), canManagePartners: v.boolean(),
       movements: v.array(v.object({ _id: v.id("movements"), kind: v.union(v.literal("transfer"), v.literal("withdrawal"), v.literal("deposit"), v.literal("capital_contribution")), amountUgx: v.number(), feeUgx: v.optional(v.number()), fromAccount: v.optional(accountV), toAccount: v.optional(accountV), partnerName: v.optional(v.string()), occurredOn: v.string(), note: v.string() })),
       savings: v.array(v.object({ _id: v.id("savingsHoldings"), name: v.string(), targetUgx: v.optional(v.number()), balanceUgx: v.number(), active: v.boolean() })),
       savingsFlows: v.array(v.object({ _id: v.id("savingsFlows"), holdingName: v.string(), kind: v.union(v.literal("contribution"), v.literal("withdrawal")), amountUgx: v.number(), account: accountV, occurredOn: v.string(), note: v.string() })),
@@ -127,7 +131,29 @@ export const overview = query({
     if (!validDay(args.from) || !validDay(args.toExclusive) || args.from >= args.toExclusive) throw new Error("Choose a valid reporting date range.");
     const current = await workspace(ctx);
     if (!current) return { access: "pending" as const };
-    if (current.membership.role !== "owner" && current.membership.role !== "cashier") return { access: "restricted" as const };
+    const canViewMovements = await hasPermission(ctx, current.membership, "movements.view");
+    const canViewSavings = await hasPermission(ctx, current.membership, "savings.view");
+    const canViewLoans = await hasPermission(ctx, current.membership, "loans.view");
+    const canViewBills = await hasPermission(ctx, current.membership, "bills.view");
+    const canViewReconciliation = await hasPermission(ctx, current.membership, "reconcile.view");
+    const canViewPartners = await hasPermission(ctx, current.membership, "partners.view");
+    const canManageMovements = await hasPermission(ctx, current.membership, "movements.create");
+    const canManageSavings = await hasPermission(ctx, current.membership, "savings.create");
+    const canManageLoans = await hasPermission(ctx, current.membership, "loans.create");
+    const canRepayLoans = await hasPermission(ctx, current.membership, "loans.repay");
+    const canManageBills = await hasPermission(ctx, current.membership, "bills.create");
+    const canPayBills = await hasPermission(ctx, current.membership, "bills.pay");
+    const canManageReconciliation = await hasPermission(ctx, current.membership, "reconcile.create");
+    const canResolveReconciliation = await hasPermission(ctx, current.membership, "reconcile.resolve");
+    const canManagePartners = await hasPermission(ctx, current.membership, "partners.manage");
+    if (!canViewMovements && !canViewSavings && !canViewLoans && !canViewBills && !canViewReconciliation && !canViewPartners) return { access: "restricted" as const };
+    const partnerStatementOnly = Boolean(current.membership.partnerId);
+    if (partnerStatementOnly) return {
+      access: "ready" as const, role: current.membership.role, partnerStatementOnly: true,
+      canManageMovements: false, canManageSavings: false, canManageLoans: false, canRepayLoans: false, canManageBills: false, canPayBills: false,
+      canManageReconciliation: false, canResolveReconciliation: false, canManagePartners: false,
+      movements: [], savings: [], savingsFlows: [], loans: [], loanRepayments: [], bills: [], billPayments: [], reconciliations: [], partners: [],
+    };
     const businessId = current.business._id;
     const [movements, savings, savingsFlows, loans, loanRepayments, bills, billPayments, reconciliations, partners] = await Promise.all([
       ctx.db.query("movements").withIndex("by_business_and_date", q => q.eq("businessId", businessId).gte("occurredOn", args.from).lt("occurredOn", args.toExclusive)).order("desc").take(100),
@@ -156,16 +182,16 @@ export const overview = query({
     });
     const billById = new Map(bills.map(item => [item._id, item.name]));
     return {
-      access: "ready" as const, role: current.membership.role,
-      movements: movements.map(row => ({ _id: row._id, kind: row.kind, amountUgx: row.amountUgx, feeUgx: row.feeUgx, fromAccount: row.fromAccount, toAccount: row.toAccount, partnerName: row.partnerId ? partnerById.get(row.partnerId) : undefined, occurredOn: row.occurredOn, note: row.note })),
-      savings: savings.map(row => ({ _id: row._id, name: row.name, targetUgx: row.targetUgx, balanceUgx: row.balanceUgx, active: row.active })),
-      savingsFlows: savingsFlows.map(row => ({ _id: row._id, holdingName: holdingById.get(row.holdingId) ?? "Inactive holding", kind: row.kind, amountUgx: row.amountUgx, account: row.account, occurredOn: row.occurredOn, note: row.note })),
-      loans: loans.map(row => ({ _id: row._id, lender: row.lender, principalUgx: row.principalUgx, outstandingPrincipalUgx: row.outstandingPrincipalUgx, annualRateBps: row.annualRateBps, termMonths: row.termMonths, startedOn: row.startedOn, account: row.account, status: row.status })),
-      loanRepayments: loanRepayments.map(row => ({ _id: row._id, lender: loanById.get(row.loanId) ?? "Loan", amountUgx: row.amountUgx, principalUgx: row.principalUgx, interestUgx: row.interestUgx, account: row.account, paidOn: row.paidOn })),
-      bills: bills.map(row => ({ _id: row._id, name: row.name, category: row.category, amountUgx: row.amountUgx, account: row.account, recurrence: row.recurrence, nextDueOn: row.nextDueOn, active: row.active })),
-      billPayments: billPayments.map(row => ({ _id: row._id, billName: billById.get(row.billId) ?? "Inactive bill", amountUgx: row.amountUgx, account: row.account, paidOn: row.paidOn })),
-      reconciliations: reconciliations.map(row => ({ _id: row._id, account: row.account, asOfDate: row.asOfDate, bookBalanceUgx: row.bookBalanceUgx, countedBalanceUgx: row.countedBalanceUgx, varianceUgx: row.varianceUgx, status: row.status, note: row.note, explanation: row.explanation })),
-      partners: currentPartnerShares.map(row => ({ _id: row._id, name: row.name, ownershipBps: row.ownershipBps, active: row.active })),
+      access: "ready" as const, role: current.membership.role, partnerStatementOnly: false, canManageMovements, canManageSavings, canManageLoans, canRepayLoans, canManageBills, canPayBills, canManageReconciliation, canResolveReconciliation, canManagePartners,
+      movements: canViewMovements ? movements.map(row => ({ _id: row._id, kind: row.kind, amountUgx: row.amountUgx, feeUgx: row.feeUgx, fromAccount: row.fromAccount, toAccount: row.toAccount, partnerName: canViewPartners && row.partnerId ? partnerById.get(row.partnerId) : undefined, occurredOn: row.occurredOn, note: row.note })) : [],
+      savings: canViewSavings ? savings.map(row => ({ _id: row._id, name: row.name, targetUgx: row.targetUgx, balanceUgx: row.balanceUgx, active: row.active })) : [],
+      savingsFlows: canViewSavings ? savingsFlows.map(row => ({ _id: row._id, holdingName: holdingById.get(row.holdingId) ?? "Inactive holding", kind: row.kind, amountUgx: row.amountUgx, account: row.account, occurredOn: row.occurredOn, note: row.note })) : [],
+      loans: canViewLoans ? loans.map(row => ({ _id: row._id, lender: row.lender, principalUgx: row.principalUgx, outstandingPrincipalUgx: row.outstandingPrincipalUgx, annualRateBps: row.annualRateBps, termMonths: row.termMonths, startedOn: row.startedOn, account: row.account, status: row.status })) : [],
+      loanRepayments: canViewLoans ? loanRepayments.map(row => ({ _id: row._id, lender: loanById.get(row.loanId) ?? "Loan", amountUgx: row.amountUgx, principalUgx: row.principalUgx, interestUgx: row.interestUgx, account: row.account, paidOn: row.paidOn })) : [],
+      bills: canViewBills ? bills.map(row => ({ _id: row._id, name: row.name, category: row.category, amountUgx: row.amountUgx, account: row.account, recurrence: row.recurrence, nextDueOn: row.nextDueOn, active: row.active })) : [],
+      billPayments: canViewBills ? billPayments.map(row => ({ _id: row._id, billName: billById.get(row.billId) ?? "Inactive bill", amountUgx: row.amountUgx, account: row.account, paidOn: row.paidOn })) : [],
+      reconciliations: canViewReconciliation ? reconciliations.map(row => ({ _id: row._id, account: row.account, asOfDate: row.asOfDate, bookBalanceUgx: row.bookBalanceUgx, countedBalanceUgx: row.countedBalanceUgx, varianceUgx: row.varianceUgx, status: row.status, note: row.note, explanation: row.explanation })) : [],
+      partners: canViewPartners && !current.membership.partnerId ? currentPartnerShares.map(row => ({ _id: row._id, name: row.name, ownershipBps: row.ownershipBps, active: row.active })) : [],
     };
   },
 });
@@ -177,7 +203,7 @@ export const partnerStatement = query({
   handler: async (ctx, args) => {
     if (!validDay(args.from) || !validDay(args.toExclusive) || args.from >= args.toExclusive) throw new Error("Choose a valid statement date range.");
     const current = await workspace(ctx);
-    if (!current || current.membership.role !== "partner" || !current.membership.partnerId) return { access: "restricted" as const };
+    if (!current || !current.membership.partnerId || !(await hasPermission(ctx, current.membership, "partners.view"))) return { access: "restricted" as const };
     const partner = await ctx.db.get("partners", current.membership.partnerId);
     if (!partner || partner.businessId !== current.business._id || !partner.active) return { access: "restricted" as const };
     const contributions = await ctx.db.query("movements")
@@ -246,7 +272,7 @@ export const createMovement = mutation({
   returns: v.id("movements"),
   handler: async (ctx, args) => {
     const current = await workspace(ctx);
-    if (!current || (current.membership.role !== "owner" && current.membership.role !== "cashier")) throw new Error("Only an active owner or cashier can record a movement.");
+    if (!current || !(await hasPermission(ctx, current.membership, "movements.create"))) throw new Error("Your role cannot create movements.");
     if (!Number.isSafeInteger(args.amountUgx) || args.amountUgx <= 0 || !Number.isSafeInteger(args.feeUgx ?? 0) || (args.feeUgx ?? 0) < 0) throw new Error("Enter a positive whole-unit amount and a non-negative fee.");
     if (!validDay(args.occurredOn) || args.note.length > 300 || args.idempotencyKey.length < 16 || args.idempotencyKey.length > 120) throw new Error("Movement details are invalid.");
     const feeUgx = args.feeUgx ?? 0;
@@ -300,7 +326,7 @@ export const createSavingsHolding = mutation({
   args: { name: v.string(), targetUgx: v.optional(v.number()), idempotencyKey: v.string() }, returns: v.id("savingsHoldings"),
   handler: async (ctx, args) => {
     const current = await workspace(ctx);
-    if (!current || (current.membership.role !== "owner" && current.membership.role !== "cashier")) throw new Error("Only an active owner or cashier can manage savings holdings.");
+    if (!current || !(await hasPermission(ctx, current.membership, "savings.create"))) throw new Error("Your role cannot create savings holdings.");
     const name = args.name.trim();
     if (name.length < 2 || name.length > 80 || args.idempotencyKey.length < 16 || args.idempotencyKey.length > 120) throw new Error("Name the savings goal using 2 to 80 characters.");
     const request = await ctx.db.query("savingsHoldings").withIndex("by_business_and_idempotency", q => q.eq("businessId", current.business._id).eq("idempotencyKey", args.idempotencyKey)).unique();
@@ -323,7 +349,7 @@ export const recordSavingsFlow = mutation({
   returns: v.id("savingsFlows"),
   handler: async (ctx, args) => {
     const current = await workspace(ctx);
-    if (!current || (current.membership.role !== "owner" && current.membership.role !== "cashier")) throw new Error("Only an active owner or cashier can record savings activity.");
+    if (!current || !(await hasPermission(ctx, current.membership, "savings.create"))) throw new Error("Your role cannot create savings activity.");
     if (!Number.isSafeInteger(args.amountUgx) || args.amountUgx <= 0 || !validDay(args.occurredOn) || args.note.length > 300 || args.idempotencyKey.length < 16 || args.idempotencyKey.length > 120) throw new Error("Savings transaction details are invalid.");
     const duplicate = await ctx.db.query("savingsFlows").withIndex("by_business_and_idempotency", q => q.eq("businessId", current.business._id).eq("idempotencyKey", args.idempotencyKey)).unique();
     if (duplicate) {
@@ -349,7 +375,7 @@ export const createLoan = mutation({
   returns: v.id("loans"),
   handler: async (ctx, args) => {
     const current = await workspace(ctx);
-    if (!current || current.membership.role !== "owner") throw new Error("Only a workspace owner can register a loan.");
+    if (!current || !(await hasPermission(ctx, current.membership, "loans.create"))) throw new Error("Your role cannot create loans.");
     const lender = args.lender.trim();
     if (lender.length < 2 || lender.length > 100 || !Number.isSafeInteger(args.principalUgx) || args.principalUgx <= 0 || !Number.isSafeInteger(args.annualRateBps) || args.annualRateBps < 0 || args.annualRateBps > 1_000_000 || !Number.isSafeInteger(args.termMonths) || args.termMonths < 1 || args.termMonths > 600 || !validDay(args.startedOn) || args.note.length > 300 || args.idempotencyKey.length < 16 || args.idempotencyKey.length > 120) throw new Error("Loan details are invalid.");
     const duplicate = await ctx.db.query("loans").withIndex("by_business_and_idempotency", q => q.eq("businessId", current.business._id).eq("idempotencyKey", args.idempotencyKey)).unique();
@@ -371,7 +397,7 @@ export const recordLoanRepayment = mutation({
   returns: v.id("loanRepayments"),
   handler: async (ctx, args) => {
     const current = await workspace(ctx);
-    if (!current || current.membership.role !== "owner") throw new Error("Only a workspace owner can record loan repayments.");
+    if (!current || !(await hasPermission(ctx, current.membership, "loans.repay"))) throw new Error("Your role cannot record loan repayments.");
     if (!Number.isSafeInteger(args.principalUgx) || args.principalUgx < 0 || !Number.isSafeInteger(args.interestUgx) || args.interestUgx < 0 || (args.principalUgx === 0 && args.interestUgx === 0) || !validDay(args.paidOn) || args.idempotencyKey.length < 16 || args.idempotencyKey.length > 120) throw new Error("Repayment must include a positive principal or interest amount.");
     const duplicate = await ctx.db.query("loanRepayments").withIndex("by_business_and_idempotency", q => q.eq("businessId", current.business._id).eq("idempotencyKey", args.idempotencyKey)).unique();
     if (duplicate) {
@@ -412,7 +438,7 @@ export const createBill = mutation({
   returns: v.id("bills"),
   handler: async (ctx, args) => {
     const current = await workspace(ctx);
-    if (!current || current.membership.role !== "owner") throw new Error("Only a workspace owner can configure recurring bills.");
+    if (!current || !(await hasPermission(ctx, current.membership, "bills.create"))) throw new Error("Your role cannot create recurring bills.");
     const name = args.name.trim();
     const category = args.category.trim();
     if (name.length < 2 || name.length > 100 || category.length < 1 || category.length > 80 || !Number.isSafeInteger(args.amountUgx) || args.amountUgx <= 0 || !validDay(args.nextDueOn) || args.idempotencyKey.length < 16 || args.idempotencyKey.length > 120) throw new Error("Bill details are invalid.");
@@ -437,7 +463,7 @@ export const recordBillPayment = mutation({
   returns: v.id("billPayments"),
   handler: async (ctx, args) => {
     const current = await workspace(ctx);
-    if (!current || current.membership.role !== "owner") throw new Error("Only a workspace owner can confirm a bill payment.");
+    if (!current || !(await hasPermission(ctx, current.membership, "bills.pay"))) throw new Error("Your role cannot record bill payments.");
     if (!validDay(args.paidOn) || args.idempotencyKey.length < 16 || args.idempotencyKey.length > 120) throw new Error("Payment details are invalid.");
     const bill = await ctx.db.get("bills", args.billId);
     if (!bill || bill.businessId !== current.business._id || !bill.active) throw new Error("Active bill not found.");
@@ -467,7 +493,7 @@ export const createReconciliation = mutation({
   returns: v.id("reconciliations"),
   handler: async (ctx, args) => {
     const current = await workspace(ctx);
-    if (!current || (current.membership.role !== "owner" && current.membership.role !== "cashier")) throw new Error("Only an active owner or cashier can record a reconciliation count.");
+    if (!current || !(await hasPermission(ctx, current.membership, "reconcile.create"))) throw new Error("Your role cannot start a reconciliation.");
     if (!validDay(args.asOfDate) || !Number.isSafeInteger(args.countedBalanceUgx) || args.countedBalanceUgx < 0 || args.note.length > 300 || args.idempotencyKey.length < 16 || args.idempotencyKey.length > 120) throw new Error("Reconciliation details are invalid.");
     const duplicate = await ctx.db.query("reconciliations").withIndex("by_business_and_idempotency", q => q.eq("businessId", current.business._id).eq("idempotencyKey", args.idempotencyKey)).unique();
     if (duplicate) {
@@ -490,7 +516,7 @@ export const explainReconciliation = mutation({
   args: { reconciliationId: v.id("reconciliations"), explanation: v.string() }, returns: v.null(),
   handler: async (ctx, args) => {
     const current = await workspace(ctx);
-    if (!current || current.membership.role !== "owner") throw new Error("Only a workspace owner can close a reconciliation difference.");
+    if (!current || !(await hasPermission(ctx, current.membership, "reconcile.resolve"))) throw new Error("Your role cannot resolve a reconciliation difference.");
     const explanation = args.explanation.trim();
     if (explanation.length < 5 || explanation.length > 300) throw new Error("Explain the difference in 5 to 300 characters.");
     const row = await ctx.db.get("reconciliations", args.reconciliationId);
@@ -506,7 +532,7 @@ export const createPartner = mutation({
   args: { name: v.string(), ownershipBps: v.number(), idempotencyKey: v.string() }, returns: v.id("partners"),
   handler: async (ctx, args) => {
     const current = await workspace(ctx);
-    if (!current || current.membership.role !== "owner") throw new Error("Only a workspace owner can manage partner ownership.");
+    if (!current || !(await hasPermission(ctx, current.membership, "partners.manage"))) throw new Error("Your role cannot manage partner ownership.");
     const name = args.name.trim();
     if (name.length < 2 || name.length > 100 || !Number.isSafeInteger(args.ownershipBps) || args.ownershipBps < 0 || args.ownershipBps > 10_000 || args.idempotencyKey.length < 16 || args.idempotencyKey.length > 120) throw new Error("Partner details are invalid.");
     const previous = await ctx.db.query("partners").withIndex("by_business_and_idempotency", q => q.eq("businessId", current.business._id).eq("idempotencyKey", args.idempotencyKey)).unique();
