@@ -417,7 +417,7 @@ export const updateSavingsHolding = mutation({
     if (!current || current.membership.role !== "owner") throw new Error("Only a workspace owner can edit or archive savings holdings.");
     const holding = await ctx.db.get("savingsHoldings", args.holdingId);
     if (!holding || holding.businessId !== current.business._id) throw new Error("Savings holding not found.");
-    if (args.active !== holding.active && args.name.trim() === holding.name && args.targetUgx === holding.targetUgx) {
+    if (args.active !== holding.active) {
       if (!args.active && holding.balanceUgx !== 0) throw new Error("Withdraw or reassign the full holding balance before archiving it.");
       if (args.active) {
         const activeRows = await ctx.db.query("savingsHoldings").withIndex("by_business_and_active", q => q.eq("businessId", current.business._id).eq("active", true)).take(101);
@@ -615,11 +615,11 @@ export const updateBillSchedule = mutation({
     if (!current || current.membership.role !== "owner") throw new Error("Only a workspace owner can edit or archive bill schedules.");
     const bill = await ctx.db.get("bills", args.billId);
     if (!bill || bill.businessId !== current.business._id) throw new Error("Bill schedule not found.");
+    if (args.active && !bill.active) {
+      const activeBills = await ctx.db.query("bills").withIndex("by_business_and_active_due", q => q.eq("businessId", current.business._id).eq("active", true)).take(101);
+      if (activeBills.length >= 100) throw new Error("A workspace can have up to 100 active bill schedules.");
+    }
     if (args.active !== bill.active) {
-      if (args.active) {
-        const activeBills = await ctx.db.query("bills").withIndex("by_business_and_active_due", q => q.eq("businessId", current.business._id).eq("active", true)).take(101);
-        if (activeBills.length >= 100) throw new Error("A workspace can have up to 100 active bill schedules.");
-      }
       await ctx.db.patch("bills", bill._id, { active: args.active });
       await ctx.db.insert("auditEvents", { businessId: current.business._id, actorId: current.userId, action: args.active ? "bill.schedule_restored" : "bill.schedule_archived", entityType: "bill", entityId: bill._id, occurredAt: Date.now(), summary: `${args.active ? "Restored" : "Archived"} bill schedule: ${bill.name}.` });
       return null;
