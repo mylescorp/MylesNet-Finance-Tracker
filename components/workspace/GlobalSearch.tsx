@@ -3,7 +3,7 @@
 import { useQuery } from "convex/react";
 import { Search } from "lucide-react";
 import Link from "next/link";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api } from "@/convex/_generated/api";
 
 function money(amountMinor: number, scale: number, locale: string) {
@@ -14,22 +14,37 @@ function money(amountMinor: number, scale: number, locale: string) {
 export function GlobalSearch() {
   const [term, setTerm] = useState("");
   const [open, setOpen] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
   const settings = useQuery(api.settings.runtimeContext, {});
   const results = useQuery(api.workspace.searchEntries, term.trim().length >= 2 ? { term: term.trim(), limit: 8 } : "skip");
   const showResults = open && term.trim().length >= 2;
+
+  useEffect(() => {
+    const onShortcut = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        inputRef.current?.focus();
+        setOpen(true);
+      }
+    };
+    window.addEventListener("keydown", onShortcut);
+    return () => window.removeEventListener("keydown", onShortcut);
+  }, []);
 
   return <div className="global-search-wrap">
     <label className="search-box" role="search">
       <Search size={16} aria-hidden="true" />
       <input
         aria-label="Search entries and categories"
+        aria-keyshortcuts="Control+K Meta+K"
         placeholder="Search entries, partners and bills"
         value={term}
+        ref={inputRef}
         onChange={(event) => setTerm(event.target.value)}
         onFocus={() => setOpen(true)}
         onBlur={() => window.setTimeout(() => setOpen(false), 120)}
       />
-      <kbd>/</kbd>
+      <kbd>Ctrl+K</kbd>
     </label>
     {showResults && <div className="global-search-results" role="listbox" aria-label="Search results">
       {results === undefined ? <div className="search-result-empty">Searching saved entries…</div>

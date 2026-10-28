@@ -206,7 +206,7 @@ export function AppShell({ children }: { children: ReactNode }) {
         <button ref={menuButtonRef} className="button mobile-menu-button" type="button" aria-label={mobileOpen ? "Close navigation" : "Open navigation"} aria-expanded={mobileOpen} aria-controls="workspace-sidebar" onClick={() => setMobileOpen((open) => !open)}>
           {mobileOpen ? <X size={19} /> : <Menu size={19} />}
         </button>
-        <div className="topbar-page-context"><span>MYLESNET</span><strong>{routePageLabel}</strong></div>
+        <div className="topbar-page-context"><strong>{routePageLabel}</strong></div>
         <div className="topbar-center">{!financeApproverOnly && <GlobalSearch />}</div>
         <div className="header-actions">
           {!financeApproverOnly && permissions.includes("audit.view") && <Link className="utility-link" href="/issues" aria-label="Needs attention"><Bell size={17} /><span>Needs attention</span></Link>}
