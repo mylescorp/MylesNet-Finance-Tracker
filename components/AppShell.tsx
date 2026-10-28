@@ -207,8 +207,8 @@ export function AppShell({ children }: { children: ReactNode }) {
           {mobileOpen ? <X size={19} /> : <Menu size={19} />}
         </button>
         <div className="topbar-page-context"><span>MYLESNET</span><strong>{routePageLabel}</strong></div>
+        <div className="topbar-center">{!financeApproverOnly && <GlobalSearch />}</div>
         <div className="header-actions">
-          {!financeApproverOnly && <GlobalSearch />}
           {!financeApproverOnly && permissions.includes("audit.view") && <Link className="utility-link" href="/issues" aria-label="Needs attention"><Bell size={17} /><span>Needs attention</span></Link>}
           <button className="user-menu" type="button" aria-label="Open your account menu" aria-haspopup="dialog" aria-expanded={accountMenuOpen} title="Manage your account" onClick={() => setAccountMenuOpen(open => !open)}>
             <ProfileAvatar imageUrl={profile?.photoUrl} name={profile?.displayName || accountLabel} />
