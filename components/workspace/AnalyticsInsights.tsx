@@ -57,8 +57,8 @@ export function AnalyticsInsights({ range, today, currency, scale, locale, dateF
       ["Summary", "Current balances", today, "Cash", String(analytics.balances.cashUgx / scale), currency],
       ["Summary", "Current balances", today, "Mobile money", String(analytics.balances.mobileMoneyUgx / scale), currency],
       ...(periodComplete ? analytics.period.days.map(day => ["Daily", day.day, "", "Sales", String(day.salesUgx / scale), currency, "Expenses", String(day.expensesUgx / scale), currency, day.hasActivity ? "Activity recorded" : "No activity"]) : [["Daily", range.from, range.toExclusive, "Daily values", "", "", "Unavailable: matching record scan reached its safe limit"]]),
-      ...analytics.partners.map(partner => ["Partner", range.from, range.toExclusive, `${partner.name} ownership`, String(partner.ownershipBps / 100), "%", "Estimated profit share", String(partner.shareOfNetUgx / scale), currency, "Illustration only; not an approved payout"]),
-      ...analytics.issues.map(issue => {
+      ...(periodComplete ? analytics.partners.map(partner => ["Partner", range.from, range.toExclusive, `${partner.name} ownership`, String(partner.ownershipBps / 100), "%", "Estimated profit share", String(partner.shareOfNetUgx / scale), currency, "Illustration only; not an approved payout"]) : [["Partner", range.from, range.toExclusive, "Estimated profit shares", "", currency, "Unavailable: matching record scan reached its safe limit"]]),
+      ...(analytics.issuesComplete ? analytics.issues.map(issue => {
         const value = issue.id === "missing-sales-days" ? String(issue.amountUgx)
           : issue.id === "ownership-incomplete" ? String(issue.amountUgx / 100)
             : String(issue.amountUgx / scale);
@@ -66,7 +66,7 @@ export function AnalyticsInsights({ range, today, currency, scale, locale, dateF
           : issue.id === "ownership-incomplete" ? "%"
             : currency;
         return ["Issue", range.from, range.toExclusive, issue.id, value, unit, "Title", issue.title, issue.severity, issue.detail];
-      }),
+      }) : [["Issue", range.from, range.toExclusive, "Data health issues", "", "", "Unavailable: one or more source scans reached a safe record limit"]]),
     ];
     const encode = (value: string) => {
       const safe = /^[\s\uFEFF]*[=+\-@]/u.test(value) ? `'${value}` : value;

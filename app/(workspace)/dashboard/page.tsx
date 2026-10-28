@@ -121,7 +121,7 @@ export default function DashboardPage() {
   const todaySummaryReady = todaySummary?.access === "ready" && todaySummary.accountFilterComplete ? todaySummary : null;
   const weekSummaryReady = weekSummary?.access === "ready" && weekSummary.accountFilterComplete ? weekSummary : null;
   const yearSummaryReady = yearSummary?.access === "ready" && yearSummary.accountFilterComplete ? yearSummary : null;
-  const todaySales = todaySummaryReady?.days.find((day) => day.day === today)?.salesUgx ?? null;
+  const todaySales = todaySummaryReady ? todaySummaryReady.days.find((day) => day.day === today)?.salesUgx ?? 0 : null;
   const periodLength = Math.max(1, (Date.parse(`${range.toExclusive}T00:00:00.000Z`) - Date.parse(`${range.from}T00:00:00.000Z`)) / 86_400_000);
   const chartPoints = useMemo(() => {
     if (summary?.access !== "ready") return [];
