@@ -337,6 +337,7 @@ export default defineSchema({
     account: v.optional(v.union(v.literal("cash"), v.literal("mobile_money"))),
     paidOn: v.string(),
     priorNextDueOn: v.optional(v.string()),
+    nextDueOnAfter: v.optional(v.string()),
     idempotencyKey: v.string(),
     createdBy: v.id("users"),
     createdAt: v.number(),

@@ -27,9 +27,9 @@ This plan tracks every gap found in the production-readiness audit. Financial re
 
 ### C. Operational records
 - [ ] Movements: review, correction/reversal, and archive rules for transfer, withdrawal, deposit, and contribution. Owner-only reversal with linked fee reversal is implemented in this working branch; edit/archive coverage remains.
-- [ ] Savings: edit/archive holdings and correct flows; owner-only flow reversal now restores holding/account balances with negative-balance review. Holding lifecycle and focused verification remain.
+- [ ] Savings: edit/archive holdings and correct flows. Owner-only edit/archive/restore is now available for holdings; archive requires a zero balance. Flow reversal restores holding/account balances with negative-balance review. Focused lifecycle verification remains.
 - [ ] Loans: edit unposted terms, archive/void eligible loans, and reverse repayments. Owner-only repayment reversal now restores principal/account and voids linked interest history; loan lifecycle and focused verification remain.
-- [ ] Bills: edit/cancel/archive schedules. Owner-only payment reversal now restores the due date/account and voids linked expense history; schedule lifecycle and focused verification remain.
+- [ ] Bills: edit/cancel/archive schedules. Owner-only edit/archive/restore is now available for schedules. Payment reversal restores due date/account and voids linked expense history; it refuses reversal after the schedule has been subsequently changed. Focused lifecycle verification remains.
 - [ ] Partners: update/archive partner records with effective-dated ownership history and membership-link safeguards.
 - [ ] Reconciliation: correct counts through superseding records, reopen explained differences where authorized, and retain immutable count history.
 
@@ -67,5 +67,6 @@ This plan tracks every gap found in the production-readiness audit. Financial re
 
 - Owner-only movement reversal is implemented for transfers, withdrawals, deposits, and partner contributions. It reverses account effects, updates partner capital where applicable, voids the generated withdrawal-fee entry and daily expense totals, and writes an audit reason.
 - Owner-only cashbook entry void controls are available on Sales and Expenses. Savings flow, loan repayment, and bill payment reversals now update linked balances, records, and daily expense totals atomically, with owner-only UI actions and audit reasons.
+- Savings holdings and recurring bill schedules now support owner-only edit, archive, and restore actions with validation and audit events. Archived records remain visible in their history sections; savings holdings cannot be archived while a balance remains.
 - Local typecheck, lint, production build, and `git diff --check` passed for this working branch. Convex code generation could not run because no development `CONVEX_DEPLOYMENT` is configured; no production deployment was targeted.
-- The first PR is open as #17. Greptile's initial review found two issues (paid-off loan status after reversing an interest-only repayment, and direct-void buttons on linked expenses); both are being corrected in this branch and require a fresh review. The PR is not merged or deployed. All unchecked workstreams remain in scope.
+- PR #17 remains open. Greptile's first review findings (paid-off loan status after reversing an interest-only repayment, and direct-void buttons on linked expenses) have been fixed. A fresh review is required for the current commits. The PR is not merged or deployed. All unchecked workstreams remain in scope.
