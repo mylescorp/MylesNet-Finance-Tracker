@@ -1,4 +1,5 @@
 import { getAuthUserId } from "@convex-dev/auth/server";
+import { paginationOptsValidator } from "convex/server";
 import { ConvexError, v } from "convex/values";
 import { internalMutation, mutation, query } from "./_generated/server";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
@@ -57,11 +58,11 @@ export const status = query({
 });
 
 export const history = query({
-  args: {},
-  returns: v.array(v.object({ _id: v.id("googleFormReceipts"), submissionKind: v.union(v.literal("sale"), v.literal("expense"), v.literal("movement"), v.literal("savings"), v.literal("loan"), v.literal("unknown")), status: v.union(v.literal("posted"), v.literal("needs_review")), occurredOn: v.optional(v.string()), amountUgx: v.optional(v.number()), summary: v.string(), createdAt: v.number() })),
-  handler: async ctx => {
+  args: { paginationOpts: paginationOptsValidator },
+  handler: async (ctx, args) => {
     const { business } = await owner(ctx);
-    return (await ctx.db.query("googleFormReceipts").withIndex("by_business_and_created", q => q.eq("businessId", business._id)).order("desc").take(30)).map(({ _id, submissionKind, status, occurredOn, amountUgx, summary, createdAt }) => ({ _id, submissionKind, status, occurredOn, amountUgx, summary, createdAt }));
+    const result = await ctx.db.query("googleFormReceipts").withIndex("by_business_and_created", q => q.eq("businessId", business._id)).order("desc").paginate(args.paginationOpts);
+    return { ...result, page: result.page.map(({ _id, submissionKind, status, occurredOn, amountUgx, summary, createdAt, attemptCount, lastAttemptAt }) => ({ _id, submissionKind, status, occurredOn, amountUgx, summary, createdAt, attemptCount: attemptCount ?? 1, lastAttemptAt: lastAttemptAt ?? createdAt })) };
   },
 });
 
@@ -117,7 +118,7 @@ export const receive = internalMutation({
     const input = parseInput(args.payload);
     if (!input) return { status: "needs_review" as const, message: "Submission format is invalid." };
     const existing = await ctx.db.query("googleFormReceipts").withIndex("by_business_and_source", q => q.eq("businessId", business._id).eq("sourceKey", input.sourceKey)).unique();
-    if (existing) return { status: "duplicate" as const };
+    if (existing?.status === "posted") return { status: "duplicate" as const };
     const submitter = input.submittedByEmail ? await ctx.db.query("users").withIndex("email", q => q.eq("email", input.submittedByEmail)).first() : null;
     const member = submitter ? await ctx.db.query("memberships").withIndex("by_business_and_user", q => q.eq("businessId", business._id).eq("userId", submitter._id)).first() : null;
     const authorizedSubmitter = submitter && member?.active && (member.role === "owner" || member.role === "cashier") ? submitter : null;
@@ -225,7 +226,9 @@ export const receive = internalMutation({
         await ctx.db.insert("auditEvents", { businessId: business._id, actorId: authorizedSubmitter!._id, action: "entry.google_form_posted", entityType: "entry", entityId: entryId, occurredAt: now, summary: `${entry.kind} received from Google Form · ${date} · ${entry.category}.` });
       }
     }
-    await ctx.db.insert("googleFormReceipts", { businessId: business._id, sourceKey: input.sourceKey, submissionKind: input.kind, status, occurredOn: validDay(date) ? date : undefined, amountUgx: totalUgx || undefined, summary, detailsJson: JSON.stringify(fields).slice(0, 16_000), createdAt: now });
+    const receiptValues = { businessId: business._id, sourceKey: input.sourceKey, submissionKind: input.kind, status, occurredOn: validDay(date) ? date : undefined, amountUgx: totalUgx || undefined, summary, detailsJson: JSON.stringify(fields).slice(0, 16_000), attemptCount: (existing?.attemptCount ?? 0) + 1, lastAttemptAt: now };
+    if (existing) await ctx.db.patch("googleFormReceipts", existing._id, receiptValues);
+    else await ctx.db.insert("googleFormReceipts", { ...receiptValues, createdAt: now });
     return { status, message: summary };
   },
 });

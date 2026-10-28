@@ -40,7 +40,7 @@ This plan tracks every gap found in the production-readiness audit. Financial re
 ### E. Imports and external ingress
 - [ ] Add preview, completed-batch reversal, partial-batch recovery, and row-level correction while keeping source hashes/idempotency stable.
 - [ ] Add paginated import history and exportable import reports.
-- [ ] Add integration receipt history, actionable failures, and safe idempotent retry/reprocess for Google Forms and Centipid.
+- [ ] Add integration receipt history, actionable failures, and safe idempotent retry/reprocess for Google Forms and Centipid. Receipt histories are now paginated; Centipid processing failures are recorded with safe retry counts; Google Form needs-review submissions can be retried with the same source key. Owner-triggered reprocessing and downloadable receipt exports remain.
 - [ ] Preserve the existing webhook URL and payload contract; run documented staging parity before any caller cutover.
 
 ### F. Analytics, issues, reports, and close
@@ -68,5 +68,6 @@ This plan tracks every gap found in the production-readiness audit. Financial re
 - Owner-only movement reversal is implemented for transfers, withdrawals, deposits, and partner contributions. It reverses account effects, updates partner capital where applicable, voids the generated withdrawal-fee entry and daily expense totals, and writes an audit reason.
 - Owner-only cashbook entry void controls are available on Sales and Expenses. Savings flow, loan repayment, and bill payment reversals now update linked balances, records, and daily expense totals atomically, with owner-only UI actions and audit reasons.
 - Savings holdings and recurring bill schedules now support owner-only edit, archive, and restore actions with validation and audit events. Archived records remain visible in their history sections; savings holdings cannot be archived while a balance remains.
+- Integration work preserves the existing Centipid webhook URL and request/response contract. Owner-only paginated receipt histories now include attempts and actionable status, and retries reuse source keys to avoid duplicate financial records. Google Form history is paginated and needs-review submissions can be safely reprocessed from a source resend.
 - Local typecheck, lint, production build, and `git diff --check` passed for this working branch. Convex code generation could not run because no development `CONVEX_DEPLOYMENT` is configured; no production deployment was targeted.
 - PR #17 remains open. Greptile's first review findings (paid-off loan status after reversing an interest-only repayment, and direct-void buttons on linked expenses) have been fixed. A fresh review is required for the current commits. The PR is not merged or deployed. All unchecked workstreams remain in scope.
