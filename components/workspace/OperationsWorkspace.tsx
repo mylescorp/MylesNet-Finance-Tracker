@@ -38,12 +38,12 @@ export function OperationsWorkspace({ screen, currency, scale, locale, timezone,
   const createPartner = useMutation(api.operations.createPartner);
   const [keys, setKeys] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
-  const [feedback, setFeedback] = useState<{ error: boolean; message: string; selectionVersion: number | null } | null>(null);
+  const [feedback, setFeedback] = useState<{ error: boolean; message: string; selectionVersion: number | null; scope: string; location: "drawer" | "page" } | null>(null);
   const [warning, setWarning] = useState<{ message: string; retry: () => Promise<void>; selectionVersion: number } | null>(null);
   const fmt = (amount: number) => new Intl.NumberFormat(locale, { style: "currency", currency, maximumFractionDigits: Math.log10(scale) }).format(amount / scale);
   const day = businessDate(timezone);
 
-  function form(scope: string, action: (values: FormData, key: string, confirmNegative: boolean) => Promise<unknown>) {
+  function form(scope: string, action: (values: FormData, key: string, confirmNegative: boolean) => Promise<unknown>, location: "drawer" | "page" = "drawer") {
     return (event: FormEvent<HTMLFormElement>) => {
       event.preventDefault();
       const element = event.currentTarget;
@@ -57,13 +57,13 @@ export function OperationsWorkspace({ screen, currency, scale, locale, timezone,
           await action(currentValues, key, confirmNegative);
           setKeys(current => { const next = { ...current }; delete next[scope]; return next; });
           element.reset();
-          setFeedback({ error: false, message: "Saved. The cashbook and audit trail have been updated.", selectionVersion: drawer?.selectionVersion ?? null });
+          setFeedback({ error: false, message: "Saved. The cashbook and audit trail have been updated.", selectionVersion: drawer?.selectionVersion ?? null, scope, location });
           recordSaved("Saved. The cashbook and audit trail have been updated.");
         } catch (error) {
           const details = error instanceof ConvexError ? error.data as { code?: string; message?: string } : null;
           if (details?.code === "CONFIRM_NEGATIVE" && !confirmNegative) {
             setWarning({ message: details.message ?? "This transaction may create a negative balance.", retry: async () => { if (element.reportValidity()) await run(new FormData(element), true); }, selectionVersion: drawer?.selectionVersion ?? 0 });
-          } else setFeedback({ error: true, message: error instanceof Error ? error.message : "Could not save this record.", selectionVersion: drawer?.selectedId ? drawer.selectionVersion : null });
+          } else setFeedback({ error: true, message: error instanceof Error ? error.message : "Could not save this record.", selectionVersion: location === "drawer" && drawer?.selectedId ? drawer.selectionVersion : null, scope, location });
         } finally { setBusy(false); setDrawerBusy(false); }
       };
       void run(values, false);
@@ -91,7 +91,7 @@ export function OperationsWorkspace({ screen, currency, scale, locale, timezone,
   const periodNote = <p className="muted-note">The selected period filters transaction history. Current balances, active loans, and bill schedules show their latest status.</p>;
   const sharedMessages = <>
     {warning && warning.selectionVersion === drawer?.selectionVersion && <div className="notice-banner notice-warning" role="alert"><strong>Balance warning</strong><p>{warning.message}</p><button className="button button-accent" type="button" disabled={busy} onClick={() => void warning.retry()}>Review and continue</button></div>}
-    {feedback && feedback.selectionVersion === (drawer?.selectedId ? drawer.selectionVersion : null) && <p className={`form-feedback ${feedback.error ? "form-error" : "form-success"}`} role={feedback.error ? "alert" : "status"}>{feedback.message}</p>}
+    {feedback?.location === "drawer" && feedback.selectionVersion === (drawer?.selectedId ? drawer.selectionVersion : null) && <p className={`form-feedback ${feedback.error ? "form-error" : "form-success"}`} role={feedback.error ? "alert" : "status"}>{feedback.message}</p>}
   </>;
   const rowActions = <p className="muted-note">Amounts use {currency} precision. Every saved action is audit logged; saved records are not silently removed.</p>;
 
@@ -139,7 +139,7 @@ export function OperationsWorkspace({ screen, currency, scale, locale, timezone,
 
   if (screen === "Reconcile") return <div className="board-grid">{periodNote}
     <RecordFormDisclosure title="Record an account count" description="This captures the book balance and counted balance at that moment. It never edits cashbook transactions."><Card className="board-feature-card"><h2 className="card-title">Record an account count</h2><p className="card-subtitle">This captures the book balance and counted balance at that moment. It never edits cashbook transactions.</p>{sharedMessages}<form className="form-layout" onSubmit={form("reconcile", async (v, key) => createReconciliation({ account: String(v.get("account")) as Account, asOfDate: String(v.get("asOfDate")), countedBalanceUgx: Math.round(Number(v.get("counted")) * scale), note: String(v.get("note") ?? ""), idempotencyKey: key }))}><div className="field"><label htmlFor="count-account">Account</label><select id="count-account" name="account"><option value="cash">Cash</option><option value="mobile_money">Mobile money</option></select></div><div className="field"><label htmlFor="count-date">Count date</label><input id="count-date" name="asOfDate" type="date" defaultValue={day} required /></div><div className="field"><label htmlFor="count-amount">Counted balance ({currency})</label><input id="count-amount" name="counted" type="number" min="0" step={1 / scale} required /></div><div className="field"><label htmlFor="count-note">Count notes</label><input id="count-note" name="note" maxLength={300} /></div><div className="form-actions"><button className="button button-accent" disabled={busy}>Save count</button></div></form></Card></RecordFormDisclosure>
-    <Card className="board-section-card board-table-card"><h2 className="card-title">Recent reconciliations</h2>{records.reconciliations.length ? <div className="table-scroll"><table className="data-table"><thead><tr><th>Date</th><th>Account</th><th>Book</th><th>Counted</th><th>Variance</th><th>Status</th></tr></thead><tbody>{records.reconciliations.map(row => <tr key={row._id}><td>{formatBusinessDay(row.asOfDate, dateFormat)}</td><td>{accountName(row.account)}</td><td>{fmt(row.bookBalanceUgx)}</td><td>{fmt(row.countedBalanceUgx)}</td><td>{fmt(row.varianceUgx)}</td><td>{row.status === "open" && records.role === "owner" ? <details className="inline-record-disclosure"><summary>Explain variance</summary><form onSubmit={form(`explain-${row._id}`, async v => explainReconciliation({ reconciliationId: row._id, explanation: String(v.get("explanation")) }))}><input aria-label="Explain reconciliation difference" name="explanation" minLength={5} maxLength={300} placeholder="Explain variance" required /><button className="button" disabled={busy}>Mark explained</button></form></details> : row.status}</td></tr>)}</tbody></table></div> : <Empty message="No reconciliation counts recorded." detail="Record a physical cash count or verified mobile-money balance to compare against the book." />}{rowActions}</Card>
+    <Card className="board-section-card board-table-card"><h2 className="card-title">Recent reconciliations</h2>{records.reconciliations.length ? <div className="table-scroll"><table className="data-table"><thead><tr><th>Date</th><th>Account</th><th>Book</th><th>Counted</th><th>Variance</th><th>Status</th></tr></thead><tbody>{records.reconciliations.map(row => { const explanationScope = `explain-${row._id}`; return <tr key={row._id}><td>{formatBusinessDay(row.asOfDate, dateFormat)}</td><td>{accountName(row.account)}</td><td>{fmt(row.bookBalanceUgx)}</td><td>{fmt(row.countedBalanceUgx)}</td><td>{fmt(row.varianceUgx)}</td><td>{row.status === "open" && records.role === "owner" ? <details className="inline-record-disclosure"><summary>Explain variance</summary><form onSubmit={form(explanationScope, async v => explainReconciliation({ reconciliationId: row._id, explanation: String(v.get("explanation")) }), "page")}><input aria-label="Explain reconciliation difference" name="explanation" minLength={5} maxLength={300} placeholder="Explain variance" required /><button className="button" disabled={busy}>Mark explained</button></form>{feedback?.location === "page" && feedback.scope === explanationScope && <p className={`form-feedback ${feedback.error ? "form-error" : "form-success"}`} role={feedback.error ? "alert" : "status"}>{feedback.message}</p>}</details> : row.status}</td></tr>; })}</tbody></table></div> : <Empty message="No reconciliation counts recorded." detail="Record a physical cash count or verified mobile-money balance to compare against the book." />}{rowActions}</Card>
   </div>;
 
   return <div className="board-grid">{periodNote}
