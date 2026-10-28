@@ -1,40 +1,6 @@
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
 import { Sparkles } from "lucide-react";
 import { WorkspaceTitle } from "@/components/AppShell";
-
-type ChangelogEntry = {
-  date: string;
-  title: string;
-  sections: { title: string; items: string[] }[];
-};
-
-function readChangelog(): ChangelogEntry[] {
-  const source = readFileSync(join(process.cwd(), "CHANGELOG.md"), "utf8");
-  const entries: ChangelogEntry[] = [];
-  let entry: ChangelogEntry | undefined;
-  let section: ChangelogEntry["sections"][number] | undefined;
-
-  for (const line of source.split(/\r?\n/)) {
-    const release = line.match(/^## (\d{4}-\d{2}-\d{2}) — (.+)$/);
-    if (release) {
-      entry = { date: release[1], title: release[2], sections: [] };
-      entries.push(entry);
-      section = undefined;
-      continue;
-    }
-    const heading = line.match(/^### (.+)$/);
-    if (heading && entry) {
-      section = { title: heading[1], items: [] };
-      entry.sections.push(section);
-      continue;
-    }
-    const item = line.match(/^- (.+)$/);
-    if (item && section) section.items.push(item[1]);
-  }
-
-  return entries;
-}
+import { readChangelog } from "@/lib/changelog";
 
 export default function ChangelogPage() {
   const entries = readChangelog();

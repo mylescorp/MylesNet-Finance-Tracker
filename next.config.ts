@@ -5,6 +5,7 @@ const nextConfig: NextConfig = {
   poweredByHeader: false,
   outputFileTracingIncludes: {
     "/changelog": ["./CHANGELOG.md"],
+    "/api/changelog/summary": ["./CHANGELOG.md"],
   },
   async headers() {
     return [

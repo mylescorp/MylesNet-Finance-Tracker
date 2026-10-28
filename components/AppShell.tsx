@@ -15,6 +15,25 @@ import { AccountMenu } from "@/components/account/AccountMenu";
 import { GlobalSearch } from "@/components/workspace/GlobalSearch";
 import { api } from "@/convex/_generated/api";
 
+type ChangelogSummary = { version: string; totalChanges: number };
+const changelogSeenKey = "mylesnet-changelog-seen-v1";
+
+function readSeenChangelog() {
+  try { return window.localStorage.getItem(changelogSeenKey); }
+  catch { return null; }
+}
+
+function unreadChangelogCount(summary: ChangelogSummary, seenValue: string | null) {
+  if (!seenValue) return summary.totalChanges;
+  try {
+    const seen = JSON.parse(seenValue) as ChangelogSummary;
+    if (seen.version === summary.version) return 0;
+    return Math.max(summary.totalChanges - seen.totalChanges, 1);
+  } catch {
+    return summary.totalChanges;
+  }
+}
+
 const navGroups = [
   { label: "Overview", items: [
     { label: "Dashboard", href: "/dashboard", icon: LayoutDashboard, permission: "dashboard.view" },
@@ -49,11 +68,42 @@ export function AppShell({ children }: { children: ReactNode }) {
   const [mobileOpen, setMobileOpen] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
   const [accountMenuOpen, setAccountMenuOpen] = useState(false);
+  const [unreadChanges, setUnreadChanges] = useState(0);
+  const [changelogSummary, setChangelogSummary] = useState<ChangelogSummary | null>(null);
+  const changelogSummaryRef = useRef<ChangelogSummary | null>(null);
   const [accountReturnTo, setAccountReturnTo] = useState("/dashboard");
   const menuButtonRef = useRef<HTMLButtonElement>(null);
   const sidebarCloseRef = useRef<HTMLButtonElement>(null);
   const accountLabel = access?.access === "ready" ? access.businessName : "My account";
   const permissions = access?.access === "ready" ? access.permissions : [];
+  useEffect(() => {
+    let active = true;
+    void fetch("/api/changelog/summary", { cache: "no-store" })
+      .then(response => response.ok ? response.json() as Promise<ChangelogSummary> : null)
+      .then(summary => {
+        if (!active || !summary || typeof summary.version !== "string" || !Number.isSafeInteger(summary.totalChanges)) return;
+        changelogSummaryRef.current = summary;
+        setChangelogSummary(summary);
+        setUnreadChanges(unreadChangelogCount(summary, readSeenChangelog()));
+      })
+      .catch(() => {});
+    const onStorage = (event: StorageEvent) => {
+      const summary = changelogSummaryRef.current;
+      if (event.key === changelogSeenKey && summary) setUnreadChanges(unreadChangelogCount(summary, event.newValue));
+    };
+    window.addEventListener("storage", onStorage);
+    return () => { active = false; window.removeEventListener("storage", onStorage); };
+  }, []);
+  const markChangelogRead = useCallback(() => {
+    const summary = changelogSummaryRef.current;
+    if (!summary) return;
+    try { window.localStorage.setItem(changelogSeenKey, JSON.stringify(summary)); }
+    catch { /* The current tab still clears the badge when storage is unavailable. */ }
+    setUnreadChanges(0);
+  }, []);
+  useEffect(() => {
+    if (pathname === "/changelog" && changelogSummary) markChangelogRead();
+  }, [changelogSummary, markChangelogRead, pathname]);
   useEffect(() => {
     if (access?.access === "pending") void requestWorkspaceAccess({}).catch(() => {});
   }, [access?.access, requestWorkspaceAccess]);
@@ -144,8 +194,9 @@ export function AppShell({ children }: { children: ReactNode }) {
           </section>)}
         </nav>
         <div className="sidebar-bottom">
-          <Link className={`sidebar-link sidebar-changelog-link${pathname === "/changelog" ? " sidebar-link-active" : ""}`} href="/changelog" aria-current={pathname === "/changelog" ? "page" : undefined} title={collapsed ? "What's new" : undefined} onClick={() => setMobileOpen(false)}>
+          <Link className={`sidebar-link sidebar-changelog-link${pathname === "/changelog" ? " sidebar-link-active" : ""}`} href="/changelog" aria-current={pathname === "/changelog" ? "page" : undefined} aria-label={unreadChanges ? `What's new, ${unreadChanges} unread changes` : "What's new"} title={collapsed ? "What's new" : undefined} onClick={() => { markChangelogRead(); setMobileOpen(false); }}>
             <span className="sidebar-link-icon"><Newspaper size={18} strokeWidth={1.9} aria-hidden="true" /></span><span className="sidebar-link-label">What&apos;s new</span>
+            {unreadChanges > 0 && <span className="changelog-unread-count" aria-hidden="true">{unreadChanges > 99 ? "99+" : unreadChanges}</span>}
             {pathname === "/changelog" && <span className="sidebar-active-indicator" aria-hidden="true" />}
           </Link>
           <div className="sidebar-support"><span className="sidebar-support-dot" /><span><strong>Workspace protected</strong><small>Secure finance access</small></span></div>

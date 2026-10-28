@@ -37,6 +37,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .sidebar-active-indicator { position:absolute; top:9px; bottom:9px; right:-1px; width:3px; border-radius:4px 0 0 4px; background:var(--mn-accent); }
 .sidebar-bottom { display:flex; flex-direction:column; gap:12px; padding-top:12px; border-top:1px solid var(--mn-line); }
 .sidebar-changelog-link { margin-bottom:2px; }
+.changelog-unread-count { flex:none; min-width:22px; margin-left:auto; padding:2px 6px; border-radius:999px; background:var(--mn-accent-bg); color:var(--mn-accent); font-size:9px; line-height:1.4; font-weight:700; text-align:center; font-variant-numeric:tabular-nums; }
 .sidebar-support { display:flex; align-items:center; gap:10px; padding:4px 8px; }
 .sidebar-support-dot { width:9px; height:9px; flex:none; border-radius:50%; background:var(--mn-ok-fg); box-shadow:0 0 0 4px color-mix(in srgb,var(--mn-ok-fg) 13%,transparent); }
 .sidebar-support span:last-child { display:flex; flex-direction:column; gap:3px; }
@@ -52,6 +53,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .app-frame-collapsed .sidebar-link:hover { transform:translateY(-1px); }
 .app-frame-collapsed .sidebar-link-icon { width:26px; }
 .app-frame-collapsed .sidebar-support { justify-content:center; padding:5px; }
+.app-frame-collapsed .changelog-unread-count { position:absolute; top:-3px; right:-3px; min-width:17px; padding:1px 4px; font-size:8px; }
 .sidebar-backdrop { display:none; }
 .app-main-column { display:flex; min-width:0; min-height:100vh; flex-direction:column; }
 .app-header { position:sticky; top:0; z-index:var(--mn-z-topbar); height:64px; flex:none; display:flex; align-items:center; gap:20px; padding:0 28px; background:var(--mn-card); border-bottom:1px solid var(--mn-line); }
