@@ -118,6 +118,21 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .account-upload-button:hover,.account-remove-photo:hover { color:var(--mn-accent); border-color:color-mix(in srgb,var(--mn-accent) 42%,var(--mn-line)); background:var(--mn-accent-bg); }
 .account-upload-button:disabled,.account-remove-photo:disabled { opacity:.55; cursor:not-allowed; }
 .account-photo-actions>span { flex-basis:100%; text-align:right; color:var(--mn-subtle); font-size:8px; }
+.pwa-install-prompt { position:fixed; z-index:var(--mn-z-toast); right:16px; bottom:16px; display:flex; align-items:center; gap:14px; width:min(420px,calc(100vw - 32px)); padding:14px; border:1px solid var(--mn-line); border-radius:var(--mn-radius-xl); color:var(--mn-ink); background:var(--mn-card); box-shadow:var(--mn-shadow-menu); }
+.pwa-install-copy { display:flex; flex:1; min-width:0; flex-direction:column; gap:4px; }
+.pwa-install-copy strong { font-size:12px; }
+.pwa-install-copy span { color:var(--mn-muted); font-size:11px; line-height:1.4; }
+.pwa-install-action { display:inline-flex; flex:none; align-items:center; justify-content:center; gap:7px; min-height:38px; padding:0 12px; border:0; border-radius:8px; color:var(--mn-on-accent); background:var(--mn-accent); font-weight:600; cursor:pointer; }
+.pwa-install-action:hover { background:var(--mn-accent-hover); }
+.pwa-install-dismiss { display:grid; flex:none; width:32px; height:32px; place-items:center; padding:0; border:1px solid var(--mn-line); border-radius:8px; color:var(--mn-muted); background:var(--mn-card); cursor:pointer; }
+.pwa-ios-share-icon { flex:none; color:var(--mn-accent); }
+.pwa-offline-page { display:grid; min-height:100vh; place-items:center; padding:24px; background:var(--mn-bg); }
+.pwa-offline-card { width:min(440px,100%); padding:32px; border:1px solid var(--mn-line); border-radius:var(--mn-radius-xl); background:var(--mn-card); text-align:center; box-shadow:var(--mn-shadow-popover); }
+.pwa-offline-mark { display:grid; width:56px; height:56px; margin:0 auto 20px; place-items:center; border-radius:16px; color:var(--mn-accent); background:var(--mn-accent-bg); }
+.pwa-offline-card h1 { margin:8px 0; font-family:var(--mn-font-serif); font-size:34px; font-weight:400; }
+.pwa-offline-card>p:not(.eyebrow) { margin:0 0 20px; color:var(--mn-muted); line-height:1.6; }
+.pwa-offline-card .button { display:inline-flex; align-items:center; justify-content:center; gap:8px; }
+@media (max-width:520px) { .pwa-install-prompt { right:10px; bottom:calc(10px + env(safe-area-inset-bottom)); width:calc(100vw - 20px); gap:9px; padding:11px; } .pwa-install-action { padding-inline:9px; font-size:11px; } .pwa-offline-card { padding:26px 20px; } }
 .account-feedback { display:flex; align-items:center; gap:7px; margin:0; color:var(--mn-ok-fg); font-size:11px; }
 .account-feedback-error { color:var(--mn-danger-fg); }
 .account-save-button { display:flex; align-items:center; justify-content:center; gap:8px; min-height:42px; margin-top:2px; border:1px solid var(--mn-accent); border-radius:9px; color:var(--mn-on-accent); background:var(--mn-accent); font-size:12px; font-weight:650; cursor:pointer; transition:transform var(--mn-dur-fast),filter var(--mn-dur-fast),opacity var(--mn-dur-fast); }
