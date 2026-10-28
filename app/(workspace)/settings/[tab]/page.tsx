@@ -1,4 +1,4 @@
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 import { WorkspaceTitle } from "@/components/AppShell";
 import { SettingsNav } from "@/components/settings/SettingsNav";
 import { SettingsWorkspace } from "@/components/settings/SettingsWorkspace";
@@ -13,6 +13,7 @@ const pages = {
 
 export default async function SettingsPage({ params }: { params: Promise<{ tab: string }> }) {
   const { tab } = await params;
+  if (tab === "access") redirect("/staff/access");
   if (!Object.hasOwn(pages, tab)) notFound();
   const page = pages[tab as keyof typeof pages];
   return <><WorkspaceTitle eyebrow="Settings" title={page.title} description={page.description} /><SettingsNav current={`/settings/${tab}`} /><SettingsWorkspace tab={tab as keyof typeof pages} /></>;

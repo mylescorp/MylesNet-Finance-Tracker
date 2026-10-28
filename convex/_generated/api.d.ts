@@ -10,6 +10,7 @@
 
 import type * as accessControl from "../accessControl.js";
 import type * as analytics from "../analytics.js";
+import type * as audits from "../audits.js";
 import type * as auth from "../auth.js";
 import type * as centipid from "../centipid.js";
 import type * as centipidHttp from "../centipidHttp.js";
@@ -33,6 +34,7 @@ import type {
 declare const fullApi: ApiFromModules<{
   accessControl: typeof accessControl;
   analytics: typeof analytics;
+  audits: typeof audits;
   auth: typeof auth;
   centipid: typeof centipid;
   centipidHttp: typeof centipidHttp;

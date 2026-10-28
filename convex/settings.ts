@@ -335,7 +335,11 @@ export const accessOverview = query({
   args: { pendingUsersPagination: paginationOptsValidator },
   handler: async (ctx, args) => {
     const current = await activeWorkspace(ctx);
-    if (!current || !(await hasPermission(ctx, current.membership, "access.view"))) return { access: "restricted" as const, members: [], invitations: [], audit: [], roles: [], pendingUsers: [], partners: [] };
+    if (!current) return { access: "restricted" as const, canViewMembers: false, members: [], invitations: [], audit: [], roles: [], pendingUsers: [], partners: [] };
+    const canManageAccess = await hasPermission(ctx, current.membership, "access.manage");
+    const canManageRoles = await hasPermission(ctx, current.membership, "roles.manage");
+    const canViewMembers = await hasPermission(ctx, current.membership, "access.view") || canManageAccess;
+    if (!canViewMembers && !canManageRoles) return { access: "restricted" as const, canViewMembers: false, members: [], invitations: [], audit: [], roles: [], pendingUsers: [], partners: [] };
     const [memberships, invitations, audit, roles, partners] = await Promise.all([
       ctx.db.query("memberships").withIndex("by_business_and_user", q => q.eq("businessId", current.business._id)).take(100),
       ctx.db.query("invitations").withIndex("by_business_and_active", q => q.eq("businessId", current.business._id).eq("active", true)).take(100),
@@ -343,7 +347,10 @@ export const accessOverview = query({
       ctx.db.query("workspaceRoles").withIndex("by_business", q => q.eq("businessId", current.business._id)).take(100),
       ctx.db.query("partners").withIndex("by_business_and_active", q => q.eq("businessId", current.business._id)).take(100),
     ]);
-    const usersPage = await ctx.db.query("users").order("desc").paginate(args.pendingUsersPagination);
+    const requestsPage = await ctx.db.query("workspaceAccessRequests")
+      .withIndex("by_business_and_status_and_createdAt", q => q.eq("businessId", current.business._id).eq("status", "pending"))
+      .order("desc")
+      .paginate(args.pendingUsersPagination);
     const partnerNames = new Map(partners.map(partner => [partner._id, partner.name]));
     const members = await Promise.all(memberships.map(async m => {
       const user = await ctx.db.get("users", m.userId);
@@ -351,10 +358,41 @@ export const accessOverview = query({
       const legacyTemplate = roles.find(r => r.builtIn === m.role);
       return { id: m._id, role: assigned?.name ?? m.role, roleId: m.roleId ?? legacyTemplate?._id ?? null, partnerId: m.partnerId ?? null, partnerName: m.partnerId ? partnerNames.get(m.partnerId) : undefined, active: m.active, email: user?.email ?? "Signed-in user", createdAt: m.createdAt };
     }));
-    const userMemberships = await Promise.all(usersPage.page.map(user => ctx.db.query("memberships").withIndex("by_business_and_user", q => q.eq("businessId", current.business._id).eq("userId", user._id)).unique()));
-    const pendingUsers = usersPage.page.flatMap((user, index) => userMemberships[index]?.active ? [] : [{ id: user._id, email: user.email ?? "Signed-in account", createdAt: user._creationTime }]);
+    const pendingUsers = await Promise.all(requestsPage.page.map(async request => {
+      const user = await ctx.db.get("users", request.userId);
+      return user ? { id: user._id, email: user.email ?? "Signed-in account", createdAt: request.createdAt } : null;
+    }));
     const canViewAudit = await hasPermission(ctx, current.membership, "audit.view");
-    return { access: "ready" as const, canManage: await hasPermission(ctx, current.membership, "access.manage"), canManageRoles: await hasPermission(ctx, current.membership, "roles.manage"), canInitializeRoleTemplates: isOwnerMembership(current.membership), canViewAudit, members, pendingUsers, pendingUsersContinueCursor: usersPage.continueCursor, pendingUsersIsDone: usersPage.isDone, roles: roles.map(r => ({ id: r._id, name: r.name, description: r.description, permissions: r.permissions, builtIn: r.builtIn ?? null, active: r.active })), partners: partners.map(partner => ({ id: partner._id, name: partner.name })), invitations: invitations.map(i => ({ id: i._id, email: i.email, role: i.role, roleId: i.roleId ?? null, partnerId: i.partnerId ?? null, partnerName: i.partnerId ? partnerNames.get(i.partnerId) : undefined, expiresAt: i.expiresAt })), audit: canViewAudit ? audit.map(a => ({ id: a._id, action: a.action, summary: a.summary, occurredAt: a.occurredAt })) : [] };
+    return { access: "ready" as const, canViewMembers, canManage: canManageAccess, canManageRoles, canInitializeRoleTemplates: isOwnerMembership(current.membership), canViewAudit, members: canViewMembers ? members : [], pendingUsers: canManageAccess ? pendingUsers.filter((user): user is NonNullable<typeof user> => user !== null) : [], pendingUsersContinueCursor: requestsPage.continueCursor, pendingUsersIsDone: requestsPage.isDone, roles: canManageRoles || await hasPermission(ctx, current.membership, "access.view") ? roles.map(r => ({ id: r._id, name: r.name, description: r.description, permissions: r.permissions, builtIn: r.builtIn ?? null, active: r.active, memberCount: memberships.filter(m => m.roleId === r._id || !m.roleId && (m.role === r.builtIn || m.role.toLowerCase() === r.name.toLowerCase())).length })) : [], partners: canManageAccess || canViewMembers ? partners.map(partner => ({ id: partner._id, name: partner.name })) : [], invitations: canManageAccess ? invitations.map(i => ({ id: i._id, email: i.email, role: i.role, roleId: i.roleId ?? null, partnerId: i.partnerId ?? null, partnerName: i.partnerId ? partnerNames.get(i.partnerId) : undefined, expiresAt: i.expiresAt })) : [], audit: canViewAudit ? audit.map(a => ({ id: a._id, action: a.action, summary: a.summary, occurredAt: a.occurredAt })) : [] };
+  },
+});
+
+// Called after sign-in by accounts that do not have active workspace access.
+// Identity and the target workspace are derived server-side; the request never
+// grants membership or exposes data to the requesting account.
+export const requestWorkspaceAccess = mutation({
+  args: {},
+  returns: v.null(),
+  handler: async ctx => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error("Sign in before requesting workspace access.");
+    const businesses = await ctx.db.query("businesses").take(2);
+    if (businesses.length !== 1) return null;
+    const business = businesses[0];
+    const membership = await ctx.db.query("memberships")
+      .withIndex("by_business_and_user", q => q.eq("businessId", business._id).eq("userId", userId))
+      .unique();
+    if (membership?.active) return null;
+    const existing = await ctx.db.query("workspaceAccessRequests")
+      .withIndex("by_business_and_user", q => q.eq("businessId", business._id).eq("userId", userId))
+      .unique();
+    const now = Date.now();
+    if (existing) {
+      if (existing.status !== "pending") await ctx.db.patch("workspaceAccessRequests", existing._id, { status: "pending", updatedAt: now });
+      return null;
+    }
+    await ctx.db.insert("workspaceAccessRequests", { businessId: business._id, userId, status: "pending", createdAt: now, updatedAt: now });
+    return null;
   },
 });
 
@@ -444,6 +482,10 @@ export const grantPendingUser = mutation({
     const now = Date.now();
     if (existing) await ctx.db.patch("memberships", existing._id, { active: true, role: role.name, roleId: role._id, partnerId: args.partnerId });
     else await ctx.db.insert("memberships", { businessId: current.business._id, userId: user._id, active: true, role: role.name, roleId: role._id, partnerId: args.partnerId, createdAt: now });
+    const accessRequest = await ctx.db.query("workspaceAccessRequests")
+      .withIndex("by_business_and_user", q => q.eq("businessId", current.business._id).eq("userId", user._id))
+      .unique();
+    if (accessRequest?.status === "pending") await ctx.db.patch("workspaceAccessRequests", accessRequest._id, { status: "granted", updatedAt: now });
     await ctx.db.insert("auditEvents", { businessId: current.business._id, actorId: current.userId, action: "member.access.granted", entityType: "membership", entityId: existing?._id ?? user._id, occurredAt: now, summary: `Granted ${user.email ?? "a user"} access as ${role.name}.` });
     return null;
   },

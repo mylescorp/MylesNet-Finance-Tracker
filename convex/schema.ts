@@ -86,6 +86,15 @@ export default defineSchema({
     updatedAt: v.number(),
     updatedBy: v.id("users"),
   }).index("by_business", ["businessId"]),
+  workspaceAccessRequests: defineTable({
+    businessId: v.id("businesses"),
+    userId: v.id("users"),
+    status: v.union(v.literal("pending"), v.literal("granted")),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_business_and_user", ["businessId", "userId"])
+    .index("by_business_and_status_and_createdAt", ["businessId", "status", "createdAt"]),
   partners: defineTable({
     businessId: v.id("businesses"),
     name: v.string(),
