@@ -9,7 +9,7 @@ import { Card } from "@/components/AppShell";
 import { formatBusinessDay } from "@/lib/format";
 import { PartnerDistributions } from "@/components/workspace/PartnerDistributions";
 import { RecordFormDisclosure } from "@/components/workspace/RecordFormDisclosure";
-import { useRecordEntryBusy, useRecordEntrySaved } from "@/components/workspace/RecordEntryDrawer";
+import { useOptionalRecordEntryDrawer, useRecordEntryBusy, useRecordEntrySaved } from "@/components/workspace/RecordEntryDrawer";
 
 type Account = "cash" | "mobile_money";
 type Screen = "Movements" | "Savings" | "Loans" | "Partners" | "Bills" | "Reconcile";
@@ -22,6 +22,7 @@ function businessDate(timezone: string) {
 export function OperationsWorkspace({ screen, currency, scale, locale, timezone, dateFormat, range }: { screen: Screen; currency: string; scale: number; locale: string; timezone: string; dateFormat: "DD/MM/YYYY" | "MM/DD/YYYY" | "YYYY-MM-DD"; range: { from: string; toExclusive: string } }) {
   const recordSaved = useRecordEntrySaved();
   const setDrawerBusy = useRecordEntryBusy();
+  const drawer = useOptionalRecordEntryDrawer();
   const data = useQuery(api.operations.overview, range);
   const distributionAccess = useQuery(api.distributions.overview, screen === "Partners" ? { paginationOpts: { numItems: 20, cursor: null } } : "skip");
   const partnerStatement = useQuery(api.operations.partnerStatement, screen === "Partners" ? range : "skip");
@@ -37,8 +38,8 @@ export function OperationsWorkspace({ screen, currency, scale, locale, timezone,
   const createPartner = useMutation(api.operations.createPartner);
   const [keys, setKeys] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
-  const [feedback, setFeedback] = useState<{ error: boolean; message: string } | null>(null);
-  const [warning, setWarning] = useState<{ message: string; retry: () => Promise<void> } | null>(null);
+  const [feedback, setFeedback] = useState<{ error: boolean; message: string; selectionVersion: number | null } | null>(null);
+  const [warning, setWarning] = useState<{ message: string; retry: () => Promise<void>; selectionVersion: number } | null>(null);
   const fmt = (amount: number) => new Intl.NumberFormat(locale, { style: "currency", currency, maximumFractionDigits: Math.log10(scale) }).format(amount / scale);
   const day = businessDate(timezone);
 
@@ -56,13 +57,13 @@ export function OperationsWorkspace({ screen, currency, scale, locale, timezone,
           await action(currentValues, key, confirmNegative);
           setKeys(current => { const next = { ...current }; delete next[scope]; return next; });
           element.reset();
-          setFeedback({ error: false, message: "Saved. The cashbook and audit trail have been updated." });
-          recordSaved();
+          setFeedback({ error: false, message: "Saved. The cashbook and audit trail have been updated.", selectionVersion: drawer?.selectionVersion ?? null });
+          recordSaved("Saved. The cashbook and audit trail have been updated.");
         } catch (error) {
           const details = error instanceof ConvexError ? error.data as { code?: string; message?: string } : null;
           if (details?.code === "CONFIRM_NEGATIVE" && !confirmNegative) {
-            setWarning({ message: details.message ?? "This transaction may create a negative balance.", retry: async () => { if (element.reportValidity()) await run(new FormData(element), true); } });
-          } else setFeedback({ error: true, message: error instanceof Error ? error.message : "Could not save this record." });
+            setWarning({ message: details.message ?? "This transaction may create a negative balance.", retry: async () => { if (element.reportValidity()) await run(new FormData(element), true); }, selectionVersion: drawer?.selectionVersion ?? 0 });
+          } else setFeedback({ error: true, message: error instanceof Error ? error.message : "Could not save this record.", selectionVersion: drawer?.selectedId ? drawer.selectionVersion : null });
         } finally { setBusy(false); setDrawerBusy(false); }
       };
       void run(values, false);
@@ -89,8 +90,8 @@ export function OperationsWorkspace({ screen, currency, scale, locale, timezone,
   const today = businessDate(timezone);
   const periodNote = <p className="muted-note">The selected period filters transaction history. Current balances, active loans, and bill schedules show their latest status.</p>;
   const sharedMessages = <>
-    {warning && <div className="notice-banner notice-warning" role="alert"><strong>Balance warning</strong><p>{warning.message}</p><button className="button button-accent" type="button" disabled={busy} onClick={() => void warning.retry()}>Review and continue</button></div>}
-    {feedback && <p className={`form-feedback ${feedback.error ? "form-error" : "form-success"}`} role="status">{feedback.message}</p>}
+    {warning && warning.selectionVersion === drawer?.selectionVersion && <div className="notice-banner notice-warning" role="alert"><strong>Balance warning</strong><p>{warning.message}</p><button className="button button-accent" type="button" disabled={busy} onClick={() => void warning.retry()}>Review and continue</button></div>}
+    {feedback && feedback.selectionVersion === (drawer?.selectedId ? drawer.selectionVersion : null) && <p className={`form-feedback ${feedback.error ? "form-error" : "form-success"}`} role={feedback.error ? "alert" : "status"}>{feedback.message}</p>}
   </>;
   const rowActions = <p className="muted-note">Amounts use {currency} precision. Every saved action is audit logged; saved records are not silently removed.</p>;
 
@@ -136,8 +137,8 @@ export function OperationsWorkspace({ screen, currency, scale, locale, timezone,
     <Card className="board-section-card board-table-card"><h2 className="card-title">Bills and next due dates</h2>{records.bills.length ? <div className="table-scroll"><table className="data-table"><thead><tr><th>Bill</th><th>Category</th><th>Expected</th><th>Recurrence</th><th>Next due</th></tr></thead><tbody>{records.bills.map(row => <tr key={row._id}><td>{row.name}</td><td>{row.category}</td><td>{fmt(row.amountUgx)}</td><td>{row.recurrence}</td><td>{formatBusinessDay(row.nextDueOn, dateFormat)}</td></tr>)}</tbody></table></div> : <Empty message="No recurring bills configured." detail="Create a bill schedule. It will not book accruals or expenses automatically." />}{records.billPayments.length > 0 && <><h3 className="card-title">Payment history</h3><div className="table-scroll"><table className="data-table"><thead><tr><th>Paid on</th><th>Bill</th><th>Expense amount</th><th>Paid from</th></tr></thead><tbody>{records.billPayments.map(row => <tr key={row._id}><td>{formatBusinessDay(row.paidOn, dateFormat)}</td><td>{row.billName}</td><td>{fmt(row.amountUgx)}</td><td>{row.account ? accountName(row.account) : "Not recorded on this older payment"}</td></tr>)}</tbody></table></div></>}{rowActions}</Card>
   </div>;
 
-  if (screen === "Reconcile") return <div className="board-grid">{periodNote}{sharedMessages}
-    <RecordFormDisclosure title="Record an account count" description="This captures the book balance and counted balance at that moment. It never edits cashbook transactions."><Card className="board-feature-card"><h2 className="card-title">Record an account count</h2><p className="card-subtitle">This captures the book balance and counted balance at that moment. It never edits cashbook transactions.</p><form className="form-layout" onSubmit={form("reconcile", async (v, key) => createReconciliation({ account: String(v.get("account")) as Account, asOfDate: String(v.get("asOfDate")), countedBalanceUgx: Math.round(Number(v.get("counted")) * scale), note: String(v.get("note") ?? ""), idempotencyKey: key }))}><div className="field"><label htmlFor="count-account">Account</label><select id="count-account" name="account"><option value="cash">Cash</option><option value="mobile_money">Mobile money</option></select></div><div className="field"><label htmlFor="count-date">Count date</label><input id="count-date" name="asOfDate" type="date" defaultValue={day} required /></div><div className="field"><label htmlFor="count-amount">Counted balance ({currency})</label><input id="count-amount" name="counted" type="number" min="0" step={1 / scale} required /></div><div className="field"><label htmlFor="count-note">Count notes</label><input id="count-note" name="note" maxLength={300} /></div><div className="form-actions"><button className="button button-accent" disabled={busy}>Save count</button></div></form></Card></RecordFormDisclosure>
+  if (screen === "Reconcile") return <div className="board-grid">{periodNote}
+    <RecordFormDisclosure title="Record an account count" description="This captures the book balance and counted balance at that moment. It never edits cashbook transactions."><Card className="board-feature-card"><h2 className="card-title">Record an account count</h2><p className="card-subtitle">This captures the book balance and counted balance at that moment. It never edits cashbook transactions.</p>{sharedMessages}<form className="form-layout" onSubmit={form("reconcile", async (v, key) => createReconciliation({ account: String(v.get("account")) as Account, asOfDate: String(v.get("asOfDate")), countedBalanceUgx: Math.round(Number(v.get("counted")) * scale), note: String(v.get("note") ?? ""), idempotencyKey: key }))}><div className="field"><label htmlFor="count-account">Account</label><select id="count-account" name="account"><option value="cash">Cash</option><option value="mobile_money">Mobile money</option></select></div><div className="field"><label htmlFor="count-date">Count date</label><input id="count-date" name="asOfDate" type="date" defaultValue={day} required /></div><div className="field"><label htmlFor="count-amount">Counted balance ({currency})</label><input id="count-amount" name="counted" type="number" min="0" step={1 / scale} required /></div><div className="field"><label htmlFor="count-note">Count notes</label><input id="count-note" name="note" maxLength={300} /></div><div className="form-actions"><button className="button button-accent" disabled={busy}>Save count</button></div></form></Card></RecordFormDisclosure>
     <Card className="board-section-card board-table-card"><h2 className="card-title">Recent reconciliations</h2>{records.reconciliations.length ? <div className="table-scroll"><table className="data-table"><thead><tr><th>Date</th><th>Account</th><th>Book</th><th>Counted</th><th>Variance</th><th>Status</th></tr></thead><tbody>{records.reconciliations.map(row => <tr key={row._id}><td>{formatBusinessDay(row.asOfDate, dateFormat)}</td><td>{accountName(row.account)}</td><td>{fmt(row.bookBalanceUgx)}</td><td>{fmt(row.countedBalanceUgx)}</td><td>{fmt(row.varianceUgx)}</td><td>{row.status === "open" && records.role === "owner" ? <details className="inline-record-disclosure"><summary>Explain variance</summary><form onSubmit={form(`explain-${row._id}`, async v => explainReconciliation({ reconciliationId: row._id, explanation: String(v.get("explanation")) }))}><input aria-label="Explain reconciliation difference" name="explanation" minLength={5} maxLength={300} placeholder="Explain variance" required /><button className="button" disabled={busy}>Mark explained</button></form></details> : row.status}</td></tr>)}</tbody></table></div> : <Empty message="No reconciliation counts recorded." detail="Record a physical cash count or verified mobile-money balance to compare against the book." />}{rowActions}</Card>
   </div>;
 

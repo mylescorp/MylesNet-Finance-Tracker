@@ -8,20 +8,24 @@ type FormItem = { id: string; title: string; description?: string };
 type DrawerContextValue = {
   forms: FormItem[];
   selectedId: string | null;
+  selectionVersion: number;
   busy: boolean;
   register: (item: FormItem) => () => void;
   setBusy: (busy: boolean) => void;
   select: (id: string) => void;
   close: () => void;
-  saved: () => void;
+  saved: (message?: string) => void;
+  dismissSaved: () => void;
 };
 
 const DrawerContext = createContext<DrawerContextValue | null>(null);
 
 export function RecordEntryDrawerProvider({ children }: { children: ReactNode }) {
   const [registry, setRegistry] = useState<Record<string, FormItem>>({});
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selection, setSelection] = useState<{ selectedId: string | null; selectionVersion: number }>({ selectedId: null, selectionVersion: 0 });
+  const { selectedId, selectionVersion } = selection;
   const [busy, setBusy] = useState(false);
+  const [successMessage, setSuccessMessage] = useState("");
   const register = useCallback((item: FormItem) => {
     setRegistry(current => current[item.id]?.title === item.title && current[item.id]?.description === item.description ? current : { ...current, [item.id]: item });
     return () => setRegistry(current => {
@@ -31,12 +35,20 @@ export function RecordEntryDrawerProvider({ children }: { children: ReactNode })
       return next;
     });
   }, []);
-  const close = useCallback(() => setSelectedId(null), []);
-  const select = useCallback((id: string) => setSelectedId(id), []);
-  const saved = useCallback(() => setSelectedId(null), []);
+  const close = useCallback(() => {
+    setSelection(current => current.selectedId === null ? current : { selectedId: null, selectionVersion: current.selectionVersion + 1 });
+  }, []);
+  const select = useCallback((id: string) => {
+    setSelection(current => current.selectedId === id ? current : { selectedId: id, selectionVersion: current.selectionVersion + 1 });
+  }, []);
+  const saved = useCallback((message?: string) => {
+    close();
+    setSuccessMessage(message ?? "Record saved successfully.");
+  }, [close]);
+  const dismissSaved = useCallback(() => setSuccessMessage(""), []);
   const forms = useMemo(() => Object.values(registry), [registry]);
-  const value = useMemo(() => ({ forms, selectedId, busy, register, setBusy, select, close, saved }), [forms, selectedId, busy, register, setBusy, select, close, saved]);
-  return <DrawerContext.Provider value={value}>{children}</DrawerContext.Provider>;
+  const value = useMemo(() => ({ forms, selectedId, selectionVersion, busy, register, setBusy, select, close, saved, dismissSaved }), [forms, selectedId, selectionVersion, busy, register, setBusy, select, close, saved, dismissSaved]);
+  return <DrawerContext.Provider value={value}>{children}{successMessage && <div className="record-save-toast" role="status"><span>{successMessage}</span><button className="icon-button" type="button" aria-label="Dismiss save confirmation" onClick={dismissSaved}><X size={14} /></button></div>}</DrawerContext.Provider>;
 }
 
 export function useRecordEntryDrawer() {
@@ -51,7 +63,8 @@ export function useOptionalRecordEntryDrawer() {
 
 export function useRecordEntrySaved() {
   const value = useContext(DrawerContext);
-  return value?.saved ?? (() => {});
+  const noopSave: (message?: string) => void = () => {};
+  return value?.saved ?? noopSave;
 }
 
 export function useRecordEntryBusy() {
@@ -103,7 +116,7 @@ export function RegisteredRecordForm({ id, title, description, children }: { id:
         <div><span className="eyebrow">NEW RECORD</span><h2 id="record-drawer-title">{title}</h2>{description && <p id="record-drawer-description">{description}</p>}</div>
         <button className="icon-button" type="button" aria-label="Close record drawer" disabled={busy} onClick={close}><X size={17} /></button>
       </header>
-      {forms.length > 1 && <nav className="record-drawer-actions" aria-label="Record type">{forms.map(item => <button key={item.id} className={`button${item.id === id ? " button-accent" : ""}`} type="button" aria-current={item.id === id ? "page" : undefined} onClick={() => select(item.id)}>{item.title}</button>)}</nav>}
+      {forms.length > 1 && <nav className="record-drawer-actions" aria-label="Record type">{forms.map(item => <button key={item.id} className={`button${item.id === id ? " button-accent" : ""}`} type="button" disabled={busy} aria-current={item.id === id ? "page" : undefined} onClick={() => select(item.id)}>{item.title}</button>)}</nav>}
       <div className="record-drawer-content">{children}</div>
     </section>
   </div>, document.body);

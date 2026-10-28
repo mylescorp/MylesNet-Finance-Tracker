@@ -41,7 +41,7 @@ export function OperationalRecordForm({ kind, currency, scale = 1, businessDay }
       requestKey.current = null;
       setTitle(""); setAmount(""); setNote(""); setDateEdited(false); setOccurredOn("");
       setFeedback({ message: `${titleFor} saved.`, error: false });
-      recordSaved();
+      recordSaved(`${titleFor} saved.`);
     } catch (error) {
       setFeedback({ message: error instanceof Error ? error.message : "Could not save this record.", error: true });
     } finally { setBusy(false); setDrawerBusy(false); }

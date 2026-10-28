@@ -65,7 +65,7 @@ export function EntryForm({ kind }: { kind: EntryKind }) {
       form.reset();
       setOccurredOn(null);
       setFeedback({ message: `${title.replace("Record a ", "")} saved to the cashbook.`, error: false });
-      recordSaved();
+      recordSaved(`${kind === "sale" ? "Sale" : "Expense"} saved to the cashbook.`);
     } catch (error) {
       if (error instanceof ConvexError) {
         const warning = error.data as { code?: string; message?: string };
