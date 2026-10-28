@@ -34,7 +34,7 @@ export function AnalyticsInsights({ range, today, currency, scale, locale, compa
       ["Summary", "Current balances", today, "Cash", String(analytics.balances.cashUgx / scale), currency],
       ["Summary", "Current balances", today, "Mobile money", String(analytics.balances.mobileMoneyUgx / scale), currency],
       ...analytics.period.days.map(day => ["Daily", day.day, "", "Sales", String(day.salesUgx / scale), currency, "Expenses", String(day.expensesUgx / scale), currency, day.hasActivity ? "Activity recorded" : "No activity"]),
-      ...analytics.partners.map(partner => ["Partner", range.from, range.toExclusive, partner.name, String(partner.ownershipBps / 100), "%", String(partner.shareOfNetUgx / scale), currency]),
+      ...analytics.partners.map(partner => ["Partner", range.from, range.toExclusive, `${partner.name} ownership`, String(partner.ownershipBps / 100), "%", "Estimated profit share", String(partner.shareOfNetUgx / scale), currency, "Illustration only; not an approved payout"]),
       ...analytics.issues.map(issue => {
         const value = issue.id === "missing-sales-days" ? String(issue.amountUgx)
           : issue.id === "ownership-incomplete" ? String(issue.amountUgx / 100)
