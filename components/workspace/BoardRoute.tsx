@@ -463,7 +463,10 @@ function EntryCsvExportControl({ businessId, kind, from, toExclusive, currency, 
         done = page.isDone;
       }
     const headers = ["Date", "Type", "Category", "Account", `Amount (${currency})`, "Currency", "Status", "Source", "Entry ID", "Created at (UTC)", "Actor ID", "Description"];
-    const escape = (value: string) => `"${value.replaceAll('"', '""')}"`;
+    const escape = (value: string) => {
+      const spreadsheetSafe = /^[\s\uFEFF]*[=+\-@]/u.test(value) ? `'${value}` : value;
+      return `"${spreadsheetSafe.replaceAll('"', '""')}"`;
+    };
     const rows = results.map(row => [row.occurredOn, row.kind, row.category, accountLabel(row.account), String(row.amountUgx / scale), currency, row.state, row.source, row.entryId, new Date(row.createdAt).toISOString(), row.createdBy, row.note]);
     const csv = [headers, ...rows].map(row => row.map(escape).join(",")).join("\r\n");
     const url = URL.createObjectURL(new Blob([`\uFEFF${csv}`], { type: "text/csv;charset=utf-8" }));
