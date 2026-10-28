@@ -39,6 +39,7 @@ export default defineSchema({
   })
     .index("by_user", ["userId"])
     .index("by_business_and_user", ["businessId", "userId"])
+    .index("by_business_and_role_id", ["businessId", "roleId"])
     .index("by_business_and_partner_and_active", ["businessId", "partnerId", "active"]),
   invitations: defineTable({
     email: v.string(),

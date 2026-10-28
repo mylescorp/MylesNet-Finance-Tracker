@@ -49,7 +49,7 @@ async function workspace(ctx: Ctx): Promise<ActiveWorkspace | null> {
 
 async function requireManager(ctx: Ctx) {
   const current = await workspace(ctx);
-  if (!current || !(await hasPermission(ctx, current.membership, "partners.distributions.manage"))) throw new Error("Your role cannot manage partner distributions.");
+  if (!current || current.membership.partnerId || !(await hasPermission(ctx, current.membership, "partners.distributions.manage"))) throw new Error("Your role cannot manage partner distributions.");
   return current;
 }
 
@@ -177,7 +177,7 @@ export const decide = mutation({
   returns: v.null(),
   handler: async (ctx, args) => {
     const current = await workspace(ctx);
-    if (!current || !(await hasPermission(ctx, current.membership, "partners.distributions.approve"))) throw new Error("Your role cannot review partner distributions.");
+    if (!current || current.membership.partnerId || !(await hasPermission(ctx, current.membership, "partners.distributions.approve"))) throw new Error("Your role cannot review partner distributions.");
     const row = await ctx.db.get("partnerDistributions", args.distributionId);
     if (!row || row.businessId !== current.business._id || row.status !== "pending_approval") throw new Error("This distribution is not awaiting a decision.");
     if (row.createdBy === current.userId) throw new Error("The person who prepared a distribution cannot approve or reject it.");
@@ -290,7 +290,7 @@ export const overview = query({
   args: { paginationOpts: paginationOptsValidator },
   handler: async (ctx, args) => {
     const current = await workspace(ctx);
-    if (!current || (!(await hasPermission(ctx, current.membership, "partners.distributions.manage")) && !(await hasPermission(ctx, current.membership, "partners.distributions.approve")))) return { access: "restricted" as const };
+    if (!current || current.membership.partnerId || (!(await hasPermission(ctx, current.membership, "partners.distributions.manage")) && !(await hasPermission(ctx, current.membership, "partners.distributions.approve")))) return { access: "restricted" as const };
     const canManage = await hasPermission(ctx, current.membership, "partners.distributions.manage");
     const canApprove = await hasPermission(ctx, current.membership, "partners.distributions.approve");
     if (args.paginationOpts.numItems > 20) throw new Error("Distribution history pages are limited to 20 records.");
@@ -320,7 +320,7 @@ export const payoutHistory = query({
   args: { distributionId: v.id("partnerDistributions"), paginationOpts: paginationOptsValidator },
   handler: async (ctx, args) => {
     const current = await workspace(ctx);
-    if (!current || (!(await hasPermission(ctx, current.membership, "partners.distributions.manage")) && !(await hasPermission(ctx, current.membership, "partners.distributions.approve")))) return { access: "restricted" as const };
+    if (!current || current.membership.partnerId || (!(await hasPermission(ctx, current.membership, "partners.distributions.manage")) && !(await hasPermission(ctx, current.membership, "partners.distributions.approve")))) return { access: "restricted" as const };
     if (args.paginationOpts.numItems > 50) throw new Error("Payout history pages are limited to 50 records.");
     const distribution = await ctx.db.get("partnerDistributions", args.distributionId);
     if (!distribution || distribution.businessId !== current.business._id) return { access: "restricted" as const };

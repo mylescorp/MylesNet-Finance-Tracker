@@ -30,6 +30,11 @@ export async function permissionsForMembership(ctx: QueryCtx | MutationCtx, memb
     if (!role || !role.active || role.businessId !== membership.businessId) return [] as string[];
     return role.permissions;
   }
+  const templates = await ctx.db.query("workspaceRoles")
+    .withIndex("by_business", q => q.eq("businessId", membership.businessId))
+    .take(100);
+  const legacyTemplate = templates.find(role => role.builtIn === membership.role || role.name.toLowerCase() === membership.role.toLowerCase());
+  if (legacyTemplate?.active) return legacyTemplate.permissions;
   if (membership.role === "cashier") return CASHIER;
   if (membership.role === "partner") return PARTNER;
   if (membership.role === "finance_approver") return FINANCE_APPROVER;

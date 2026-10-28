@@ -1,6 +1,7 @@
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { countries } from "countries-list";
 import { currencies } from "countries-list/currencies";
+import { paginationOptsValidator } from "convex/server";
 import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
@@ -331,18 +332,18 @@ export const monthlyTargets = query({
 });
 
 export const accessOverview = query({
-  args: {},
-  handler: async (ctx) => {
+  args: { pendingUsersPagination: paginationOptsValidator },
+  handler: async (ctx, args) => {
     const current = await activeWorkspace(ctx);
     if (!current || !(await hasPermission(ctx, current.membership, "access.view"))) return { access: "restricted" as const, members: [], invitations: [], audit: [], roles: [], pendingUsers: [], partners: [] };
-    const [memberships, invitations, audit, roles, users, partners] = await Promise.all([
+    const [memberships, invitations, audit, roles, partners] = await Promise.all([
       ctx.db.query("memberships").withIndex("by_business_and_user", q => q.eq("businessId", current.business._id)).take(100),
       ctx.db.query("invitations").withIndex("by_business_and_active", q => q.eq("businessId", current.business._id).eq("active", true)).take(100),
       ctx.db.query("auditEvents").withIndex("by_business_and_time", q => q.eq("businessId", current.business._id)).order("desc").take(20),
       ctx.db.query("workspaceRoles").withIndex("by_business", q => q.eq("businessId", current.business._id)).take(100),
-      ctx.db.query("users").order("desc").take(500),
       ctx.db.query("partners").withIndex("by_business_and_active", q => q.eq("businessId", current.business._id)).take(100),
     ]);
+    const usersPage = await ctx.db.query("users").order("desc").paginate(args.pendingUsersPagination);
     const partnerNames = new Map(partners.map(partner => [partner._id, partner.name]));
     const members = await Promise.all(memberships.map(async m => {
       const user = await ctx.db.get("users", m.userId);
@@ -350,10 +351,10 @@ export const accessOverview = query({
       const legacyTemplate = roles.find(r => r.builtIn === m.role);
       return { id: m._id, role: assigned?.name ?? m.role, roleId: m.roleId ?? legacyTemplate?._id ?? null, partnerId: m.partnerId ?? null, partnerName: m.partnerId ? partnerNames.get(m.partnerId) : undefined, active: m.active, email: user?.email ?? "Signed-in user", createdAt: m.createdAt };
     }));
-    const memberUserIds = new Set(memberships.filter(m => m.active).map(m => m.userId));
-    const pendingUsers = users.filter(u => !memberUserIds.has(u._id)).slice(0, 200).map(u => ({ id: u._id, email: u.email ?? "Google account", createdAt: u._creationTime }));
+    const userMemberships = await Promise.all(usersPage.page.map(user => ctx.db.query("memberships").withIndex("by_business_and_user", q => q.eq("businessId", current.business._id).eq("userId", user._id)).unique()));
+    const pendingUsers = usersPage.page.flatMap((user, index) => userMemberships[index]?.active ? [] : [{ id: user._id, email: user.email ?? "Signed-in account", createdAt: user._creationTime }]);
     const canViewAudit = await hasPermission(ctx, current.membership, "audit.view");
-    return { access: "ready" as const, canManage: await hasPermission(ctx, current.membership, "access.manage"), canManageRoles: await hasPermission(ctx, current.membership, "roles.manage"), canInitializeRoleTemplates: isOwnerMembership(current.membership), canViewAudit, members, pendingUsers, roles: roles.map(r => ({ id: r._id, name: r.name, description: r.description, permissions: r.permissions, builtIn: r.builtIn ?? null, active: r.active })), partners: partners.map(partner => ({ id: partner._id, name: partner.name })), invitations: invitations.map(i => ({ id: i._id, email: i.email, role: i.role, roleId: i.roleId ?? null, partnerId: i.partnerId ?? null, partnerName: i.partnerId ? partnerNames.get(i.partnerId) : undefined, expiresAt: i.expiresAt })), audit: canViewAudit ? audit.map(a => ({ id: a._id, action: a.action, summary: a.summary, occurredAt: a.occurredAt })) : [] };
+    return { access: "ready" as const, canManage: await hasPermission(ctx, current.membership, "access.manage"), canManageRoles: await hasPermission(ctx, current.membership, "roles.manage"), canInitializeRoleTemplates: isOwnerMembership(current.membership), canViewAudit, members, pendingUsers, pendingUsersContinueCursor: usersPage.continueCursor, pendingUsersIsDone: usersPage.isDone, roles: roles.map(r => ({ id: r._id, name: r.name, description: r.description, permissions: r.permissions, builtIn: r.builtIn ?? null, active: r.active })), partners: partners.map(partner => ({ id: partner._id, name: partner.name })), invitations: invitations.map(i => ({ id: i._id, email: i.email, role: i.role, roleId: i.roleId ?? null, partnerId: i.partnerId ?? null, partnerName: i.partnerId ? partnerNames.get(i.partnerId) : undefined, expiresAt: i.expiresAt })), audit: canViewAudit ? audit.map(a => ({ id: a._id, action: a.action, summary: a.summary, occurredAt: a.occurredAt })) : [] };
   },
 });
 
@@ -418,8 +419,8 @@ export const updateRole = mutation({
     if (duplicate.some(r => r._id !== role._id && r.name.toLowerCase() === name.toLowerCase())) throw new Error("A role with that name already exists.");
     if (!args.active && role.builtIn) throw new Error("Built-in role templates cannot be deactivated.");
     if (!args.active) {
-      const assigned = await ctx.db.query("memberships").withIndex("by_business_and_user", q => q.eq("businessId", current.business._id)).take(500);
-      if (assigned.some(m => m.roleId === role._id && m.active)) throw new Error("Reassign active members before deactivating this role.");
+      const assigned = await ctx.db.query("memberships").withIndex("by_business_and_role_id", q => q.eq("businessId", current.business._id).eq("roleId", role._id)).filter(q => q.eq(q.field("active"), true)).first();
+      if (assigned) throw new Error("Reassign active members before deactivating this role.");
     }
     const now = Date.now();
     await ctx.db.patch("workspaceRoles", role._id, { name, description: args.description.trim().slice(0, 240), permissions, active: args.active, updatedAt: now });

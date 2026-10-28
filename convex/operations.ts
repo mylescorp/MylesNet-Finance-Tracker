@@ -114,7 +114,7 @@ export const overview = query({
     v.object({
       access: v.literal("ready"), role: membershipRoleV,
       partnerStatementOnly: v.boolean(),
-      canManageMovements: v.boolean(), canManageSavings: v.boolean(), canManageLoans: v.boolean(), canManageBills: v.boolean(),
+      canManageMovements: v.boolean(), canManageSavings: v.boolean(), canManageLoans: v.boolean(), canRepayLoans: v.boolean(), canManageBills: v.boolean(), canPayBills: v.boolean(),
       canManageReconciliation: v.boolean(), canResolveReconciliation: v.boolean(), canManagePartners: v.boolean(),
       movements: v.array(v.object({ _id: v.id("movements"), kind: v.union(v.literal("transfer"), v.literal("withdrawal"), v.literal("deposit"), v.literal("capital_contribution")), amountUgx: v.number(), feeUgx: v.optional(v.number()), fromAccount: v.optional(accountV), toAccount: v.optional(accountV), partnerName: v.optional(v.string()), occurredOn: v.string(), note: v.string() })),
       savings: v.array(v.object({ _id: v.id("savingsHoldings"), name: v.string(), targetUgx: v.optional(v.number()), balanceUgx: v.number(), active: v.boolean() })),
@@ -140,7 +140,9 @@ export const overview = query({
     const canManageMovements = await hasPermission(ctx, current.membership, "movements.create");
     const canManageSavings = await hasPermission(ctx, current.membership, "savings.create");
     const canManageLoans = await hasPermission(ctx, current.membership, "loans.create");
+    const canRepayLoans = await hasPermission(ctx, current.membership, "loans.repay");
     const canManageBills = await hasPermission(ctx, current.membership, "bills.create");
+    const canPayBills = await hasPermission(ctx, current.membership, "bills.pay");
     const canManageReconciliation = await hasPermission(ctx, current.membership, "reconcile.create");
     const canResolveReconciliation = await hasPermission(ctx, current.membership, "reconcile.resolve");
     const canManagePartners = await hasPermission(ctx, current.membership, "partners.manage");
@@ -148,7 +150,7 @@ export const overview = query({
     const partnerStatementOnly = Boolean(current.membership.partnerId);
     if (partnerStatementOnly) return {
       access: "ready" as const, role: current.membership.role, partnerStatementOnly: true,
-      canManageMovements: false, canManageSavings: false, canManageLoans: false, canManageBills: false,
+      canManageMovements: false, canManageSavings: false, canManageLoans: false, canRepayLoans: false, canManageBills: false, canPayBills: false,
       canManageReconciliation: false, canResolveReconciliation: false, canManagePartners: false,
       movements: [], savings: [], savingsFlows: [], loans: [], loanRepayments: [], bills: [], billPayments: [], reconciliations: [], partners: [],
     };
@@ -180,7 +182,7 @@ export const overview = query({
     });
     const billById = new Map(bills.map(item => [item._id, item.name]));
     return {
-      access: "ready" as const, role: current.membership.role, partnerStatementOnly: false, canManageMovements, canManageSavings, canManageLoans, canManageBills, canManageReconciliation, canResolveReconciliation, canManagePartners,
+      access: "ready" as const, role: current.membership.role, partnerStatementOnly: false, canManageMovements, canManageSavings, canManageLoans, canRepayLoans, canManageBills, canPayBills, canManageReconciliation, canResolveReconciliation, canManagePartners,
       movements: canViewMovements ? movements.map(row => ({ _id: row._id, kind: row.kind, amountUgx: row.amountUgx, feeUgx: row.feeUgx, fromAccount: row.fromAccount, toAccount: row.toAccount, partnerName: canViewPartners && row.partnerId ? partnerById.get(row.partnerId) : undefined, occurredOn: row.occurredOn, note: row.note })) : [],
       savings: canViewSavings ? savings.map(row => ({ _id: row._id, name: row.name, targetUgx: row.targetUgx, balanceUgx: row.balanceUgx, active: row.active })) : [],
       savingsFlows: canViewSavings ? savingsFlows.map(row => ({ _id: row._id, holdingName: holdingById.get(row.holdingId) ?? "Inactive holding", kind: row.kind, amountUgx: row.amountUgx, account: row.account, occurredOn: row.occurredOn, note: row.note })) : [],
