@@ -294,8 +294,14 @@ export const dashboardSummary = query({
       return { access: businesses.length === 0 ? "setup" as const : "pending" as const };
     }
     // Partner statement data is not yet linked to partner-specific ledger rows.
-    // Hide business-wide finance totals until that scope is implemented.
-    if (!(await hasPermission(ctx, current.membership, "dashboard.view")) && !(await hasPermission(ctx, current.membership, "reports.view"))) return { access: "restricted" as const };
+    // The dashboard permission alone must not expose business-wide totals to
+    // partner roles; reports.view remains an explicit finance-data grant.
+    const canViewDashboard = await hasPermission(ctx, current.membership, "dashboard.view");
+    const canViewReports = await hasPermission(ctx, current.membership, "reports.view");
+    const canViewPartnerArea = await hasPermission(ctx, current.membership, "partners.view");
+    if (!canViewReports && (!canViewDashboard || canViewPartnerArea)) {
+      return { access: "restricted" as const };
+    }
     const days = await ctx.db
       .query("dailyTotals")
       .withIndex("by_business_and_day", (q) =>
