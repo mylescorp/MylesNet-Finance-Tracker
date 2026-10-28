@@ -33,5 +33,5 @@ export const viewport: Viewport = {
 const themeBootstrap = `(()=>{try{const theme=localStorage.getItem("mylesnet-theme");if(theme==="dark"){document.documentElement.dataset.theme="dark"}else if(theme==="system"){document.documentElement.removeAttribute("data-theme")}else{document.documentElement.dataset.theme="light"}}catch{document.documentElement.dataset.theme="light"}})();`;
 
 export default function RootLayout({ children }: Readonly<{ children: ReactNode }>) {
-  return <ConvexAuthNextjsServerProvider><html lang="en" data-theme="light" suppressHydrationWarning><body className={`${geist.variable} ${geistMono.variable} ${instrument.variable}`}><Script id="theme-bootstrap" strategy="beforeInteractive">{themeBootstrap}</Script><PwaBootstrap brandName={pwaBrand.shortName} />{children}</body></html></ConvexAuthNextjsServerProvider>;
+  return <ConvexAuthNextjsServerProvider><html lang="en" data-theme="light" suppressHydrationWarning><body suppressHydrationWarning className={`${geist.variable} ${geistMono.variable} ${instrument.variable}`}><Script id="theme-bootstrap" strategy="beforeInteractive">{themeBootstrap}</Script><PwaBootstrap brandName={pwaBrand.shortName} />{children}</body></html></ConvexAuthNextjsServerProvider>;
 }

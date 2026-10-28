@@ -24,6 +24,7 @@ import type * as operations from "../operations.js";
 import type * as settings from "../settings.js";
 import type * as users from "../users.js";
 import type * as workspace from "../workspace.js";
+import type * as workspaceContext from "../workspaceContext.js";
 
 import type {
   ApiFromModules,
@@ -48,6 +49,7 @@ declare const fullApi: ApiFromModules<{
   settings: typeof settings;
   users: typeof users;
   workspace: typeof workspace;
+  workspaceContext: typeof workspaceContext;
 }>;
 
 /**

@@ -6,6 +6,7 @@ import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import type { Id } from "./_generated/dataModel";
+import { getSelectedWorkspace } from "./workspaceContext";
 import { hasPermission, isOwnerMembership, PERMISSIONS } from "./accessControl";
 
 const roleIdValidator = v.id("workspaceRoles");
@@ -23,14 +24,7 @@ function isValidCurrencyAmount(amount: number, scale: number) {
 }
 
 async function activeWorkspace(ctx: QueryCtx | MutationCtx) {
-  const userId = await getAuthUserId(ctx);
-  if (!userId) return null;
-  const memberships = await ctx.db.query("memberships").withIndex("by_user", q => q.eq("userId", userId)).take(20);
-  const active = memberships.filter(m => m.active);
-  if (memberships.length === 20 || active.length !== 1) return null;
-  const membership = active[0];
-  const business = await ctx.db.get("businesses", membership.businessId);
-  return business ? { userId, membership, business } : null;
+  return await getSelectedWorkspace(ctx);
 }
 
 async function hasCurrencySensitiveData(ctx: MutationCtx, businessId: Id<"businesses">) {
@@ -103,6 +97,7 @@ export const overview = query({
     return {
       access: "ready" as const,
       role: current.membership.role,
+      businessId: current.business._id,
       canUpdate: await hasPermission(ctx, current.membership, "settings.update"),
       canManageBalanceAdjustments: await hasPermission(ctx, current.membership, "balanceAdjustments.manage"),
       businessName: current.business.name,
@@ -608,6 +603,12 @@ export const acceptInvite = mutation({
     }
     const existing = await ctx.db.query("memberships").withIndex("by_business_and_user", q => q.eq("businessId", invite.businessId).eq("userId", userId)).unique();
     if (existing?.active) throw new Error("You already have access to this workspace.");
+    const currentMemberships = await ctx.db.query("memberships").withIndex("by_user", q => q.eq("userId", userId)).take(1001);
+    if (currentMemberships.length > 1000) throw new Error("This account has reached the workspace membership limit. Contact support for help.");
+    if (invite.partnerId) {
+      const linkedMember = await ctx.db.query("memberships").withIndex("by_business_and_partner_and_active", q => q.eq("businessId", invite.businessId).eq("partnerId", invite.partnerId).eq("active", true)).first();
+      if (linkedMember && linkedMember.userId !== userId) throw new Error("This partner account is already linked. Ask the workspace owner to review access.");
+    }
     if (!role || !role.active || role.businessId !== invite.businessId) throw new Error("This invitation role is no longer available. Ask the workspace owner for a new invitation.");
     if ((role.builtIn === "partner" && !invite.partnerId) || (invite.partnerId && !role.permissions.includes("partners.view"))) throw new Error("This partner invitation needs to be reviewed by the workspace owner before it can be accepted.");
     const now = Date.now();
