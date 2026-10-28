@@ -212,13 +212,14 @@ export const businessSettings = query({
 
 export const updateBusinessSettings = mutation({
   args: {
+    businessId: v.id("businesses"),
     businessName: v.string(),
     timezone: v.string(),
     weekStartsOn: v.union(v.literal("monday"), v.literal("sunday")),
   },
   returns: v.null(),
   handler: async (ctx, args) => {
-    const current = await getMembership(ctx);
+    const current = await getMembership(ctx, args.businessId);
     if (!current || current.membership.role !== "owner") {
       throw new Error("Only a workspace owner can change general settings.");
     }
@@ -289,10 +290,10 @@ export const balanceAdjustments = query({
 });
 
 export const createBalanceAdjustment = mutation({
-  args: { account: v.union(v.literal("cash"), v.literal("mobile_money")), countedBalanceUgx: v.number(), occurredOn: v.string(), note: v.string() },
+  args: { businessId: v.id("businesses"), account: v.union(v.literal("cash"), v.literal("mobile_money")), countedBalanceUgx: v.number(), occurredOn: v.string(), note: v.string() },
   returns: v.id("balanceAdjustments"),
   handler: async (ctx, args) => {
-    const current = await getMembership(ctx);
+    const current = await getMembership(ctx, args.businessId);
     if (!current || current.membership.role !== "owner") throw new Error("Only a workspace owner can adjust account balances.");
     if (!Number.isSafeInteger(args.countedBalanceUgx) || args.countedBalanceUgx < 0) throw new Error("Enter a valid non-negative counted balance.");
     if (!isIsoDay(args.occurredOn)) throw new Error("Choose a valid adjustment date.");
@@ -591,6 +592,7 @@ export const operationalRecords = query({
 
 export const createOperationalRecord = mutation({
   args: {
+    businessId: v.id("businesses"),
     kind: operationalKind, title: v.string(), amountUgx: v.number(), occurredOn: v.string(),
     account: v.optional(v.union(v.literal("cash"), v.literal("mobile_money"))),
     destinationAccount: v.optional(v.union(v.literal("cash"), v.literal("mobile_money"))),
@@ -600,7 +602,7 @@ export const createOperationalRecord = mutation({
   },
   returns: v.id("operationalRecords"),
   handler: async (ctx, args) => {
-    const current = await getMembership(ctx);
+    const current = await getMembership(ctx, args.businessId);
     if (!current || (current.membership.role !== "owner" && current.membership.role !== "cashier")) throw new Error("Only an owner or cashier can save this record.");
     if (!isIsoDay(args.occurredOn)) throw new Error("Choose a valid business date.");
     if (!Number.isSafeInteger(args.amountUgx) || args.amountUgx <= 0) throw new Error(`Amount must be a positive whole minor-unit amount in ${current.business.currency}.`);

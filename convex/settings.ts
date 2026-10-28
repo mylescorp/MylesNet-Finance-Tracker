@@ -22,8 +22,14 @@ function isValidCurrencyAmount(amount: number, scale: number) {
   return Number.isFinite(amount) && Number.isSafeInteger(Math.round(scaled)) && Math.abs(scaled - Math.round(scaled)) < 1e-7;
 }
 
-async function activeWorkspace(ctx: QueryCtx | MutationCtx) {
-  return await getSelectedWorkspace(ctx);
+async function activeWorkspace(ctx: QueryCtx | MutationCtx, businessId?: Id<"businesses">) {
+  if (!businessId) return await getSelectedWorkspace(ctx);
+  const userId = await getAuthUserId(ctx);
+  if (!userId) return null;
+  const membership = await ctx.db.query("memberships").withIndex("by_business_and_user", q => q.eq("businessId", businessId).eq("userId", userId)).unique();
+  if (!membership?.active) return null;
+  const business = await ctx.db.get("businesses", businessId);
+  return business ? { userId, membership, business } : null;
 }
 
 async function hasCurrencySensitiveData(ctx: MutationCtx, businessId: Id<"businesses">) {
@@ -93,6 +99,7 @@ export const overview = query({
     const scale = 10 ** digits;
     return {
       access: "ready" as const,
+      businessId: current.business._id,
       role: current.membership.role,
       businessName: current.business.name,
       countryCode: current.business.countryCode ?? "UG",
@@ -124,6 +131,7 @@ export const overview = query({
 
 export const update = mutation({
   args: {
+    businessId: v.id("businesses"),
     expectedSettingsUpdatedAt: v.number(),
     businessName: v.string(), countryCode: v.string(), currency: v.string(), timezone: v.string(),
     weekStartsOn: v.union(v.literal("monday"), v.literal("sunday")), locale: v.string(),
@@ -135,7 +143,7 @@ export const update = mutation({
   },
   returns: v.number(),
   handler: async (ctx, args) => {
-    const current = await activeWorkspace(ctx);
+    const current = await activeWorkspace(ctx, args.businessId);
     if (!current || current.membership.role !== "owner") throw new Error("Only the workspace owner can change settings.");
     const existing = await ctx.db.query("workspacePreferences").withIndex("by_business", q => q.eq("businessId", current.business._id)).unique();
     if (args.expectedSettingsUpdatedAt !== (existing?.updatedAt ?? current.business.createdAt)) {
@@ -296,7 +304,7 @@ export const accessOverview = query({
     const current = await activeWorkspace(ctx);
     if (!current || current.membership.role !== "owner") return { access: "restricted" as const };
     const partners = await ctx.db.query("partners").withIndex("by_business_and_active", q => q.eq("businessId", current.business._id).eq("active", true)).take(100);
-    return { access: "ready" as const, partners: partners.map(({ _id, name }) => ({ id: _id, name })) };
+    return { access: "ready" as const, businessId: current.business._id, partners: partners.map(({ _id, name }) => ({ id: _id, name })) };
   },
 });
 
@@ -340,10 +348,10 @@ export const accessAudit = query({
 });
 
 export const invite = mutation({
-  args: { email: v.string(), role, partnerId: v.optional(v.id("partners")) },
+  args: { businessId: v.id("businesses"), email: v.string(), role, partnerId: v.optional(v.id("partners")) },
   returns: v.string(),
   handler: async (ctx, args) => {
-    const current = await activeWorkspace(ctx);
+    const current = await activeWorkspace(ctx, args.businessId);
     if (!current || current.membership.role !== "owner") throw new Error("Only the workspace owner can invite people.");
     const email = args.email.trim().toLowerCase();
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error("Enter a valid email address.");
@@ -371,9 +379,9 @@ export const invite = mutation({
 });
 
 export const revokeInvite = mutation({
-  args: { invitationId: v.id("invitations") }, returns: v.null(),
-  handler: async (ctx, { invitationId }) => {
-    const current = await activeWorkspace(ctx);
+  args: { businessId: v.id("businesses"), invitationId: v.id("invitations") }, returns: v.null(),
+  handler: async (ctx, { businessId, invitationId }) => {
+    const current = await activeWorkspace(ctx, businessId);
     const invite = await ctx.db.get("invitations", invitationId);
     if (!current || current.membership.role !== "owner" || !invite || invite.businessId !== current.business._id) throw new Error("Invitation not found or access denied.");
     await ctx.db.patch("invitations", invitationId, { active: false, revokedAt: Date.now() });
@@ -383,9 +391,9 @@ export const revokeInvite = mutation({
 });
 
 export const updateMember = mutation({
-  args: { membershipId: v.id("memberships"), role, partnerId: v.optional(v.id("partners")), active: v.boolean() }, returns: v.null(),
+  args: { businessId: v.id("businesses"), membershipId: v.id("memberships"), role, partnerId: v.optional(v.id("partners")), active: v.boolean() }, returns: v.null(),
   handler: async (ctx, args) => {
-    const current = await activeWorkspace(ctx);
+    const current = await activeWorkspace(ctx, args.businessId);
     const member = await ctx.db.get("memberships", args.membershipId);
     if (!current || current.membership.role !== "owner" || !member || member.businessId !== current.business._id) throw new Error("Member not found or access denied.");
     if (member.role === "owner" || args.role === "owner") throw new Error("Owner access cannot be changed here. Use the verified ownership transfer process.");
@@ -408,10 +416,10 @@ export const updateMember = mutation({
 });
 
 export const transferOwnership = mutation({
-  args: { membershipId: v.id("memberships"), expectedEmail: v.string(), reason: v.string() },
+  args: { businessId: v.id("businesses"), membershipId: v.id("memberships"), expectedEmail: v.string(), reason: v.string() },
   returns: v.null(),
   handler: async (ctx, args) => {
-    const current = await activeWorkspace(ctx);
+    const current = await activeWorkspace(ctx, args.businessId);
     if (!current || current.membership.role !== "owner") throw new Error("Only the current workspace owner can transfer ownership.");
     const target = await ctx.db.get("memberships", args.membershipId);
     if (!target || target.businessId !== current.business._id || !target.active || target.role === "owner" || target.role === "partner" || target.userId === current.userId) throw new Error("Choose another active cashier or finance approver.");

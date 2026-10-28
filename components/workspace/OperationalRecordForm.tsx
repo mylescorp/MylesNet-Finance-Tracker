@@ -8,6 +8,7 @@ type RecordKind = "movement" | "holding" | "loan" | "bill";
 
 export function OperationalRecordForm({ kind, currency, scale = 1, businessDay }: { kind: RecordKind; currency: string; scale?: number; businessDay: string }) {
   const save = useMutation(api.workspace.createOperationalRecord);
+  const access = useQuery(api.workspace.currentAccess, {});
   const records = useQuery(api.workspace.operationalRecords, { kind });
   const [title, setTitle] = useState("");
   const [amount, setAmount] = useState("");
@@ -32,7 +33,8 @@ export function OperationalRecordForm({ kind, currency, scale = 1, businessDay }
       const roundedAmount = Math.round(scaledAmount);
       if (!Number.isSafeInteger(roundedAmount) || roundedAmount <= 0 || Math.abs(scaledAmount - roundedAmount) > 1e-7) throw new Error("Enter an amount using the selected currency’s supported decimal places.");
       requestKey.current ??= crypto.randomUUID();
-      await save({ kind, title, amountUgx: roundedAmount, occurredOn: businessDate, account: kind === "movement" ? account : undefined, destinationAccount: kind === "movement" && movementType === "transfer" ? destinationAccount : undefined, movementType: kind === "movement" ? movementType : undefined, cadence: kind === "bill" ? cadence : undefined, note, idempotencyKey: requestKey.current });
+      if (access?.access !== "ready") throw new Error("Workspace is still loading.");
+      await save({ businessId: access.businessId, kind, title, amountUgx: roundedAmount, occurredOn: businessDate, account: kind === "movement" ? account : undefined, destinationAccount: kind === "movement" && movementType === "transfer" ? destinationAccount : undefined, movementType: kind === "movement" ? movementType : undefined, cadence: kind === "bill" ? cadence : undefined, note, idempotencyKey: requestKey.current });
       requestKey.current = null;
       setTitle(""); setAmount(""); setNote(""); setDateEdited(false); setOccurredOn("");
       setFeedback({ message: `${titleFor} saved.`, error: false });
