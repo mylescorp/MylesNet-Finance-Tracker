@@ -503,7 +503,8 @@ export const reverseLoanRepayment = mutation({
     if (!loan || loan.businessId !== current.business._id) throw new Error("The linked loan is unavailable.");
     if (repayment.interestUgx > 0) await reverseLinkedExpense(ctx, current, `loan-interest:${repayment.idempotencyKey}`, repayment.idempotencyKey, "loan_interest", reason);
     await applyAccountDelta(ctx, current.business._id, repayment.account, repayment.amountUgx);
-    await ctx.db.patch("loans", loan._id, { outstandingPrincipalUgx: safeAdd(loan.outstandingPrincipalUgx, repayment.principalUgx, "Loan principal"), status: "active" });
+    const outstandingPrincipalUgx = safeAdd(loan.outstandingPrincipalUgx, repayment.principalUgx, "Loan principal");
+    await ctx.db.patch("loans", loan._id, { outstandingPrincipalUgx, status: outstandingPrincipalUgx === 0 ? "paid_off" : "active" });
     const now = Date.now();
     await ctx.db.patch("loanRepayments", repayment._id, { state: "void", voidedAt: now, voidedBy: current.userId, voidReason: reason });
     await audit(ctx, current, "loan.repayment_reversed", "loanRepayment", repayment._id, reason);

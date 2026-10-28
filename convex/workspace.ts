@@ -481,6 +481,7 @@ export const recentEntries = query({
       category: v.string(),
       note: v.string(),
       state: v.union(v.literal("posted"), v.literal("void")),
+      canVoid: v.boolean(),
     }),
   ),
   handler: async (ctx, args) => {
@@ -500,7 +501,7 @@ export const recentEntries = query({
           : args.from ? q.eq("businessId", current.business._id).gte("occurredOn", args.from)
           : args.toExclusive ? q.eq("businessId", current.business._id).lt("occurredOn", args.toExclusive)
           : q.eq("businessId", current.business._id)).order("desc").take(limit);
-    return rows.map(({ _id, kind, amountUgx, occurredOn, account, category, note, state }) => ({
+    return rows.map(({ _id, kind, amountUgx, occurredOn, account, category, note, state, operationSource }) => ({
       _id,
       kind,
       amountUgx,
@@ -509,6 +510,7 @@ export const recentEntries = query({
       category,
       note,
       state,
+      canVoid: !operationSource,
     }));
   },
 });
