@@ -1,7 +1,7 @@
 "use client";
 
 import { useQuery } from "convex/react";
-import { ArrowDownRight, ArrowUpRight, Download, Printer, Share2 } from "lucide-react";
+import { ArrowDownRight, ArrowUpRight, Download, Plus, Printer, Share2, X } from "lucide-react";
 import Link from "next/link";
 import { useMemo, useState } from "react";
 import { api } from "@/convex/_generated/api";
@@ -32,9 +32,9 @@ const specs: Record<string, BoardSpec> = {
     title: "Sales", eyebrow: "Cashbook", description: "Record and review income from approved sources.", source: "03 · Sales", entryKind: "sale",
     metrics: ["Sales today", "Sales this period", "Sales year to date", "Best day", "Entry basis"],
     sections: [
-      { title: "Daily sales · last 14 days", detail: "Recorded daily sales, expenses, and net cashbook activity for the latest dates in this period.", kind: "table" },
       { title: "Sales by income type", detail: "Category breakdown uses saved entries; no mock amounts are loaded.", kind: "chart" },
       { title: "Best days and weekday pattern", detail: "Strongest sales days are calculated from the selected period.", kind: "chart" },
+      { title: "Daily sales · last 14 days", detail: "Recorded daily sales, expenses, and net cashbook activity for the latest dates in this period.", kind: "table" },
       { title: "Imports and data checks", detail: "Import history will be available after a source mapping and staging import are approved.", kind: "table" },
       { title: "Weak-day diary and split corrections", detail: "Record the reason for an unusual day and correct estimated account splits with an audit trail.", kind: "workflow" },
       { title: "Voucher batches and mobile entry", detail: "Voucher stock and mobile entry layouts are not populated until those record types are configured." },
@@ -250,6 +250,7 @@ export function BoardRoute({ route }: { route: string }) {
   const [period, setPeriod] = useState<(typeof periods)[number]>("Month");
   const [entryLimit, setEntryLimit] = useState(500);
   const [shareFeedback, setShareFeedback] = useState("");
+  const [salesFormOpen, setSalesFormOpen] = useState(false);
   const settings = useQuery(api.workspace.businessSettings, {});
   const preferences = useQuery(api.settings.overview, {});
   const timezone = settings?.access === "ready" ? settings.timezone : "Africa/Kampala";
@@ -342,6 +343,11 @@ export function BoardRoute({ route }: { route: string }) {
       <button className="button" type="button" onClick={() => window.print()}><Printer size={14} />Print</button>
       <button className="button" type="button" onClick={() => window.print()}><Download size={14} />Export PDF</button>
       <button className="button button-dark" type="button" onClick={() => void shareReport()}><Share2 size={14} />Share report</button>
+      {screen.title === "Sales" && <button className="button button-accent" type="button" aria-controls="sales-entry-form" aria-expanded={salesFormOpen} onClick={() => {
+        const opening = !salesFormOpen;
+        setSalesFormOpen(opening);
+        if (opening) requestAnimationFrame(() => document.getElementById("sales-entry-form")?.scrollIntoView({ behavior: "smooth", block: "nearest" }));
+      }}>{salesFormOpen ? <X size={14} /> : <Plus size={14} />}{salesFormOpen ? "Close form" : "Add sale"}</button>}
       {shareFeedback && <span className="form-feedback" role="status">{shareFeedback}</span>}
     </div>
     {summary?.access === "restricted" && <div className="notice-banner notice-info" role="status">Partner-specific reporting is being prepared. Business-wide totals are hidden from partner accounts.</div>}
@@ -353,11 +359,11 @@ export function BoardRoute({ route }: { route: string }) {
         <div className="metric-note">{metricValues[label] === undefined ? "Available when this record type is configured" : "Based on saved workspace records"}</div>
       </Card>)}
     </div>}
-    {screen.title === "Analytics" ? <AnalyticsInsights range={range} today={today} currency={currency} scale={currencyScale} locale={locale} /> : screen.title === "Needs attention" ? <AnalyticsInsights range={range} today={today} currency={currency} scale={currencyScale} locale={locale} issuesOnly /> : operationalScreen ? <OperationsWorkspace screen={screen.title as "Movements" | "Savings" | "Loans" | "Partners" | "Bills" | "Reconcile"} currency={currency} scale={currencyScale} locale={locale} timezone={timezone} dateFormat={dateFormat} range={range} /> : <div className={`board-grid ${screen.entryKind ? "board-grid-cashbook" : ""}`}>
-      {screen.entryKind && <RecordFormDisclosure title={screen.entryKind === "sale" ? "Add a sale" : "Add an expense"} description="Saved values update the cashbook and account balance.">
+    {screen.title === "Analytics" ? <AnalyticsInsights range={range} today={today} currency={currency} scale={currencyScale} locale={locale} /> : screen.title === "Needs attention" ? <AnalyticsInsights range={range} today={today} currency={currency} scale={currencyScale} locale={locale} issuesOnly /> : operationalScreen ? <OperationsWorkspace screen={screen.title as "Movements" | "Savings" | "Loans" | "Partners" | "Bills" | "Reconcile"} currency={currency} scale={currencyScale} locale={locale} timezone={timezone} dateFormat={dateFormat} range={range} /> : <div className={`board-grid ${screen.entryKind ? "board-grid-cashbook" : ""} ${screen.title === "Sales" ? "board-grid-sales" : ""}`}>
+      {screen.entryKind && <RecordFormDisclosure id={screen.title === "Sales" ? "sales-entry-form" : undefined} open={screen.title === "Sales" ? salesFormOpen : undefined} hideTrigger={screen.title === "Sales"} onClose={screen.title === "Sales" ? () => setSalesFormOpen(false) : undefined} title={screen.entryKind === "sale" ? "Add a sale" : "Add an expense"} description="Saved values update the cashbook and account balance.">
         <Card className="board-feature-card"><EntryForm kind={screen.entryKind} /></Card>
       </RecordFormDisclosure>}
-      {screen.sections.map((section) => <Card className="board-section-card" key={section.title}>
+      {screen.sections.map((section) => <Card className={`board-section-card${screen.title === "Sales" && section.title.startsWith("Daily sales") ? " board-sales-daily-table" : ""}`} key={section.title}>
         <div className="card-heading"><div><h2 className="card-title">{section.title}</h2><p className="card-subtitle">{section.detail}</p></div></div>
         {section.kind === "table" && screen.title === "Sales" && section.title.startsWith("Daily sales") ? <RecentEntryTable days={stats?.days} rangeStart={range.from} rangeEnd={range.toExclusive} loading={summary === undefined} formatDay={fmtDate} formatMoney={fmt} />
         : section.kind === "table" && screen.title === "Expenses" && section.title.includes("category") ? <CashbookCategoryBreakdown entries={selectedEntries} loading={entries === undefined} formatMoney={fmt} capped={entries?.length === 500} />
@@ -379,7 +385,7 @@ export function BoardRoute({ route }: { route: string }) {
               next={section.detail}
             />}
       </Card>)}
-      {screen.title === "Sales" || screen.title === "Expenses" ? <Card className="board-section-card">
+      {screen.title === "Sales" || screen.title === "Expenses" ? <Card className={`board-section-card${screen.title === "Sales" ? " board-sales-entry-list" : ""}`}>
         <div className="card-heading"><div><h2 className="card-title">Recent cashbook entries</h2><p className="card-subtitle">Latest saved records in this workspace.</p></div></div>
         {hasRecordData ? <><div className="entry-list">{selectedEntries.map((entry) => <div className="entry-row" key={entry._id}><div className="entry-main"><span className="entry-icon">{entry.kind === "sale" ? <ArrowUpRight size={15} /> : <ArrowDownRight size={15} />}</span><div><div className="entry-description">{entry.note || entry.category}</div><div className="entry-meta">{fmtDate(entry.occurredOn)} · {entry.category} · {accountLabel(entry.account)}</div></div></div><span className={`entry-amount ${entry.kind === "sale" ? "amount-positive" : "amount-negative"}`}>{entry.kind === "sale" ? "+" : "−"}{fmt(entry.amountUgx)}</span></div>)}</div>{entries?.length === entryLimit && entryLimit < 500 && <button className="button" type="button" onClick={() => setEntryLimit(limit => Math.min(limit + 100, 500))}>Load more entries</button>}{entries?.length === 500 && <p className="muted-note">Showing the latest 500 matching records. Narrow the date range to review older entries.</p>}</> : <EmptyPanel message="No entries have been recorded." next="Use the form to save the first entry." />}
       </Card> : null}
