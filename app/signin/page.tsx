@@ -18,7 +18,7 @@ export default function SignInPage() {
     }
     catch { setError("Sign-in could not start. Please try again."); setPending(false); }
   }
-  return <main className="signin-frame">
+  return <main className="signin-frame" suppressHydrationWarning>
     <section className="card signin-card">
       <Link href="/" aria-label="MylesNet home"><Image className="signin-logo" src="/brand/logo.png" width={190} height={58} alt="MylesNet" priority /></Link>
       <div className="eyebrow">Finance workspace</div>

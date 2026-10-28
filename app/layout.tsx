@@ -30,5 +30,5 @@ export const viewport: Viewport = {
 };
 
 export default function RootLayout({ children }: Readonly<{ children: ReactNode }>) {
-  return <ConvexAuthNextjsServerProvider><html lang="en" suppressHydrationWarning><body className={`${geist.variable} ${geistMono.variable} ${instrument.variable}`}><PwaBootstrap brandName={pwaBrand.shortName} />{children}</body></html></ConvexAuthNextjsServerProvider>;
+  return <ConvexAuthNextjsServerProvider><html lang="en" suppressHydrationWarning><body suppressHydrationWarning className={`${geist.variable} ${geistMono.variable} ${instrument.variable}`}><PwaBootstrap brandName={pwaBrand.shortName} />{children}</body></html></ConvexAuthNextjsServerProvider>;
 }
