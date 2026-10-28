@@ -311,10 +311,10 @@ export const createBalanceAdjustment = mutation({
 });
 
 export const updateBalanceAdjustment = mutation({
-  args: { adjustmentId: v.id("balanceAdjustments"), account: v.union(v.literal("cash"), v.literal("mobile_money")), countedBalanceUgx: v.number(), occurredOn: v.string(), note: v.string() },
+  args: { businessId: v.id("businesses"), adjustmentId: v.id("balanceAdjustments"), account: v.union(v.literal("cash"), v.literal("mobile_money")), countedBalanceUgx: v.number(), occurredOn: v.string(), note: v.string() },
   returns: v.null(),
   handler: async (ctx, args) => {
-    const current = await getMembership(ctx);
+    const current = await getMembership(ctx, args.businessId);
     if (!current || current.membership.role !== "owner") throw new Error("Only a workspace owner can edit balance adjustments.");
     const adjustment = await ctx.db.get("balanceAdjustments", args.adjustmentId);
     if (!adjustment || adjustment.businessId !== current.business._id) throw new Error("Balance adjustment not found.");
@@ -334,10 +334,10 @@ export const updateBalanceAdjustment = mutation({
 });
 
 export const voidBalanceAdjustment = mutation({
-  args: { adjustmentId: v.id("balanceAdjustments"), reason: v.string() },
+  args: { businessId: v.id("businesses"), adjustmentId: v.id("balanceAdjustments"), reason: v.string() },
   returns: v.null(),
   handler: async (ctx, args) => {
-    const current = await getMembership(ctx);
+    const current = await getMembership(ctx, args.businessId);
     if (!current || current.membership.role !== "owner") throw new Error("Only a workspace owner can remove balance adjustments.");
     const adjustment = await ctx.db.get("balanceAdjustments", args.adjustmentId);
     if (!adjustment || adjustment.businessId !== current.business._id) throw new Error("Balance adjustment not found.");
@@ -781,10 +781,10 @@ export const createEntry = mutation({
 });
 
 export const voidEntry = mutation({
-  args: { entryId: v.id("entries"), reason: v.string() },
+  args: { businessId: v.id("businesses"), entryId: v.id("entries"), reason: v.string() },
   returns: v.null(),
   handler: async (ctx, args) => {
-    const current = await getMembership(ctx);
+    const current = await getMembership(ctx, args.businessId);
     if (!current || current.membership.role !== "owner") {
       throw new Error("Only an owner can void an entry.");
     }

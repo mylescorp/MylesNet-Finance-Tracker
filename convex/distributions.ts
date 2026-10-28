@@ -286,9 +286,9 @@ export const reversePayout = mutation({
 });
 
 export const overview = query({
-  args: { paginationOpts: paginationOptsValidator },
+  args: { businessId: v.id("businesses"), paginationOpts: paginationOptsValidator },
   handler: async (ctx, args) => {
-    const current = await workspace(ctx);
+    const current = await workspace(ctx, args.businessId);
     if (!current || (current.membership.role !== "owner" && current.membership.role !== "finance_approver")) return { access: "restricted" as const };
     if (args.paginationOpts.numItems > 20) throw new Error("Distribution history pages are limited to 20 records.");
     const page = await ctx.db.query("partnerDistributions").withIndex("by_business_and_period_start", q => q.eq("businessId", current.business._id)).order("desc").paginate(args.paginationOpts);
@@ -313,9 +313,9 @@ export const overview = query({
 });
 
 export const payoutHistory = query({
-  args: { distributionId: v.id("partnerDistributions"), paginationOpts: paginationOptsValidator },
+  args: { businessId: v.id("businesses"), distributionId: v.id("partnerDistributions"), paginationOpts: paginationOptsValidator },
   handler: async (ctx, args) => {
-    const current = await workspace(ctx);
+    const current = await workspace(ctx, args.businessId);
     if (!current || (current.membership.role !== "owner" && current.membership.role !== "finance_approver")) return { access: "restricted" as const };
     if (args.paginationOpts.numItems > 50) throw new Error("Payout history pages are limited to 50 records.");
     const distribution = await ctx.db.get("partnerDistributions", args.distributionId);

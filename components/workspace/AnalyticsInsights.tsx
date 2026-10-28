@@ -9,7 +9,8 @@ import { Card } from "@/components/AppShell";
 
 type Range = { from: string; toExclusive: string };
 export function AnalyticsInsights({ range, today, currency, scale, locale, compact = false, issuesOnly = false }: { range: Range; today: string; currency: string; scale: number; locale: string; compact?: boolean; issuesOnly?: boolean }) {
-  const data = useQuery(api.analytics.overview, { ...range, today });
+  const access = useQuery(api.workspace.currentAccess, {});
+  const data = useQuery(api.analytics.overview, access?.access === "ready" ? { businessId: access.businessId, ...range, today } : "skip");
   const saveIssueReview = useMutation(api.analytics.updateIssueReview);
   const [salesChange, setSalesChange] = useState(0);
   const [expenseChange, setExpenseChange] = useState(0);
@@ -25,7 +26,8 @@ export function AnalyticsInsights({ range, today, currency, scale, locale, compa
     const form = new FormData(event.currentTarget);
     setSavingIssueKey(issue.issueKey); setIssueFeedback("");
     try {
-      await saveIssueReview({ issueKey: issue.issueKey, issueId: issue.id, from: range.from, toExclusive: range.toExclusive, amountUgx: issue.amountUgx, expectedUpdatedAt: issue.reviewUpdatedAt ?? null, status: String(form.get("status")) as "open" | "acknowledged" | "resolved", note: String(form.get("note") ?? ""), assignedTo: form.get("assignedTo") ? String(form.get("assignedTo")) as Id<"users"> : undefined });
+      if (data?.access !== "ready") throw new Error("Workspace is still loading.");
+      await saveIssueReview({ businessId: data.businessId, issueKey: issue.issueKey, issueId: issue.id, from: range.from, toExclusive: range.toExclusive, amountUgx: issue.amountUgx, expectedUpdatedAt: issue.reviewUpdatedAt ?? null, status: String(form.get("status")) as "open" | "acknowledged" | "resolved", note: String(form.get("note") ?? ""), assignedTo: form.get("assignedTo") ? String(form.get("assignedTo")) as Id<"users"> : undefined });
       setIssueFeedback("Issue review saved with an audit trail.");
     } catch (error) {
       setIssueFeedback(error instanceof Error ? error.message : "Could not save the issue review.");

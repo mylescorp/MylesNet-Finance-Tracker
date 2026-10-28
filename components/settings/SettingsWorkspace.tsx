@@ -188,7 +188,7 @@ function BalanceAdjustmentManager({ settings }: { settings: SettingsOverview }) 
     try {
       const amount = parseBalanceMinorUnits(countedBalance, settings.currencyMinorDigits ?? 0);
       if (amount === null) throw new Error(`Enter a non-negative balance using ${settings.currency}'s supported decimal places.`);
-      if (editing) await updateAdjustment({ adjustmentId: editing._id, account, countedBalanceUgx: amount, occurredOn, note });
+      if (editing) await updateAdjustment({ businessId: settings.businessId, adjustmentId: editing._id, account, countedBalanceUgx: amount, occurredOn, note });
       else await create({ businessId: settings.businessId, account, countedBalanceUgx: amount, occurredOn, note });
       resetForm(); setFeedback({ message: editing ? "Balance record updated; the difference was applied to the live account balance." : "Balance recorded; the live account balance has been adjusted.", error: false });
     } catch (error) { setFeedback({ message: error instanceof Error ? error.message : "Could not save the balance record.", error: true }); }
@@ -197,7 +197,7 @@ function BalanceAdjustmentManager({ settings }: { settings: SettingsOverview }) 
   async function remove(row: BalanceAdjustmentRow) {
     if (voidId !== row._id) { setVoidId(row._id); setVoidReason(""); return; }
     setBusy(true); setFeedback(null);
-    try { await voidAdjustment({ adjustmentId: row._id, reason: voidReason }); setVoidId(null); setVoidReason(""); setFeedback({ message: "Balance record reversed and retained in the audit history.", error: false }); }
+    try { await voidAdjustment({ businessId: settings.businessId, adjustmentId: row._id, reason: voidReason }); setVoidId(null); setVoidReason(""); setFeedback({ message: "Balance record reversed and retained in the audit history.", error: false }); }
     catch (error) { setFeedback({ message: error instanceof Error ? error.message : "Could not reverse this balance record.", error: true }); }
     finally { setBusy(false); }
   }

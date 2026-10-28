@@ -321,7 +321,8 @@ export function BoardRoute({ route }: { route: string }) {
     if (reason.trim().length < 3) return;
     setEntryActionFeedback("");
     try {
-      await voidEntry({ entryId: entryId as Id<"entries">, reason });
+      if (settings?.access !== "ready") throw new Error("Workspace is still loading.");
+      await voidEntry({ businessId: settings.businessId, entryId: entryId as Id<"entries">, reason });
       setEntryActionFeedback("Entry voided. Its account balance and daily totals were reversed and the reason was recorded.");
     } catch (error) {
       setEntryActionFeedback(error instanceof Error ? error.message : "Could not void this entry.");

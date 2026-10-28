@@ -9,6 +9,7 @@ import { formatBusinessDay } from "@/lib/format";
 
 type Range = { from: string; toExclusive: string };
 export function PartnerDistributions({ range, currency, scale, locale, dateFormat, partners, today }: { range: Range; currency: string; scale: number; locale: string; dateFormat: "DD/MM/YYYY" | "MM/DD/YYYY" | "YYYY-MM-DD"; partners: { _id: string; name: string; ownershipBps: number; active: boolean }[]; today: string }) {
+  const access = useQuery(api.workspace.currentAccess, {});
   const create = useMutation(api.distributions.create);
   const decide = useMutation(api.distributions.decide);
   const cancel = useMutation(api.distributions.cancel);
@@ -18,7 +19,7 @@ export function PartnerDistributions({ range, currency, scale, locale, dateForma
   const [busy, setBusy] = useState(false);
   const [distributionCursor, setDistributionCursor] = useState<string | null>(null);
   const [previousCursors, setPreviousCursors] = useState<(string | null)[]>([]);
-  const state = useQuery(api.distributions.overview, { paginationOpts: { numItems: 20, cursor: distributionCursor } });
+  const state = useQuery(api.distributions.overview, access?.access === "ready" ? { businessId: access.businessId, paginationOpts: { numItems: 20, cursor: distributionCursor } } : "skip");
   const [amount, setAmount] = useState("");
   const [reserve, setReserve] = useState("");
   const [minimumPayout, setMinimumPayout] = useState("");
@@ -53,7 +54,7 @@ function PayoutHistory({ businessId, distributionId, owner, currency, scale, loc
   const [previous, setPrevious] = useState<(string | null)[]>([]);
   const [feedback, setFeedback] = useState("");
   const [busy, setBusy] = useState(false);
-  const history = useQuery(api.distributions.payoutHistory, { distributionId, paginationOpts: { numItems: 50, cursor } });
+  const history = useQuery(api.distributions.payoutHistory, { businessId, distributionId, paginationOpts: { numItems: 50, cursor } });
   const reverse = useMutation(api.distributions.reversePayout);
   const fmt = (minor: number) => new Intl.NumberFormat(locale, { style: "currency", currency, maximumFractionDigits: Math.round(Math.log10(scale)) }).format(minor / scale);
   if (!history || history.access !== "ready") return null;

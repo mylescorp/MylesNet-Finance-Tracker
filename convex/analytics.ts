@@ -1,8 +1,8 @@
 import { v } from "convex/values";
+import { getAuthUserId } from "@convex-dev/auth/server";
 import { mutation, query } from "./_generated/server";
 import type { QueryCtx } from "./_generated/server";
 import type { Id } from "./_generated/dataModel";
-import { getSelectedWorkspace } from "./workspaceContext";
 
 function safeAdd(a: number, b: number, label: string) {
   const result = a + b;
@@ -37,12 +37,15 @@ async function dailyTotals(ctx: QueryCtx, businessId: Id<"businesses">, from: st
 }
 
 export const overview = query({
-  args: { from: v.string(), toExclusive: v.string(), today: v.string() },
+  args: { businessId: v.id("businesses"), from: v.string(), toExclusive: v.string(), today: v.string() },
   handler: async (ctx, args) => {
     if (!validDay(args.from) || !validDay(args.toExclusive) || !validDay(args.today) || args.from >= args.toExclusive || args.toExclusive > shiftDay(args.today, 1)) throw new Error("Choose a valid reporting range that ends no later than today.");
     const rangeLength = (Date.parse(`${args.toExclusive}T00:00:00.000Z`) - Date.parse(`${args.from}T00:00:00.000Z`)) / 86_400_000;
     if (rangeLength > 370) throw new Error("Choose a reporting period of 370 days or less.");
-    const current = await getSelectedWorkspace(ctx);
+    const callerId = await getAuthUserId(ctx);
+    const callerMembership = callerId ? await ctx.db.query("memberships").withIndex("by_business_and_user", q => q.eq("businessId", args.businessId).eq("userId", callerId)).unique() : null;
+    const requestedBusiness = callerMembership?.active ? await ctx.db.get("businesses", args.businessId) : null;
+    const current = callerId && callerMembership && requestedBusiness ? { userId: callerId, membership: callerMembership, business: requestedBusiness } : null;
     if (!current) return { access: "pending" as const };
     const { membership, business } = current;
     if (membership.role === "partner" || membership.role === "finance_approver") return { access: "restricted" as const };
@@ -144,6 +147,7 @@ export const overview = query({
 
     return {
       access: "ready" as const,
+      businessId: business._id,
       currency: business.currency,
       currencyMinorDigits: new Intl.NumberFormat("en", { style: "currency", currency: business.currency }).resolvedOptions().maximumFractionDigits,
       locale: preferences?.locale ?? "en-UG",
@@ -164,13 +168,17 @@ export const overview = query({
 
 export const updateIssueReview = mutation({
   args: {
+    businessId: v.id("businesses"),
     issueKey: v.string(), issueId: v.string(), from: v.string(), toExclusive: v.string(), amountUgx: v.number(), expectedUpdatedAt: v.union(v.number(), v.null()),
     status: v.union(v.literal("open"), v.literal("acknowledged"), v.literal("resolved")),
     note: v.string(), assignedTo: v.optional(v.id("users")),
   },
   returns: v.null(),
   handler: async (ctx, args) => {
-    const current = await getSelectedWorkspace(ctx);
+    const callerId = await getAuthUserId(ctx);
+    const callerMembership = callerId ? await ctx.db.query("memberships").withIndex("by_business_and_user", q => q.eq("businessId", args.businessId).eq("userId", callerId)).unique() : null;
+    const requestedBusiness = callerMembership?.active ? await ctx.db.get("businesses", args.businessId) : null;
+    const current = callerId && callerMembership && requestedBusiness ? { userId: callerId, membership: callerMembership, business: requestedBusiness } : null;
     if (!current || (current.membership.role !== "owner" && current.membership.role !== "cashier")) throw new Error("Select a workspace where you are an active owner or cashier to update data-health reviews.");
     const { userId, business } = current;
     if (!validDay(args.from) || !validDay(args.toExclusive) || args.from >= args.toExclusive || !/^[a-z0-9-]{3,80}$/.test(args.issueId) || !Number.isSafeInteger(args.amountUgx) || args.issueKey !== `${args.from}:${args.toExclusive}:${args.issueId}:${args.amountUgx}`) throw new Error("The issue reference is invalid or has expired.");
