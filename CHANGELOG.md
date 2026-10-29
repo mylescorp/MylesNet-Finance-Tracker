@@ -2,6 +2,13 @@
 
 Changes are grouped under the semantic version of the production release that ships them. Each feature or fix remains its own card. Add a Changeset file for every user-visible change; the release workflow updates this file when it prepares the version PR. Preview deployments do not count as releases.
 
+## v0.3.3 — 2026-10-29
+
+<!-- change-id: plain-text-expense-import -->
+### Fixes — Import expenses from copied plain text
+
+- Allow workspace managers to paste tab-separated expense rows, including multi-line descriptions and receipts, directly into the cashbook import flow.
+
 ## v0.3.2 — 2026-10-29
 
 <!-- change-id: legacy-member-role-compat -->
