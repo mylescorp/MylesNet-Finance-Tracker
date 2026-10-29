@@ -2,6 +2,68 @@
 
 Changes are grouped under the semantic version of the production release that ships them. Each feature or fix remains its own card. Add a Changeset file for every user-visible change; the release workflow updates this file when it prepares the version PR. Preview deployments do not count as releases.
 
+## v0.2.0 — 2026-10-29
+
+<!-- change-id: accurate-dashboard-insights -->
+### Fixes — Improve dashboard insight accuracy
+
+- Keep dashboard totals, comparison charts, partner shares, targets, and cash runway aligned with complete recorded data, and show negative net results clearly.
+
+<!-- change-id: accurate-whats-new-badge -->
+### Fixes — Stable What's new notifications
+
+- Count unread notifications by stable card identifiers, so wording edits to existing release notes do not create phantom updates.
+
+<!-- change-id: bright-charts-filter -->
+### New — Shared finance filters and interactive charts
+
+- Filter dashboard and analytics reports by date range and account, and inspect recorded activity with accessible interactive charts.
+
+<!-- change-id: clear-search-header -->
+### Fixes — Keep the shared search bar clear
+
+- Move appearance choices out of the shared top bar and into the account menu so search, attention, support, and account controls remain easy to see.
+
+<!-- change-id: editorial-type-accent -->
+### Fixes — Consistent workspace typography
+
+- Apply shared heading fonts and serif accents to workspace titles, and give the dashboard quote a classic italic serif. Load the actual Instrument Serif italic face for italic-serif token use and move font variables to the document root so shared font tokens match their loaded families.
+
+<!-- change-id: fresh-whats-new-badge -->
+### Fixes — Fresh What's new notifications
+
+- Refresh the changelog before marking updates as read so long-open tabs stay in sync with newly released notes.
+
+<!-- change-id: protect-preview-and-search -->
+### Fixes — Harden preview updates and workspace navigation
+
+- Require sign-in for the What's new page, show unreleased notes on preview builds, and keep saved searches private to each account and workspace. Apply saved appearance preferences as the app loads, improve keyboard and mobile navigation behavior, and keep theme controls out of the shared search bar.
+
+<!-- change-id: responsive-page-context -->
+### Fixes — Keep page titles clear on narrow headers
+
+- Long workspace page names now truncate cleanly instead of colliding with search and account controls.
+
+<!-- change-id: search-keyboard-flow -->
+### Fixes — Smoother workspace search
+
+- Keep keyboard selection visible and valid as results update, and prevent Escape from closing dialogs underneath search.
+
+<!-- change-id: tidy-titles-glow -->
+### Fixes — Clearer workspace page titles
+
+- Use the theme-aware accent color to highlight the final word in multiword workspace page titles.
+
+<!-- change-id: versioned-changelog -->
+### New — Versioned What's New timeline
+
+- Associate every feature card with the semantic version of the production release that ships it.
+
+<!-- change-id: workspace-list-compatibility -->
+### Fixes — Protect workspace navigation during backend updates
+
+- Keep the finance workspace usable if a local or preview Convex deployment temporarily returns an older access response without a workspace list.
+
 ## v0.1.0 — 2026-10-28
 
 <!-- change-id: v0-1-0-whatsapp-support -->
