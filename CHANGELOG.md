@@ -2,6 +2,23 @@
 
 Changes are grouped under the semantic version of the production release that ships them. Each feature or fix remains its own card. Add a Changeset file for every user-visible change; the release workflow updates this file when it prepares the version PR. Preview deployments do not count as releases.
 
+## v0.3.0 — 2026-10-29
+
+<!-- change-id: accurate-dashboard-totals -->
+### Fixes — Improve dashboard calculation accuracy
+
+- Build dashboard and analytics totals from posted ledger entries, show negative balances and net results explicitly, and calculate cash runway from the workspace's observed data window. Align the updated dashboard and reset controls with the existing design tokens.
+
+<!-- change-id: fresh-ledger-reset -->
+### New — Reset workspace finance data
+
+- Workspace owners can clear saved finance records with exact-name confirmation while keeping membership, roles, preferences, integration settings, and the audit trail. The reset runs in safe batches and keeps integration duplicate protection.
+
+<!-- change-id: plain-page-headings -->
+### Fixes — Remove redundant page heading labels
+
+- Remove section labels and board numbers above workspace page titles, including on sign-in, so page titles stay clear and uncluttered.
+
 ## v0.2.0 — 2026-10-29
 
 <!-- change-id: accurate-dashboard-insights -->
