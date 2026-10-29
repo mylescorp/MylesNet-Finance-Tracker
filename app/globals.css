@@ -1123,3 +1123,22 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .savings-set-aside-value strong { color:var(--mn-accent); font-variant-numeric:tabular-nums; }
 .savings-set-aside-control .muted-note { margin:5px 0 0; font-size:10px; }
 @media(max-width:700px) { .savings-target-controls { grid-template-columns:1fr; } }
+
+/* Savings explanations and editors */
+.savings-stat-card .savings-metric-help { margin:8px 0 0; color:var(--mn-muted); font-size:9px; line-height:1.45; }
+.savings-stat-card .savings-metric-help a { color:var(--mn-accent); text-decoration:underline; text-underline-offset:2px; }
+.savings-stat-card:has(.savings-metric-help) { min-height:180px; }
+.savings-goal-row > button { justify-self:start; }
+.savings-target-controls { display:grid; grid-template-columns:1fr 1fr; gap:8px; align-items:center; }
+.savings-target-controls .muted-note { grid-column:1/-1; margin:0; }
+.savings-valuation-editor { display:grid; gap:12px; margin-top:16px; padding:14px; border:1px solid var(--mn-line); border-radius:var(--mn-radius-md); background:var(--mn-inset); }
+.savings-valuation-editor .card-title { margin:0 0 4px; }
+.savings-valuation-editor .muted-note { margin:0; }
+.savings-card-edit { justify-self:start; min-height:28px; margin-top:8px; padding:5px 9px; font-size:10px; }
+.savings-inline-editor { display:grid; gap:7px; margin-top:8px; padding-top:8px; border-top:1px solid var(--mn-line); }
+.savings-inline-editor label { color:var(--mn-muted); font-size:9px; line-height:1.4; }
+.savings-inline-editor input { width:100%; min-height:32px; padding:6px 8px; border:1px solid var(--mn-line); border-radius:var(--mn-radius-sm); background:var(--mn-surface); color:var(--mn-ink); font-size:11px; }
+.savings-planner-card .form-actions { display:flex; flex-wrap:wrap; gap:6px; align-items:center; margin-top:8px; }
+.savings-planner-card .form-actions .muted-note { flex-basis:100%; }
+.savings-target-controls .button { min-height:34px; }
+@media (max-width:700px) { .savings-target-controls { grid-template-columns:1fr; } .savings-target-controls .muted-note { grid-column:auto; } }

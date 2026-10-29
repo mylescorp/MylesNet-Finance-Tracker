@@ -124,10 +124,10 @@ export const overview = query({
     v.object({ access: v.literal("pending") }),
     v.object({ access: v.literal("restricted") }),
     v.object({
-      access: v.literal("ready"), businessId: v.id("businesses"), role: membershipRoleV, permissions: v.array(v.string()),
+      access: v.literal("ready"), businessId: v.id("businesses"), role: membershipRoleV, permissions: v.array(v.string()), savingsSetAsidePercent: v.number(),
       movements: v.array(v.object({ _id: v.id("movements"), kind: v.union(v.literal("transfer"), v.literal("withdrawal"), v.literal("deposit"), v.literal("capital_contribution")), amountUgx: v.number(), feeUgx: v.optional(v.number()), fromAccount: v.optional(accountV), toAccount: v.optional(accountV), partnerName: v.optional(v.string()), occurredOn: v.string(), note: v.string(), state: v.union(v.literal("posted"), v.literal("void")), voidReason: v.optional(v.string()) })),
-      savings: v.array(v.object({ _id: v.id("savingsHoldings"), name: v.string(), targetUgx: v.optional(v.number()), balanceUgx: v.number(), active: v.boolean(), targetProgressPercent: v.optional(v.number()), allocationPercent: v.number(), allocationStartPercent: v.number(), allocationEndPercent: v.number() })),
-      savingsSummary: v.object({ currentValueUgx: v.number(), currentValueComplete: v.boolean(), activeHoldingsCount: v.number(), allocationTotalUgx: v.number(), contributionsUgx: v.number(), contributionCount: v.number(), contributionsComplete: v.boolean() }),
+      savings: v.array(v.object({ _id: v.id("savingsHoldings"), name: v.string(), targetUgx: v.optional(v.number()), valuationCostBasisUgx: v.optional(v.number()), valuationMarketValueUgx: v.optional(v.number()), valuationOn: v.optional(v.string()), balanceUgx: v.number(), active: v.boolean(), targetProgressPercent: v.optional(v.number()), allocationPercent: v.number(), allocationStartPercent: v.number(), allocationEndPercent: v.number() })),
+      savingsSummary: v.object({ currentValueUgx: v.number(), currentValueComplete: v.boolean(), activeHoldingsCount: v.number(), allocationTotalUgx: v.number(), contributionsUgx: v.number(), contributionCount: v.number(), withdrawalsUgx: v.number(), netFlowUgx: v.number(), contributionsComplete: v.boolean(), valuationCount: v.number(), valuationComplete: v.boolean(), valuationCostBasisUgx: v.number(), valuationMarketValueUgx: v.number(), gainLossUgx: v.number(), latestValuationOn: v.union(v.string(), v.null()) }),
       savingsFlows: v.array(v.object({ _id: v.id("savingsFlows"), holdingName: v.string(), kind: v.union(v.literal("contribution"), v.literal("withdrawal")), amountUgx: v.number(), account: accountV, occurredOn: v.string(), note: v.string(), state: v.union(v.literal("posted"), v.literal("void")), voidReason: v.optional(v.string()), canReverse: v.boolean() })),
       loans: v.array(v.object({ _id: v.id("loans"), lender: v.string(), principalUgx: v.number(), outstandingPrincipalUgx: v.number(), annualRateBps: v.number(), termMonths: v.number(), startedOn: v.string(), account: accountV, status: v.union(v.literal("active"), v.literal("paid_off")) })),
       loanRepayments: v.array(v.object({ _id: v.id("loanRepayments"), lender: v.string(), amountUgx: v.number(), principalUgx: v.number(), interestUgx: v.number(), account: accountV, paidOn: v.string(), state: v.union(v.literal("posted"), v.literal("void")), voidReason: v.optional(v.string()) })),
@@ -203,25 +203,33 @@ export const overview = query({
     const billById = new Map(paymentBills.flatMap(item => item?.businessId === businessId ? [[item._id, item] as const] : []));
     const currentValueUgx = savings.reduce((sum, row) => safeAdd(sum, row.balanceUgx, "Savings current value"), 0);
     const allocationTotalUgx = savings.reduce((sum, row) => safeAdd(sum, row.balanceUgx, "Savings allocation"), 0);
+    const savingsPreferences = canViewSavings ? await ctx.db.query("workspacePreferences").withIndex("by_business", q => q.eq("businessId", businessId)).unique() : null;
     const contributionRows = savingsSummaryFlows.filter(row => (row.state ?? "posted") === "posted" && row.kind === "contribution");
+    const withdrawalRows = savingsSummaryFlows.filter(row => (row.state ?? "posted") === "posted" && row.kind === "withdrawal");
     const contributionsUgx = contributionRows.reduce((sum, row) => safeAdd(sum, row.amountUgx, "Savings contributions"), 0);
+    const withdrawalsUgx = withdrawalRows.reduce((sum, row) => safeAdd(sum, row.amountUgx, "Savings withdrawals"), 0);
+    const valuedHoldings = savings.filter(row => row.valuationCostBasisUgx !== undefined && row.valuationMarketValueUgx !== undefined);
+    const valuationCostBasisUgx = valuedHoldings.reduce((sum, row) => safeAdd(sum, row.valuationCostBasisUgx!, "Savings valuation basis"), 0);
+    const valuationMarketValueUgx = valuedHoldings.reduce((sum, row) => safeAdd(sum, row.valuationMarketValueUgx!, "Savings valuation"), 0);
+    const gainLossUgx = safeAdd(valuationMarketValueUgx, -valuationCostBasisUgx, "Savings valuation gain or loss");
+    const latestValuationOn = valuedHoldings.map(row => row.valuationOn).filter((date): date is string => date !== undefined).sort().at(-1) ?? null;
     let allocationPosition = 0;
     const savingsWithMetrics = savings.map((row, index) => {
       const allocationPercent = allocationTotalUgx > 0 ? row.balanceUgx / allocationTotalUgx * 100 : 0;
       const allocationStartPercent = allocationPosition;
       allocationPosition += allocationPercent;
       return {
-        _id: row._id, name: row.name, targetUgx: row.targetUgx, balanceUgx: row.balanceUgx, active: row.active,
+        _id: row._id, name: row.name, targetUgx: row.targetUgx, valuationCostBasisUgx: row.valuationCostBasisUgx, valuationMarketValueUgx: row.valuationMarketValueUgx, valuationOn: row.valuationOn, balanceUgx: row.balanceUgx, active: row.active,
         targetProgressPercent: row.targetUgx && row.targetUgx > 0 ? Math.min(100, Math.round(row.balanceUgx / row.targetUgx * 100)) : undefined,
         allocationPercent, allocationStartPercent, allocationEndPercent: allocationPosition,
       };
     });
     return {
-      access: "ready" as const, businessId: current.business._id, role: current.membership.role,
+      access: "ready" as const, businessId: current.business._id, role: current.membership.role, savingsSetAsidePercent: savingsPreferences?.savingsSetAsidePercent ?? 30,
       permissions: await permissionsForMembership(ctx, current.membership),
       movements: canViewMovements ? movements.filter(row => !args.account || row.fromAccount === args.account || row.toAccount === args.account).map(row => ({ _id: row._id, kind: row.kind, amountUgx: row.amountUgx, feeUgx: row.feeUgx, fromAccount: row.fromAccount, toAccount: row.toAccount, partnerName: row.partnerId ? partnerById.get(row.partnerId) : undefined, occurredOn: row.occurredOn, note: row.note, state: row.state, voidReason: row.voidReason })) : [],
       savings: canViewSavings ? savingsWithMetrics : [],
-      savingsSummary: canViewSavings ? { currentValueUgx, currentValueComplete: savings.length < 101, activeHoldingsCount: savings.filter(row => row.active).length, allocationTotalUgx, contributionsUgx, contributionCount: contributionRows.length, contributionsComplete: savingsSummaryFlows.length < 5001 } : { currentValueUgx: 0, currentValueComplete: true, activeHoldingsCount: 0, allocationTotalUgx: 0, contributionsUgx: 0, contributionCount: 0, contributionsComplete: true },
+      savingsSummary: canViewSavings ? { currentValueUgx, currentValueComplete: savings.length < 101, activeHoldingsCount: savings.filter(row => row.active).length, allocationTotalUgx, contributionsUgx, contributionCount: contributionRows.length, withdrawalsUgx, netFlowUgx: safeAdd(contributionsUgx, -withdrawalsUgx, "Savings net flow"), contributionsComplete: savingsSummaryFlows.length < 5001, valuationCount: valuedHoldings.length, valuationComplete: savings.length < 101 && valuedHoldings.length === savings.length, valuationCostBasisUgx, valuationMarketValueUgx, gainLossUgx, latestValuationOn } : { currentValueUgx: 0, currentValueComplete: true, activeHoldingsCount: 0, allocationTotalUgx: 0, contributionsUgx: 0, contributionCount: 0, withdrawalsUgx: 0, netFlowUgx: 0, contributionsComplete: true, valuationCount: 0, valuationComplete: true, valuationCostBasisUgx: 0, valuationMarketValueUgx: 0, gainLossUgx: 0, latestValuationOn: null },
       savingsFlows: canViewSavings ? savingsFlows.filter(row => !args.account || row.account === args.account).map(row => { const holding = holdingById.get(row.holdingId); return { _id: row._id, holdingName: holding?.name ?? "Inactive holding", kind: row.kind, amountUgx: row.amountUgx, account: row.account, occurredOn: row.occurredOn, note: row.note, state: row.state ?? "posted", voidReason: row.voidReason, canReverse: holding?.active === true }; }) : [],
       loans: canViewLoans ? loans.filter(row => !args.account || row.account === args.account).map(row => ({ _id: row._id, lender: row.lender, principalUgx: row.principalUgx, outstandingPrincipalUgx: row.outstandingPrincipalUgx, annualRateBps: row.annualRateBps, termMonths: row.termMonths, startedOn: row.startedOn, account: row.account, status: row.status })) : [],
       loanRepayments: canViewLoans ? loanRepayments.filter(row => !args.account || row.account === args.account).map(row => ({ _id: row._id, lender: loanById.get(row.loanId) ?? "Loan", amountUgx: row.amountUgx, principalUgx: row.principalUgx, interestUgx: row.interestUgx, account: row.account, paidOn: row.paidOn, state: row.state ?? "posted", voidReason: row.voidReason })) : [],
@@ -471,7 +479,7 @@ export const createSavingsHolding = mutation({
 });
 
 export const updateSavingsHolding = mutation({
-  args: { businessId: v.id("businesses"), holdingId: v.id("savingsHoldings"), action: v.union(v.literal("edit"), v.literal("archive"), v.literal("restore")), expectedActive: v.boolean(), name: v.string(), targetUgx: v.optional(v.number()) },
+  args: { businessId: v.id("businesses"), holdingId: v.id("savingsHoldings"), action: v.union(v.literal("edit"), v.literal("archive"), v.literal("restore")), expectedActive: v.boolean(), name: v.string(), targetUgx: v.optional(v.number()), valuationAction: v.optional(v.union(v.literal("keep"), v.literal("set"), v.literal("clear"))), valuationCostBasisUgx: v.optional(v.number()), valuationMarketValueUgx: v.optional(v.number()), valuationOn: v.optional(v.string()) },
   returns: v.null(),
   handler: async (ctx, args) => {
     const current = await workspace(ctx, args.businessId);
@@ -498,10 +506,49 @@ export const updateSavingsHolding = mutation({
     if (name.length < 2 || name.length > 80 || (args.targetUgx !== undefined && (!Number.isSafeInteger(args.targetUgx) || args.targetUgx <= 0))) throw new Error("Savings holding details are invalid.");
     const active = await ctx.db.query("savingsHoldings").withIndex("by_business_and_active", q => q.eq("businessId", current.business._id).eq("active", true)).take(101);
     if (active.some(row => row._id !== holding._id && row.name.toLowerCase() === name.toLowerCase())) throw new Error("An active savings holding with this name already exists.");
-    const before = { name: holding.name, targetUgx: holding.targetUgx, active: holding.active };
-    const after = { name, targetUgx: args.targetUgx, active: true };
+    const valuationAction = args.valuationAction ?? "keep";
+    if (valuationAction === "set" && (!Number.isSafeInteger(args.valuationCostBasisUgx) || args.valuationCostBasisUgx! < 0 || !Number.isSafeInteger(args.valuationMarketValueUgx) || args.valuationMarketValueUgx! < 0 || !validDay(args.valuationOn ?? "") || args.valuationOn! > dayInZone(Date.now(), current.business.timezone))) throw new Error("Enter a valid valuation date no later than today and non-negative whole-unit values for cost basis and current value.");
+    const before = { name: holding.name, targetUgx: holding.targetUgx, active: holding.active, valuationCostBasisUgx: holding.valuationCostBasisUgx, valuationMarketValueUgx: holding.valuationMarketValueUgx, valuationOn: holding.valuationOn };
+    const valuationPatch = valuationAction === "clear"
+      ? { valuationCostBasisUgx: undefined, valuationMarketValueUgx: undefined, valuationOn: undefined }
+      : valuationAction === "set"
+        ? { valuationCostBasisUgx: args.valuationCostBasisUgx, valuationMarketValueUgx: args.valuationMarketValueUgx, valuationOn: args.valuationOn }
+        : {};
+    const after = { name, targetUgx: args.targetUgx, active: true, ...valuationPatch };
     await ctx.db.patch("savingsHoldings", holding._id, after);
-    await ctx.db.insert("auditEvents", { businessId: current.business._id, actorId: current.userId, action: "savings.holding_updated", entityType: "savingsHolding", entityId: holding._id, occurredAt: Date.now(), summary: `Updated savings holding: ${name}.`, details: JSON.stringify({ before, after }) });
+    await ctx.db.insert("auditEvents", { businessId: current.business._id, actorId: current.userId, action: valuationAction === "keep" ? "savings.holding_updated" : valuationAction === "set" ? "savings.valuation_updated" : "savings.valuation_cleared", entityType: "savingsHolding", entityId: holding._id, occurredAt: Date.now(), summary: valuationAction === "keep" ? `Updated savings holding: ${name}.` : valuationAction === "set" ? `Recorded a manual valuation for ${name}.` : `Cleared the manual valuation for ${name}.`, details: JSON.stringify({ before, after }) });
+    return null;
+  },
+});
+
+export const saveSavingsPlannerPercent = mutation({
+  args: { businessId: v.id("businesses"), percent: v.union(v.number(), v.null()) },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const current = await workspace(ctx, args.businessId);
+    if (!current || !(await hasPermission(ctx, current.membership, "savings.update"))) throw new Error("Your role cannot change savings planning preferences.");
+    if (args.percent !== null && (!Number.isInteger(args.percent) || args.percent < 0 || args.percent > 100)) throw new Error("Choose a whole-number set-aside share from 0% to 100%.");
+    const preferences = await ctx.db.query("workspacePreferences").withIndex("by_business", q => q.eq("businessId", current.business._id)).unique();
+    const now = Date.now();
+    if (preferences) await ctx.db.patch("workspacePreferences", preferences._id, { savingsSetAsidePercent: args.percent === null ? undefined : args.percent, updatedAt: now, updatedBy: current.userId });
+    else if (args.percent !== null) await ctx.db.insert("workspacePreferences", { businessId: current.business._id, savingsSetAsidePercent: args.percent, updatedAt: now, updatedBy: current.userId });
+    await ctx.db.insert("auditEvents", { businessId: current.business._id, actorId: current.userId, action: args.percent === null ? "savings.planner_reset" : "savings.planner_updated", entityType: "workspacePreferences", entityId: preferences?._id ?? current.business._id, occurredAt: now, summary: args.percent === null ? "Reset the savings set-aside share to the 30% default." : `Set the savings planner share to ${args.percent}%.` });
+    return null;
+  },
+});
+
+export const saveSavingsCashBufferThreshold = mutation({
+  args: { businessId: v.id("businesses"), thresholdUgx: v.number() },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const current = await workspace(ctx, args.businessId);
+    if (!current || !(await hasPermission(ctx, current.membership, "settings.update"))) throw new Error("Your role cannot change the workspace cash-buffer alert.");
+    if (!Number.isSafeInteger(args.thresholdUgx) || args.thresholdUgx < 0) throw new Error("Enter a non-negative whole-unit cash-alert threshold.");
+    const preferences = await ctx.db.query("workspacePreferences").withIndex("by_business", q => q.eq("businessId", current.business._id)).unique();
+    const now = Date.now();
+    if (preferences) await ctx.db.patch("workspacePreferences", preferences._id, { lowCashAlertUgx: args.thresholdUgx, updatedAt: now, updatedBy: current.userId });
+    else await ctx.db.insert("workspacePreferences", { businessId: current.business._id, lowCashAlertUgx: args.thresholdUgx, updatedAt: now, updatedBy: current.userId });
+    await ctx.db.insert("auditEvents", { businessId: current.business._id, actorId: current.userId, action: "savings.cash_buffer_alert_updated", entityType: "workspacePreferences", entityId: preferences?._id ?? current.business._id, occurredAt: now, summary: args.thresholdUgx === 0 ? "Disabled the savings low-cash alert." : `Updated the savings low-cash alert to ${args.thresholdUgx}.`, details: JSON.stringify({ beforeUgx: preferences?.lowCashAlertUgx ?? 100_000, afterUgx: args.thresholdUgx }) });
     return null;
   },
 });
