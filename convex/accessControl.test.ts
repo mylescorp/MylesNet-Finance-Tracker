@@ -87,4 +87,43 @@ describe("legacy Member role compatibility", () => {
 
     expect(permissions).toEqual(["dashboard.view", "sales.create"]);
   });
+
+  it("keeps an unlinked legacy Member from inheriting a custom role with the same name", async () => {
+    const t = convexTest(schema, modules);
+    const membershipId = await t.run(async ctx => {
+      const userId = await ctx.db.insert("users", { name: "Unlinked Legacy Member" });
+      const businessId = await ctx.db.insert("businesses", {
+        name: "Unlinked member test workspace",
+        currency: "UGX",
+        timezone: "Africa/Kampala",
+        createdBy: userId,
+        createdAt: Date.now(),
+      });
+      await ctx.db.insert("workspaceRoles", {
+        businessId,
+        name: "Member",
+        description: "Owner-created custom role with the same display name.",
+        permissions: ["dashboard.view", "access.manage"],
+        active: true,
+        createdBy: userId,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      });
+      return await ctx.db.insert("memberships", {
+        businessId,
+        userId,
+        role: "member",
+        active: true,
+        createdAt: Date.now(),
+      });
+    });
+
+    const permissions = await t.run(async ctx => {
+      const membership = await ctx.db.get("memberships", membershipId);
+      if (!membership) throw new Error("Unlinked Member fixture was not saved.");
+      return await permissionsForMembership(ctx, membership);
+    });
+
+    expect(permissions).toEqual(["dashboard.view", "analytics.view"]);
+  });
 });

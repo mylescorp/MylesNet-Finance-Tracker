@@ -37,9 +37,10 @@ export async function permissionsForMembership(ctx: QueryCtx | MutationCtx, memb
   const templates = await ctx.db.query("workspaceRoles")
     .withIndex("by_business", q => q.eq("businessId", membership.businessId))
     .take(100);
+  // Unlinked legacy members must not inherit permissions from a custom role with the same name.
+  if (membership.role.trim().toLowerCase() === "member") return MEMBER;
   const legacyTemplate = templates.find(role => role.builtIn === membership.role || role.name.toLowerCase() === membership.role.toLowerCase());
   if (legacyTemplate?.active) return legacyTemplate.builtIn === "member" ? MEMBER : legacyTemplate.permissions;
-  if (membership.role.trim().toLowerCase() === "member") return MEMBER;
   if (membership.role === "cashier") return CASHIER;
   if (membership.role === "partner") return PARTNER;
   if (membership.role === "finance_approver") return FINANCE_APPROVER;
