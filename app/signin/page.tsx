@@ -23,12 +23,12 @@ export default function SignInPage() {
       <Link href="/" aria-label="MylesNet home"><Image className="signin-logo" src="/brand/logo.png" width={190} height={58} alt="MylesNet" priority /></Link>
       <div className="eyebrow">Finance workspace</div>
       <h1 className="page-title" style={{ marginTop: 8 }}>Sign in to MylesNet</h1>
-      <p className="page-description" style={{ marginBottom: 22 }}>Sign in with Google. An invitation or workspace administrator approval is required before you can view finance data.</p>
+      <p className="page-description" style={{ marginBottom: 22 }}>Sign in with Google. Accounts are automatically added to the single MylesNet workspace as a read-only Member.</p>
       <button className="button" style={{ width: "100%", height: 44 }} type="button" onClick={() => void startGoogleSignIn()} disabled={pending}>
         <span className="google-mark" aria-hidden="true">G</span>{pending ? "Connecting to Google…" : "Continue with Google"}
       </button>
       {error && <p className="form-error" role="alert">{error}</p>}
-      <p className="muted-note" style={{ marginTop: 18, fontSize: 12 }}>Signing in does not grant finance access automatically. If you were not invited, your account will appear in the workspace owner’s pending users list for approval.</p>
+      <p className="muted-note" style={{ marginTop: 18, fontSize: 12 }}>Member access includes dashboard and analytics only. It cannot view individual records, record transactions, or change workspace settings.</p>
     </section>
   </main>;
 }
