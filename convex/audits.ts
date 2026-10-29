@@ -44,6 +44,7 @@ export const list = query({
     toExclusive: v.optional(v.string()),
     action: v.optional(v.string()),
     actorId: v.optional(v.id("users")),
+    entityIds: v.optional(v.array(v.string())),
   },
   handler: async (ctx, args) => {
     const current = await authorizedWorkspace(ctx);
@@ -51,6 +52,7 @@ export const list = query({
     const from = parseDate(args.from, "start");
     const to = parseDate(args.toExclusive, "end");
     if (from !== undefined && to !== undefined && from >= to) throw new Error("Choose an end date after the start date.");
+    if (args.entityIds && args.entityIds.length > 100) throw new Error("Filter audit history to at most 100 selected records.");
     let events = ctx.db.query("auditEvents").withIndex("by_business_and_time", q => {
       const businessRange = q.eq("businessId", current.business._id);
       if (from !== undefined && to !== undefined) return businessRange.gte("occurredAt", from).lt("occurredAt", to);
@@ -60,6 +62,8 @@ export const list = query({
     }).order("desc");
     if (args.action) events = events.filter(q => q.eq(q.field("action"), args.action));
     if (args.actorId) events = events.filter(q => q.eq(q.field("actorId"), args.actorId));
+    const entityIds = args.entityIds;
+    if (entityIds) events = entityIds.length ? events.filter(q => q.or(...entityIds.map(id => q.eq(q.field("entityId"), id)))) : events.filter(q => q.eq(q.field("entityId"), "__no_matching_entity__"));
     const page = await events.paginate(args.paginationOpts);
     const rows = await Promise.all(page.page.map(async event => {
       const [actor, profile] = await Promise.all([
