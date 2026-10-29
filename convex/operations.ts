@@ -2,7 +2,7 @@ import { paginationOptsValidator } from "convex/server";
 import { ConvexError, v } from "convex/values";
 import { mutation, query } from "./_generated/server";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
-import type { Id } from "./_generated/dataModel";
+import type { Doc, Id } from "./_generated/dataModel";
 import { hasPermission, permissionsForMembership } from "./accessControl";
 import { getSelectedWorkspace } from "./workspaceContext";
 import { getAuthUserId } from "@convex-dev/auth/server";
@@ -155,31 +155,48 @@ export const overview = query({
     if (![canViewMovements, canViewSavings, canViewLoans, canViewBills, canViewReconciliation, canViewPartners].some(Boolean)) return { access: "restricted" as const };
     const businessId = current.business._id;
     const accountFilter = args.account === "cash" || args.account === "mobile_money" ? args.account : undefined;
-    const movementsRead = accountFilter
+    const unallocatedSelected = args.account === "unallocated";
+    const movementsRead = unallocatedSelected
+      ? Promise.resolve([] as Doc<"movements">[])
+      : accountFilter
       ? Promise.all([
         ctx.db.query("movements").withIndex("by_business_and_from_account_and_date", q => q.eq("businessId", businessId).eq("fromAccount", accountFilter).gte("occurredOn", args.from).lt("occurredOn", args.toExclusive)).order("desc").take(100),
         ctx.db.query("movements").withIndex("by_business_and_to_account_and_date", q => q.eq("businessId", businessId).eq("toAccount", accountFilter).gte("occurredOn", args.from).lt("occurredOn", args.toExclusive)).order("desc").take(100),
       ]).then(([from, to]) => [...new Map([...from, ...to].map(row => [row._id, row])).values()].sort((a, b) => b.occurredOn.localeCompare(a.occurredOn)).slice(0, 100))
       : ctx.db.query("movements").withIndex("by_business_and_date", q => q.eq("businessId", businessId).gte("occurredOn", args.from).lt("occurredOn", args.toExclusive)).order("desc").take(100);
-    const savingsFlowsRead = accountFilter
+    const savingsFlowsRead = unallocatedSelected
+      ? Promise.resolve([] as Doc<"savingsFlows">[])
+      : accountFilter
       ? ctx.db.query("savingsFlows").withIndex("by_business_and_account_and_date", q => q.eq("businessId", businessId).eq("account", accountFilter).gte("occurredOn", args.from).lt("occurredOn", args.toExclusive)).order("desc").take(100)
       : ctx.db.query("savingsFlows").withIndex("by_business_and_date", q => q.eq("businessId", businessId).gte("occurredOn", args.from).lt("occurredOn", args.toExclusive)).order("desc").take(100);
-    const savingsSummaryFlowsRead = accountFilter
+    const savingsSummaryFlowsRead = unallocatedSelected
+      ? Promise.resolve([] as Doc<"savingsFlows">[])
+      : accountFilter
       ? ctx.db.query("savingsFlows").withIndex("by_business_and_account_and_date", q => q.eq("businessId", businessId).eq("account", accountFilter).gte("occurredOn", args.from).lt("occurredOn", args.toExclusive)).order("desc").take(5001)
       : ctx.db.query("savingsFlows").withIndex("by_business_and_date", q => q.eq("businessId", businessId).gte("occurredOn", args.from).lt("occurredOn", args.toExclusive)).order("desc").take(5001);
-    const loansRead = accountFilter
+    const loansRead = unallocatedSelected
+      ? Promise.resolve([] as Doc<"loans">[])
+      : accountFilter
       ? ctx.db.query("loans").withIndex("by_business_and_account_and_status", q => q.eq("businessId", businessId).eq("account", accountFilter).eq("status", "active")).take(101)
       : ctx.db.query("loans").withIndex("by_business_and_status", q => q.eq("businessId", businessId).eq("status", "active")).take(101);
-    const repaymentsRead = accountFilter
+    const repaymentsRead = unallocatedSelected
+      ? Promise.resolve([] as Doc<"loanRepayments">[])
+      : accountFilter
       ? ctx.db.query("loanRepayments").withIndex("by_business_and_account_and_date", q => q.eq("businessId", businessId).eq("account", accountFilter).gte("paidOn", args.from).lt("paidOn", args.toExclusive)).order("desc").take(100)
       : ctx.db.query("loanRepayments").withIndex("by_business_and_date", q => q.eq("businessId", businessId).gte("paidOn", args.from).lt("paidOn", args.toExclusive)).order("desc").take(100);
-    const billsRead = accountFilter
+    const billsRead = unallocatedSelected
+      ? Promise.resolve([] as Doc<"bills">[])
+      : accountFilter
       ? ctx.db.query("bills").withIndex("by_business_and_account_and_active_due", q => q.eq("businessId", businessId).eq("account", accountFilter).eq("active", true)).take(101)
       : ctx.db.query("bills").withIndex("by_business_and_active_due", q => q.eq("businessId", businessId).eq("active", true)).take(101);
-    const billPaymentsRead = accountFilter
+    const billPaymentsRead = unallocatedSelected
+      ? Promise.resolve([] as Doc<"billPayments">[])
+      : accountFilter
       ? ctx.db.query("billPayments").withIndex("by_business_and_account_and_date", q => q.eq("businessId", businessId).eq("account", accountFilter).gte("paidOn", args.from).lt("paidOn", args.toExclusive)).order("desc").take(100)
       : ctx.db.query("billPayments").withIndex("by_business_and_date", q => q.eq("businessId", businessId).gte("paidOn", args.from).lt("paidOn", args.toExclusive)).order("desc").take(100);
-    const reconciliationsRead = accountFilter
+    const reconciliationsRead = unallocatedSelected
+      ? Promise.resolve([] as Doc<"reconciliations">[])
+      : accountFilter
       ? ctx.db.query("reconciliations").withIndex("by_business_and_account_and_date", q => q.eq("businessId", businessId).eq("account", accountFilter).gte("asOfDate", args.from).lt("asOfDate", args.toExclusive)).order("desc").take(100)
       : ctx.db.query("reconciliations").withIndex("by_business_and_date", q => q.eq("businessId", businessId).gte("asOfDate", args.from).lt("asOfDate", args.toExclusive)).order("desc").take(100);
     const [movements, savings, savingsFlows, savingsSummaryFlows, loans, loanRepayments, bills, billPayments, reconciliations, partners] = await Promise.all([
