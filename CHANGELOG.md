@@ -2,6 +2,13 @@
 
 Changes are grouped under the semantic version of the production release that ships them. Each feature or fix remains its own card. Add a Changeset file for every user-visible change; the release workflow updates this file when it prepares the version PR. Preview deployments do not count as releases.
 
+## v0.3.1 — 2026-10-29
+
+<!-- change-id: calm-record-forms -->
+### Fixes — Unify finance period and account filters across workspace pages
+
+- The Dashboard and finance pages now share Daily, Weekly, Monthly, Yearly, Last year, and Custom ranges with account filtering in the page action bar. Record forms stay closed until requested from the Record button. Bill schedules support common categories plus a custom category, show an updating due countdown, and advance the next due date after a payment is recorded. Savings supports bulk recording contributions on a user-selected weekday across a selected date range, with one audited activity row per contribution.
+
 ## v0.3.0 — 2026-10-29
 
 <!-- change-id: accurate-dashboard-totals -->
