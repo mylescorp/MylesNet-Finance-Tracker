@@ -83,7 +83,16 @@ export const overview = query({
     const month = monthBounds(args.today);
     const runwayFrom = shiftDay(args.today, -29);
     const weakFrom = shiftDay(args.today, -13);
-    const [preferences, periodRows, monthRows, runwayRows, weakRows, balances, partners, salesEntries, expenseEntries, reconciliations] = await Promise.all([
+    const next30 = shiftDay(args.today, 30);
+    const [canViewAudit, canViewMovement, canViewSavings, canViewLoans, canViewBills, canViewPartners] = await Promise.all([
+      hasPermission(ctx, membership, "audit.view"),
+      hasPermission(ctx, membership, "movements.view"),
+      hasPermission(ctx, membership, "savings.view"),
+      hasPermission(ctx, membership, "loans.view"),
+      hasPermission(ctx, membership, "bills.view"),
+      hasPermission(ctx, membership, "partners.view"),
+    ]);
+    const [preferences, periodRows, monthRows, runwayRows, weakRows, balances, partners, salesEntries, expenseEntries, reconciliations, movements, distributions, savingsHoldings, activeLoans, upcomingBills, recentAudit] = await Promise.all([
       ctx.db.query("workspacePreferences").withIndex("by_business", q => q.eq("businessId", business._id)).unique(),
       dailyTotals(ctx, business._id, args.from, args.toExclusive, 370),
       dailyTotals(ctx, business._id, month.from, month.toExclusive, 31),
@@ -94,6 +103,12 @@ export const overview = query({
       args.account ? Promise.resolve([]) : ctx.db.query("entries").withIndex("by_business_and_kind_and_date", q => q.eq("businessId", business._id).eq("kind", "sale").gte("occurredOn", args.from).lt("occurredOn", args.toExclusive)).take(5001),
       args.account ? Promise.resolve([]) : ctx.db.query("entries").withIndex("by_business_and_kind_and_date", q => q.eq("businessId", business._id).eq("kind", "expense").gte("occurredOn", args.from).lt("occurredOn", args.toExclusive)).take(1001),
       ctx.db.query("reconciliations").withIndex("by_business_and_date", q => q.eq("businessId", business._id).gte("asOfDate", shiftDay(args.today, -89)).lte("asOfDate", args.today)).take(101),
+      canViewMovement ? ctx.db.query("movements").withIndex("by_business_and_date", q => q.eq("businessId", business._id).gte("occurredOn", month.from).lte("occurredOn", args.today)).take(501) : Promise.resolve([]),
+      canViewPartners ? ctx.db.query("partnerDistributions").withIndex("by_business_and_period_start", q => q.eq("businessId", business._id)).order("desc").take(201) : Promise.resolve([]),
+      canViewSavings ? ctx.db.query("savingsHoldings").withIndex("by_business_and_active", q => q.eq("businessId", business._id).eq("active", true)).take(101) : Promise.resolve([]),
+      canViewLoans ? ctx.db.query("loans").withIndex("by_business_and_status", q => q.eq("businessId", business._id).eq("status", "active")).take(101) : Promise.resolve([]),
+      canViewBills ? ctx.db.query("bills").withIndex("by_business_and_active_due", q => q.eq("businessId", business._id).eq("active", true).lte("nextDueOn", next30)).take(101) : Promise.resolve([]),
+      canViewAudit ? ctx.db.query("auditEvents").withIndex("by_business_and_time", q => q.eq("businessId", business._id)).order("desc").take(6) : Promise.resolve([]),
     ]);
     const accountRecentFrom = month.from < runwayFrom ? month.from : runwayFrom;
     const scoped = args.account ? await Promise.all([
@@ -173,6 +188,33 @@ export const overview = query({
     if (cashThresholdEnabled && workspaceLiquidUgx < lowCashThreshold) issues.push({ id: "low-cash", title: "Cash is below the alert threshold", detail: `Recorded cash and mobile money total ${displayMoney(workspaceLiquidUgx)}; configured threshold is ${displayMoney(lowCashThreshold)}.`, severity: "warning", href: "/settings/rules", amountUgx: workspaceLiquidUgx });
     if (scopedRecentComplete && salesTarget > 0 && month.elapsedDays < month.daysInMonth && monthSales < Math.ceil(salesTarget * month.elapsedDays / month.daysInMonth)) issues.push({ id: "sales-target-pace", title: "Behind monthly sales pace", detail: `Month-to-date sales of ${displayMoney(monthSales)} are below the straight-line pace for the ${displayMoney(salesTarget)} target.`, severity: "warning", href: "/settings/rules", amountUgx: monthSales });
     const openReconciliations = reconciliations.filter(row => row.status === "open");
+    const postedWithdrawals = movements.filter(row => row.kind === "withdrawal" && row.state === "posted" && (!args.account || row.fromAccount === args.account));
+    const withdrawalTotalUgx = postedWithdrawals.reduce((sum, row) => safeAdd(sum, row.amountUgx, "Centipid withdrawals"), 0);
+    const pendingPayouts = distributions.filter(row => row.status === "approved" || row.status === "partially_paid");
+    const payoutBalanceUgx = pendingPayouts.reduce((sum, row) => safeAdd(sum, Math.max(0, row.distributionUgx - row.paidUgx), "Unpaid partner distributions"), 0);
+    const savingsTotalUgx = savingsHoldings.reduce((sum, row) => safeAdd(sum, row.balanceUgx, "Savings balance"), 0);
+    const activeLoanTotalUgx = activeLoans.reduce((sum, row) => safeAdd(sum, row.outstandingPrincipalUgx, "Outstanding loan principal"), 0);
+    const estimatedMonthlyLoanPaymentsUgx = activeLoans.reduce((sum, row) => {
+      const monthlyRate = row.annualRateBps / 10000 / 12;
+      const payment = monthlyRate === 0
+        ? row.principalUgx / row.termMonths
+        : row.principalUgx * monthlyRate / (1 - Math.pow(1 + monthlyRate, -row.termMonths));
+      return safeAdd(sum, Math.round(payment), "Estimated monthly loan payments");
+    }, 0);
+    const byCategory = (rows: typeof scopedSalesEntries, denominator: number, complete: boolean) => {
+      const totals = new Map<string, { amountUgx: number; count: number }>();
+      for (const row of rows) if (row.state === "posted") {
+        const key = row.category.trim() || "Uncategorized";
+        const current = totals.get(key) ?? { amountUgx: 0, count: 0 };
+        current.amountUgx = safeAdd(current.amountUgx, row.amountUgx, "Category total");
+        current.count += 1;
+        totals.set(key, current);
+      }
+      const ranked = [...totals].map(([category, value]) => ({ category, ...value })).sort((a, b) => b.amountUgx - a.amountUgx).slice(0, 5);
+      return { rows: ranked.map(row => ({ ...row, shareBps: denominator > 0 ? Math.round(row.amountUgx / denominator * 10000) : 0 })), complete };
+    };
+    const salesCategories = byCategory(scopedSalesEntries, salesUgx, scopedPeriodSalesComplete);
+    const expenseCategories = byCategory(scopedExpenseEntries, expensesUgx, scopedPeriodExpensesComplete);
     if (openReconciliations.length > 0) issues.push({ id: "open-reconciliations", title: "Reconciliation differences need review", detail: `${openReconciliations.length}${reconciliations.length === 101 ? " or more" : ""} open account differences were recorded in the last 90 days.`, severity: "action", href: "/reconcile", amountUgx: openReconciliations.reduce((sum, row) => safeAdd(sum, Math.abs(row.varianceUgx), "Reconciliation differences"), 0) });
     const largeExpenses = scopedExpenseEntries.filter(row => row.state === "posted" && row.amountUgx >= (preferences?.highExpenseReviewUgx ?? 500000 * currencyScale));
     if (largeExpenses.length > 0) issues.push({ id: "high-expense-review", title: "Large expenses to review", detail: `${largeExpenses.length}${!scopedPeriodExpensesComplete ? " or more" : ""} posted expenses crossed the configured review threshold.`, severity: "review", href: "/expenses", amountUgx: largeExpenses.reduce((sum, row) => safeAdd(sum, row.amountUgx, "Large expenses"), 0) });
@@ -205,6 +247,35 @@ export const overview = query({
       target: { amountUgx: salesTarget, monthSalesUgx: monthSales, monthExpensesUgx: monthExpenses, monthNetUgx: monthSales - monthExpenses, elapsedDays: month.elapsedDays, daysInMonth: month.daysInMonth, projectedSalesUgx: Math.round(monthSales / Math.max(1, month.elapsedDays) * month.daysInMonth), requiredSalesPerDayUgx: Math.ceil(Math.max(0, salesTarget - monthSales) / Math.max(1, month.daysInMonth - month.elapsedDays)) },
       balances: { cashUgx, mobileMoneyUgx: mobileUgx, totalUgx: liquidUgx, cashShareBps: liquidUgx > 0 ? Math.round(cashUgx / liquidUgx * 10000) : 0, mobileShareBps: liquidUgx > 0 ? Math.round(mobileUgx / liquidUgx * 10000) : 0, lowCashThresholdUgx: lowCashThreshold },
       runway: { trailingDays: 30, expensesUgx: runwayExpenses, averageDailyExpenseUgx: dailyBurnUgx, days: dailyBurnUgx > 0 ? Math.max(0, Math.floor(liquidUgx / dailyBurnUgx)) : null },
+      dashboardCards: {
+        cashRunwayDays: dailyBurnUgx > 0 ? Math.max(0, Math.floor(cashUgx / dailyBurnUgx)) : null,
+        dailyExpenseUgx: dailyBurnUgx,
+        withdrawalTotalUgx,
+        withdrawalCount: postedWithdrawals.length,
+        withdrawalComplete: canViewMovement && movements.length < 501,
+        lastWithdrawalOn: postedWithdrawals.reduce<string | null>((latest, row) => !latest || row.occurredOn > latest ? row.occurredOn : latest, null),
+        reconciliationCount: openReconciliations.length,
+        reconciliationDifferenceUgx: openReconciliations.reduce((sum, row) => safeAdd(sum, Math.abs(row.varianceUgx), "Reconciliation differences"), 0),
+        reconciliationComplete: reconciliations.length < 101,
+        payoutBalanceUgx,
+        payoutCount: pendingPayouts.length,
+        payoutsComplete: canViewPartners && distributions.length < 201,
+        savingsTotalUgx,
+        savingsComplete: canViewSavings && savingsHoldings.length < 101,
+        activeLoanTotalUgx,
+        activeLoanCount: activeLoans.length,
+        estimatedMonthlyLoanPaymentsUgx,
+        loansComplete: canViewLoans && activeLoans.length < 101,
+        salesCategories,
+        expenseCategories,
+        upcomingBills: canViewBills ? upcomingBills.slice(0, 6).map(row => ({ name: row.name, amountUgx: row.amountUgx, nextDueOn: row.nextDueOn, category: row.category, overdue: row.nextDueOn < args.today })) : [],
+        upcomingBillsComplete: canViewBills && upcomingBills.length < 101,
+        recentAudit: await Promise.all(recentAudit.map(async row => {
+          const [user, profile] = await Promise.all([ctx.db.get("users", row.actorId), ctx.db.query("userProfiles").withIndex("by_user", q => q.eq("userId", row.actorId)).unique()]);
+          return { id: row._id, summary: row.summary, occurredAt: row.occurredAt, actor: profile?.displayName?.trim() || user?.email || "Workspace member" };
+        })),
+        auditAvailable: canViewAudit,
+      },
       partners: partnerSnapshot,
       ownershipComplete,
       unallocated: { count: unallocated.length, amountUgx: unallocatedUgx, complete: unallocatedComplete },

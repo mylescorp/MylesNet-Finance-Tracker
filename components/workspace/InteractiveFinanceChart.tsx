@@ -25,6 +25,7 @@ export function InteractiveFinanceChart({
   accountFiltered = false,
   complete = true,
   compact = false,
+  mini = false,
   showPrevious = true,
   highlightDay,
 }: {
@@ -36,6 +37,7 @@ export function InteractiveFinanceChart({
   accountFiltered?: boolean;
   complete?: boolean;
   compact?: boolean;
+  mini?: boolean;
   showPrevious?: boolean;
   highlightDay?: string;
 }) {
@@ -49,11 +51,11 @@ export function InteractiveFinanceChart({
   }
 
   const width = Math.max(compact ? 320 : 900, points.length * (compact ? 20 : 28));
-  const height = compact ? 145 : 250;
+  const height = mini ? 84 : compact ? 145 : 250;
   const left = compact ? 30 : 34;
   const right = width - (compact ? 12 : 18);
-  const top = compact ? 12 : 16;
-  const bottom = height - (compact ? 28 : 34);
+  const top = mini ? 7 : compact ? 12 : 16;
+  const bottom = height - (mini ? 18 : compact ? 28 : 34);
   const plotHeight = bottom - top;
   const gap = (right - left) / points.length;
   const values = points.flatMap(point => showPrevious ? [point.salesUgx, point.expensesUgx, point.netUgx, point.previousSalesUgx] : [point.salesUgx, point.expensesUgx, point.netUgx]);
@@ -99,7 +101,7 @@ export function InteractiveFinanceChart({
         {showPrevious && <path className="chart-previous-line" d={salesLine} />}
         {showPrevious && points.map((point, index) => <circle key={`previous-${point.day}`} className={`chart-previous-point${activeIndex === index ? " is-active" : ""}`} cx={xAt(index)} cy={yAt(point.previousSalesUgx)} r={activeIndex === index ? 4 : 2.5} />)}
         {points.map((point, index) => <rect key={`hit-${point.day}`} className="chart-hit-area" x={xAt(index) - gap / 2} y={top} width={gap} height={bottom - top} tabIndex={activeIndex === index || (activeIndex === null && index === 0) ? 0 : -1} role="button" aria-pressed={activeIndex === index} aria-label={`${date(point.day)}. Sales ${money(point.salesUgx, currency, scale, locale)}. Expenses ${money(point.expensesUgx, currency, scale, locale)}. Net ${money(point.netUgx, currency, scale, locale)}.${showPrevious ? ` Previous period sales ${money(point.previousSalesUgx, currency, scale, locale)}.` : ""}`} onPointerEnter={() => setActiveIndex(index)} onPointerLeave={event => { if (event.pointerType !== "touch") setActiveIndex(null); }} onFocus={() => setActiveIndex(index)} onBlur={() => setActiveIndex(null)} onClick={() => setActiveIndex(index)} onKeyDown={event => { if (event.key === "ArrowRight" || event.key === "ArrowLeft") { event.preventDefault(); const next = Math.max(0, Math.min(points.length - 1, index + (event.key === "ArrowRight" ? 1 : -1))); setActiveIndex(next); event.currentTarget.parentElement?.querySelector<SVGRectElement>(`[data-chart-index="${next}"]`)?.focus(); } if (event.key === "Enter" || event.key === " ") { event.preventDefault(); setActiveIndex(index); } if (event.key === "Escape") setActiveIndex(null); }} data-chart-index={index} />)}
-        {axisIndices.map(index => <text key={`axis-${index}`} className="chart-axis-label chart-date-label" x={xAt(index)} y={height - 8} textAnchor={index === 0 ? "start" : index === points.length - 1 ? "end" : "middle"}>{date(points[index]!.day)}</text>)}
+        {axisIndices.map(index => <text key={`axis-${index}`} className="chart-axis-label chart-date-label" x={xAt(index)} y={height - (mini ? 4 : 8)} textAnchor={index === 0 ? "start" : index === points.length - 1 ? "end" : "middle"}>{date(points[index]!.day)}</text>)}
       </svg>
     </div>
     <div className="interactive-chart-legend" aria-label="Chart legend"><span><i className="chart-mark chart-mark-sales" />Sales</span><span><i className="chart-mark chart-mark-expenses" />Expenses</span><span><i className="chart-mark chart-mark-net" />Net</span>{showPrevious && <span><i className="chart-mark chart-mark-previous" />Previous period sales</span>}</div>
