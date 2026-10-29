@@ -308,8 +308,8 @@ export function WorkspaceTitle({ eyebrow, title, description, action }: { eyebro
   return <div className="page-title-row"><div>{eyebrow && <div className="eyebrow">{eyebrow}</div>}<h1 className="page-title">{formattedTitle}</h1>{description && <p className="page-description">{description}</p>}</div>{action && <div className="page-title-action">{action}</div>}</div>;
 }
 
-export function Card({ children, className = "" }: { children: ReactNode; className?: string }) {
-  return <section className={`card ${className}`}>{children}</section>;
+export function Card({ children, className = "", id }: { children: ReactNode; className?: string; id?: string }) {
+  return <section id={id} className={`card ${className}`}>{children}</section>;
 }
 
 export function Eyebrow({ children }: { children: ReactNode }) {

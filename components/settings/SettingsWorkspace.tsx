@@ -175,14 +175,17 @@ function BalanceAdjustmentManager({ settings }: { settings: SettingsOverview }) 
   const [voidReason, setVoidReason] = useState("");
   const [busy, setBusy] = useState(false);
   const [feedback, setFeedback] = useState<{ message: string; error: boolean } | null>(null);
+  const balanceFormDisclosure = useRef<HTMLDetailsElement>(null);
   const scale = 10 ** (settings.currencyMinorDigits ?? 0);
   const money = (amount: number) => new Intl.NumberFormat(settings.locale, { style: "currency", currency: settings.currency, minimumFractionDigits: Math.round(Math.log10(scale)), maximumFractionDigits: Math.round(Math.log10(scale)) }).format(amount / scale);
 
   function startEdit(row: BalanceAdjustmentRow) {
     setEditing(row); setAccount(row.account); setCountedBalance(String(row.countedBalanceUgx / scale)); setOccurredOn(row.occurredOn); setNote(row.note); setFeedback(null);
+    balanceFormDisclosure.current?.setAttribute("open", "");
   }
   function resetForm() {
     setEditing(null); setAccount("cash"); setCountedBalance(""); setOccurredOn(businessDayKey(settings.timezone)); setNote("");
+    if (balanceFormDisclosure.current) balanceFormDisclosure.current.open = false;
   }
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault(); setBusy(true); setFeedback(null);
@@ -191,7 +194,9 @@ function BalanceAdjustmentManager({ settings }: { settings: SettingsOverview }) 
       if (amount === null) throw new Error(`Enter a non-negative balance using ${settings.currency}'s supported decimal places.`);
       if (editing) await updateAdjustment({ businessId: settings.businessId, adjustmentId: editing._id, account, countedBalanceUgx: amount, occurredOn, note });
       else await create({ businessId: settings.businessId, account, countedBalanceUgx: amount, occurredOn, note });
-      resetForm(); setFeedback({ message: editing ? "Balance record updated; the difference was applied to the live account balance." : "Balance recorded; the live account balance has been adjusted.", error: false });
+      resetForm();
+      if (balanceFormDisclosure.current) balanceFormDisclosure.current.open = false;
+      setFeedback({ message: editing ? "Balance record updated; the difference was applied to the live account balance." : "Balance recorded; the live account balance has been adjusted.", error: false });
     } catch (error) { setFeedback({ message: error instanceof Error ? error.message : "Could not save the balance record.", error: true }); }
     finally { setBusy(false); }
   }
@@ -204,14 +209,17 @@ function BalanceAdjustmentManager({ settings }: { settings: SettingsOverview }) 
   }
 
   return <section className="card settings-card balance-adjustment-card">
-    <div className="card-heading"><div><h2 className="card-title">Record a counted balance</h2><p className="card-subtitle">Enter the cash physically counted or the verified Centipid mobile collection balance. We’ll apply only the difference and keep an audit record.</p></div></div>
+    <details className="record-form-disclosure balance-adjustment-disclosure" ref={balanceFormDisclosure}>
+    <summary className="record-form-trigger"><span className="record-form-trigger-copy"><strong>{editing ? "Edit a counted balance" : "Record a counted balance"}</strong><small>Enter a verified cash or mobile collection balance; the adjustment is audit logged.</small></span><span className="record-form-trigger-action">{editing ? "Edit record" : "Open form"}</span></summary>
     <form className="form-layout" onSubmit={event => void submit(event)}>
       <label className="field"><span>Account</span><select value={account} disabled={Boolean(editing)} onChange={event => setAccount(event.target.value as "cash" | "mobile_money")}><option value="cash">Cash at hand</option><option value="mobile_money">Centipid mobile collection</option></select>{editing && <small className="muted-note">To move a count to another account, record a new count and remove this one.</small>}</label>
       <label className="field"><span>Counted balance ({settings.currency})</span><input type="number" min="0" step={1 / scale} value={countedBalance} onChange={event => setCountedBalance(event.target.value)} placeholder="Enter the balance you counted" required /></label>
       <label className="field"><span>Count date</span><input type="date" value={occurredOn} onChange={event => setOccurredOn(event.target.value)} required /></label>
       <label className="field field-full"><span>Reason or reference</span><textarea rows={2} maxLength={300} value={note} onChange={event => setNote(event.target.value)} placeholder="e.g. Opening count, Centipid settlement statement, or cash count correction" minLength={3} required /></label>
-      <div className="form-actions field-full"><button className="button button-accent" disabled={busy}>{busy ? "Saving…" : editing ? "Save balance changes" : "Record balance"}</button>{editing && <button className="button" type="button" disabled={busy} onClick={resetForm}>Cancel edit</button>}{feedback && <span className={`form-feedback ${feedback.error ? "form-error" : "form-success"}`} role={feedback.error ? "alert" : "status"}>{feedback.message}</span>}</div>
+      <div className="form-actions field-full"><button className="button button-accent" disabled={busy}>{busy ? "Saving…" : editing ? "Save balance changes" : "Record balance"}</button>{editing && <button className="button" type="button" disabled={busy} onClick={resetForm}>Cancel edit</button>}</div>
     </form>
+    </details>
+    {feedback && <p className={`form-feedback ${feedback.error ? "form-error" : "form-success"}`} role={feedback.error ? "alert" : "status"}>{feedback.message}</p>}
     <div className="balance-adjustment-history"><div className="card-heading"><div><h3 className="card-title">Balance record history</h3><p className="card-subtitle">Counts and corrections, newest first. Removed records remain visible as reversed.</p></div></div>
       {adjustmentStatus === "LoadingFirstPage" ? <p className="muted-note">Loading balance records…</p> : adjustmentRows.length === 0 ? <p className="muted-note">No counted balances recorded yet.</p> : <><div className="table-scroll"><table className="data-table"><thead><tr><th>Date</th><th>Account</th><th>Counted balance</th><th>Reason</th><th>Status</th><th>Actions</th></tr></thead><tbody>{adjustmentRows.map(row => <tr key={row._id} className={row.state === "void" ? "balance-adjustment-void" : undefined}><td>{row.occurredOn}</td><td>{row.account === "cash" ? "Cash at hand" : "Centipid mobile collection"}</td><td>{money(row.countedBalanceUgx)}</td><td>{row.note}{row.voidReason && <small className="balance-adjustment-reason">Reversal: {row.voidReason}</small>}</td><td>{row.state === "posted" ? "Active" : "Reversed"}</td><td>{row.state === "posted" ? <div className="balance-adjustment-actions"><button type="button" className="button button-small" onClick={() => startEdit(row)}>Edit</button><button type="button" className="button button-small button-danger-quiet" onClick={() => { setVoidId(row._id); setVoidReason(""); }}>Remove</button></div> : "—"}{voidId === row._id && row.state === "posted" && <div className="balance-adjustment-void-form"><label>Reason for removal<textarea rows={2} maxLength={300} value={voidReason} onChange={event => setVoidReason(event.target.value)} /></label><div className="form-actions"><button type="button" className="button button-danger" disabled={busy} onClick={() => void remove(row)}>Confirm removal</button><button type="button" className="button" disabled={busy} onClick={() => setVoidId(null)}>Cancel</button></div></div>}</td></tr>)}</tbody></table></div>{adjustmentStatus === "CanLoadMore" && <button type="button" className="button" onClick={() => loadMore(30)}>Load older balance records</button>}{adjustmentStatus === "LoadingMore" && <p className="muted-note" role="status">Loading older balance records…</p>}</>}
     </div>

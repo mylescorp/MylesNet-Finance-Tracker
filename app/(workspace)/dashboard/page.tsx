@@ -112,19 +112,11 @@ export default function DashboardPage() {
   const todaySummary = useQuery(api.workspace.dashboardSummary, { ...todayRange, ...accountFilter });
   const weekRange = useMemo(() => periodRange("week", businessDay, weekStartsOn, fiscalStartMonth), [businessDay, weekStartsOn, fiscalStartMonth]);
   const weekSummary = useQuery(api.workspace.dashboardSummary, { ...weekRange, ...accountFilter });
-  const fourteenDayRange = useMemo(() => {
-    const fromDate = new Date(`${businessDay}T00:00:00.000Z`);
-    fromDate.setUTCDate(fromDate.getUTCDate() - 13);
-    const toDate = new Date(`${businessDay}T00:00:00.000Z`);
-    toDate.setUTCDate(toDate.getUTCDate() + 1);
-    return { from: fromDate.toISOString().slice(0, 10), toExclusive: toDate.toISOString().slice(0, 10) };
-  }, [businessDay]);
-  const fourteenDaySummary = useQuery(api.workspace.dashboardSummary, { ...fourteenDayRange, ...accountFilter });
   const yearRange = useMemo(() => periodRange("year", businessDay, weekStartsOn, fiscalStartMonth), [businessDay, weekStartsOn, fiscalStartMonth]);
   const yearSummary = useQuery(api.workspace.dashboardSummary, { ...yearRange, ...accountFilter });
   const monthRange = useMemo(() => periodRange("month", businessDay, weekStartsOn, fiscalStartMonth), [businessDay, weekStartsOn, fiscalStartMonth]);
   const monthSummary = useQuery(api.workspace.dashboardSummary, { ...monthRange, ...accountFilter });
-  const recent = useQuery(api.workspace.recentEntries, { limit: 8 });
+  const recent = useQuery(api.workspace.recentEntries, { limit: 8, from: range.from, toExclusive: range.toExclusive, ...accountFilter });
   const summaryData = summary?.access === "ready" ? summary : null;
   const readySummary = summaryData?.accountFilterComplete ? summaryData : null;
   const isReady = summaryData !== null;
@@ -135,7 +127,6 @@ export default function DashboardPage() {
   const weekSummaryReady = weekSummary?.access === "ready" && weekSummary.accountFilterComplete ? weekSummary : null;
   const yearSummaryReady = yearSummary?.access === "ready" && yearSummary.accountFilterComplete ? yearSummary : null;
   const monthSummaryReady = monthSummary?.access === "ready" && monthSummary.accountFilterComplete ? monthSummary : null;
-  const fourteenDaySummaryReady = fourteenDaySummary?.access === "ready" && fourteenDaySummary.accountFilterComplete ? fourteenDaySummary : null;
   const todaySales = todaySummaryReady ? todaySummaryReady.days.find((day) => day.day === today)?.salesUgx ?? 0 : null;
   const periodLength = Math.max(1, (Date.parse(`${range.toExclusive}T00:00:00.000Z`) - Date.parse(`${range.from}T00:00:00.000Z`)) / 86_400_000);
   const chartPoints = useMemo(() => {
@@ -154,16 +145,6 @@ export default function DashboardPage() {
       return { day, salesUgx: current?.salesUgx ?? 0, expensesUgx: current?.expensesUgx ?? 0, netUgx: (current?.salesUgx ?? 0) - (current?.expensesUgx ?? 0), previousSalesUgx: prior?.salesUgx ?? 0 };
     });
   }, [summary, previousSummary, periodLength, range.from, previousRange.from]);
-  const fourteenDayChartPoints = useMemo(() => {
-    if (!fourteenDaySummaryReady) return [];
-    return Array.from({ length: 14 }, (_, index) => {
-      const date = new Date(`${fourteenDayRange.from}T00:00:00.000Z`);
-      date.setUTCDate(date.getUTCDate() + index);
-      const day = date.toISOString().slice(0, 10);
-      const row = fourteenDaySummaryReady.days.find(item => item.day === day);
-      return { day, salesUgx: row?.salesUgx ?? 0, expensesUgx: row?.expensesUgx ?? 0, netUgx: (row?.salesUgx ?? 0) - (row?.expensesUgx ?? 0), previousSalesUgx: 0 };
-    });
-  }, [fourteenDaySummaryReady, fourteenDayRange.from]);
   const averageDay = readySummary ? Math.round(readySummary.salesUgx / Math.max(1, readySummary.days.filter((day) => day.salesUgx > 0).length)) : null;
   const weekSales = weekSummaryReady?.salesUgx ?? null;
   const monthlySalesTarget = analyticsOverview?.access === "ready" ? analyticsOverview.target.amountUgx : 0;
@@ -194,16 +175,18 @@ export default function DashboardPage() {
       </div>
       <div className="dashboard-welcome-mark" aria-hidden="true"><span /><span /><span /><span /><span /><span /><span /></div>
     </section>
-    <FinancePeriodFilters period={period} onPeriodChange={setPeriod} customFrom={customFrom} customTo={customTo} onCustomFromChange={setCustomFrom} onCustomToChange={setCustomTo} account={account} onAccountChange={setAccount} today={businessDay} />
-    {customRangeError && <p className="form-feedback form-error finance-range-error" role="alert">{customRangeError}</p>}
     <div className="dashboard-banner"><Image src="/brand/banner.png" alt="MylesNet Finance Tracker" fill priority sizes="(max-width: 760px) 100vw, 1100px" /></div>
-    <div className="board-toolbar no-print">
+    <div className="board-toolbar no-print has-finance-filters">
+      <FinancePeriodFilters period={period} onPeriodChange={setPeriod} customFrom={customFrom} customTo={customTo} onCustomFromChange={setCustomFrom} onCustomToChange={setCustomTo} account={account} onAccountChange={setAccount} today={businessDay} ariaLabel="Dashboard period and account filters" />
+      <div className="board-toolbar-actions">
       {customRangeInvalid ? <span className="toolbar-range">Complete the custom date range</span> : <span className="toolbar-range">{fmtDate(range.from)} — {fmtDate(rangeLastDay.toISOString().slice(0, 10))}</span>}
       <button className="button" type="button" onClick={() => window.print()}><Printer size={14} />Print</button>
       <button className="button" type="button" onClick={() => window.print()}><Download size={14} />Export PDF</button>
       <button className="button button-dark" type="button" onClick={() => void shareDashboard()}><Share2 size={14} />Share report</button>
       {shareFeedback && <span className="form-feedback" role="status">{shareFeedback}</span>}
+      </div>
     </div>
+    {customRangeError && <p className="form-feedback form-error finance-range-error" role="alert">{customRangeError}</p>}
     {access?.access === "ready" && (access.permissions.includes("sales.create") || access.permissions.includes("expenses.create")) && <Card className="quick-add-strip no-print"><span className="eyebrow">Quick add</span>{access.permissions.includes("sales.create") && <Link className="button" href="/sales">+ Add sale</Link>}{access.permissions.includes("expenses.create") && <Link className="button" href="/expenses">+ Add expense</Link>}{access.permissions.includes("movements.create") && <Link className="button" href="/movements">Record withdrawal</Link>}{access.permissions.includes("partners.manage") && <Link className="button" href="/partners">Record payout</Link>}<span className="quick-add-note">Saved entries update cashbook totals and account balances.</span></Card>}
     <Card className="dashboard-sales-hero">
       <div className="hero-sales-number"><span className="eyebrow">Today’s sales · {fmtDate(today)}</span><strong>{todaySales === null ? "—" : formatMoney(todaySales)}<small>{currency}</small></strong><span className="muted-note">{todaySummary?.access === "ready" && !todaySummary.accountFilterComplete ? "Unavailable · narrow the date range" : "Recorded sales only"}</span></div>
@@ -225,8 +208,8 @@ export default function DashboardPage() {
         <ReferenceMetric label="Net year to date" value={yearSummaryReady?.netUgx ?? null} note="Sales less expenses" currency={currency} formatMoney={formatMoney} tone={yearSummaryReady && yearSummaryReady.netUgx < 0 ? "amount-negative" : ""} />
         <Card className="dashboard-reference-metric"><span className="eyebrow">Net margin year to date</span><strong className={`dashboard-reference-value ${yearSummaryReady && yearSummaryReady.netUgx < 0 ? "amount-negative" : ""}`}>{yearSummaryReady && yearSummaryReady.salesUgx > 0 ? `${(yearSummaryReady.netUgx / yearSummaryReady.salesUgx * 100).toFixed(1)}%` : "—"}</strong><div className="dashboard-reference-detail"><span>Basis</span><strong>Net ÷ sales</strong></div></Card>
         <Card className="dashboard-reference-summary dashboard-reference-mini-trend">
-          <div className="card-heading"><div><h2 className="card-title">14-day sales trend</h2><p className="card-subtitle">Selected period · today highlighted</p></div></div>
-          {fourteenDaySummary === undefined ? <p className="muted-note">Loading trend…</p> : fourteenDaySummaryReady === null ? <p className="muted-note">Trend unavailable for this view.</p> : <InteractiveFinanceChart points={fourteenDayChartPoints} currency={currency} scale={currencyScale} locale={locale} dateFormat={dateFormat} accountFiltered={account !== "all"} compact mini showPrevious={false} highlightDay={today} />}
+          <div className="card-heading"><div><h2 className="card-title">Sales trend · selected period</h2><p className="card-subtitle">{customRangeInvalid ? customRangeError : `${fmtDate(range.from)} — ${fmtDate(rangeLastDay.toISOString().slice(0, 10))}`}</p></div></div>
+          {summary === undefined ? <p className="muted-note">Loading trend…</p> : summaryData === null || !summary.accountFilterComplete ? <p className="muted-note">Trend unavailable for this view.</p> : <InteractiveFinanceChart points={chartPoints} currency={currency} scale={currencyScale} locale={locale} dateFormat={dateFormat} accountFiltered={account !== "all"} compact mini showPrevious={false} highlightDay={today} />}
         </Card>
       </div>
     </section>
@@ -264,7 +247,7 @@ export default function DashboardPage() {
     </div>
     <div className="dashboard-period-row">
       <Card className="dashboard-period-card"><div className="card-heading"><div><h2 className="card-title">Year to date</h2><p className="card-subtitle">From your configured financial year</p></div></div><div className="dashboard-ytd-metrics"><div><span>Sales</span><strong>{yearSummaryReady ? `${formatMoney(yearSummaryReady.salesUgx)} ${currency}` : "—"}</strong></div><div><span>Expenses</span><strong>{yearSummaryReady ? `${formatMoney(yearSummaryReady.expensesUgx)} ${currency}` : "—"}</strong></div><div><span>Net</span><strong className={yearSummaryReady && yearSummaryReady.netUgx < 0 ? "amount-negative" : ""}>{yearSummaryReady ? `${formatMoney(yearSummaryReady.netUgx)} ${currency}` : "—"}</strong></div></div>{yearSummary?.access === "ready" && !yearSummary.accountFilterComplete && <p className="muted-note">Totals unavailable · narrow the date range to include every matching record.</p>}</Card>
-      <Card className="dashboard-period-card dashboard-trend-card"><div className="card-heading"><div><h2 className="card-title">Daily sales trend</h2><p className="card-subtitle">Selected period · today highlighted</p></div></div>{customRangeInvalid ? <div className="muted-note">{customRangeError}</div> : summary === undefined ? <div className="muted-note">Loading trend…</div> : summary.access !== "ready" ? <div className="muted-note">Trend is unavailable.</div> : !summary.accountFilterComplete ? <div className="muted-note">Trend unavailable · narrow the date range.</div> : <InteractiveFinanceChart points={chartPoints} currency={currency} scale={currencyScale} locale={locale} dateFormat={dateFormat} accountFiltered={account !== "all"} showPrevious={previousSummary?.access === "ready" && previousSummary.accountFilterComplete && previousSummary.days.some(day => day.salesUgx > 0 || day.expensesUgx > 0)} compact highlightDay={today} />}</Card>
+      <Card className="dashboard-period-card dashboard-trend-card"><div className="card-heading"><div><h2 className="card-title">Sales trend · selected period</h2><p className="card-subtitle">{fmtDate(range.from)} — {fmtDate(rangeLastDay.toISOString().slice(0, 10))} · today highlighted</p></div></div>{customRangeInvalid ? <div className="muted-note">{customRangeError}</div> : summary === undefined ? <div className="muted-note">Loading trend…</div> : summary.access !== "ready" ? <div className="muted-note">Trend is unavailable.</div> : !summary.accountFilterComplete ? <div className="muted-note">Trend unavailable · narrow the date range.</div> : <InteractiveFinanceChart points={chartPoints} currency={currency} scale={currencyScale} locale={locale} dateFormat={dateFormat} accountFiltered={account !== "all"} showPrevious={previousSummary?.access === "ready" && previousSummary.accountFilterComplete && previousSummary.days.some(day => day.salesUgx > 0 || day.expensesUgx > 0)} compact highlightDay={today} />}</Card>
     </div>
     {summary?.access === "setup" && <Card className="workspace-setup-card"><div className="card-heading"><div><h2 className="card-title">Set up the first workspace owner</h2><p className="card-subtitle">Use this one-time setup only for a new workspace. It grants your account the owner role.</p></div></div><OwnerSetup /></Card>}
     {summary?.access === "pending" && <Card className="workspace-setup-card"><div className="card-heading"><div><h2 className="card-title">Workspace access pending</h2><p className="card-subtitle">Your account will appear in the workspace owner’s pending users list. The owner can approve it or send you an invitation.</p></div></div></Card>}
