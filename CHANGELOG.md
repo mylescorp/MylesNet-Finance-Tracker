@@ -2,6 +2,13 @@
 
 Changes are grouped under the semantic version of the production release that ships them. Each feature or fix remains its own card. Add a Changeset file for every user-visible change; the release workflow updates this file when it prepares the version PR. Preview deployments do not count as releases.
 
+## v0.3.5 — 2026-10-29
+
+<!-- change-id: remove-duplicate-dashboard-cards -->
+### Fixes — Remove duplicate dashboard cards
+
+- Remove the appended legacy dashboard summaries and charts so the dashboard shows one consistent overview.
+
 ## v0.3.4 — 2026-10-29
 
 <!-- change-id: issues-sidebar-review-ux -->
