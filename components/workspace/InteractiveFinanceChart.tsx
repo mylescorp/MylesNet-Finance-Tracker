@@ -26,6 +26,7 @@ export function InteractiveFinanceChart({
   complete = true,
   compact = false,
   showPrevious = true,
+  highlightDay,
 }: {
   points: FinanceChartPoint[];
   currency: string;
@@ -36,6 +37,7 @@ export function InteractiveFinanceChart({
   complete?: boolean;
   compact?: boolean;
   showPrevious?: boolean;
+  highlightDay?: string;
 }) {
   const [activeIndex, setActiveIndex] = useState<number | null>(null);
   if (!complete) return <div className="interactive-finance-chart">
@@ -46,12 +48,12 @@ export function InteractiveFinanceChart({
     return <div className="empty-state compact-empty"><strong>No recorded activity in this period.</strong><span>Chart values come from saved workspace records.</span></div>;
   }
 
-  const width = Math.max(900, points.length * 28);
-  const height = compact ? 170 : 250;
-  const left = 34;
-  const right = width - 18;
-  const top = 16;
-  const bottom = height - 34;
+  const width = Math.max(compact ? 320 : 900, points.length * (compact ? 20 : 28));
+  const height = compact ? 145 : 250;
+  const left = compact ? 30 : 34;
+  const right = width - (compact ? 12 : 18);
+  const top = compact ? 12 : 16;
+  const bottom = height - (compact ? 28 : 34);
   const plotHeight = bottom - top;
   const gap = (right - left) / points.length;
   const values = points.flatMap(point => showPrevious ? [point.salesUgx, point.expensesUgx, point.netUgx, point.previousSalesUgx] : [point.salesUgx, point.expensesUgx, point.netUgx]);
@@ -90,7 +92,7 @@ export function InteractiveFinanceChart({
           const baseline = yAt(0);
           const valueY = yAt(point.salesUgx);
           const barHeight = point.salesUgx > 0 ? Math.max(2, baseline - valueY) : 0;
-          return <rect key={`bar-${point.day}`} className={`chart-sales-bar${activeIndex === index ? " is-active" : ""}`} x={xAt(index) - barWidth / 2} y={valueY} width={barWidth} height={barHeight} rx="3" />;
+          return <rect key={`bar-${point.day}`} className={`chart-sales-bar${activeIndex === index ? " is-active" : ""}${point.day === highlightDay ? " is-highlighted" : ""}`} x={xAt(index) - barWidth / 2} y={valueY} width={barWidth} height={barHeight} rx="3" />;
         })}
         <path className="chart-expenses-line" d={expenseLine} />
         <path className="chart-net-line" d={netLine} />

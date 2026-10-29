@@ -389,8 +389,6 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .dashboard-ytd-metrics div { display:grid; gap:7px; }
 .dashboard-ytd-metrics span { color:var(--mn-muted); font-size:11px; }
 .dashboard-ytd-metrics strong { font-size:16px; font-variant-numeric:tabular-nums; }
-.mini-trend { height:48px; display:flex; align-items:flex-end; gap:4px; }
-.mini-trend span { flex:1; min-width:3px; border-radius:3px 3px 1px 1px; background:var(--mn-accent); opacity:.78; }
 .dashboard-performance-table { width:100%; border-collapse:collapse; font-variant-numeric:tabular-nums; }
 .dashboard-performance-table th,.dashboard-performance-table td { padding:12px 9px; border-bottom:1px solid var(--mn-line); text-align:right; white-space:nowrap; }
 .dashboard-performance-table th:first-child { text-align:left; }
@@ -889,6 +887,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .chart-hover-band { fill:color-mix(in srgb,var(--mn-accent) 10%,transparent); }
 .chart-sales-bar { fill:var(--mn-chart-1); opacity:.83; transition:opacity var(--mn-dur-fast),filter var(--mn-dur-fast); }
 .chart-sales-bar.is-active { opacity:1; filter:drop-shadow(0 0 4px color-mix(in srgb,var(--mn-chart-1) 45%,transparent)); }
+.chart-sales-bar.is-highlighted { fill:var(--mn-accent); opacity:1; }
 .chart-expenses-line { fill:none; stroke:var(--mn-chart-2); stroke-width:2; stroke-linecap:round; stroke-linejoin:round; }
 .chart-net-line { fill:none; stroke:var(--mn-chart-3); stroke-width:2; stroke-dasharray:4 4; stroke-linecap:round; stroke-linejoin:round; }
 .chart-previous-line { fill:none; stroke:var(--mn-muted); stroke-width:1.7; }
@@ -908,6 +907,8 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .chart-tooltip-change.is-negative { color:var(--mn-warn-fg) !important; }
 .interactive-chart-legend { display:flex; flex-wrap:wrap; gap:14px; margin-top:9px; color:var(--mn-muted); font-size:11px; }
 .interactive-chart-legend > span { display:inline-flex; align-items:center; gap:6px; }
+.interactive-finance-chart.is-compact .interactive-chart-legend { gap:8px; margin-top:5px; font-size:9px; }
+.interactive-finance-chart.is-compact .interactive-chart-legend .chart-mark { width:7px; height:7px; }
 .interactive-chart-warning { margin:10px 0 0; }
 @media(max-width:760px) {
   .finance-filter-bar { top:76px; align-items:stretch; flex-wrap:wrap; gap:8px; padding:8px; }
