@@ -68,6 +68,7 @@ export function InteractiveFinanceChart({
   const netLine = points.map((point, index) => `${index === 0 ? "M" : "L"} ${xAt(index)} ${yAt(point.netUgx)}`).join(" ");
   const selected = activeIndex === null ? null : points[activeIndex];
   const selectedX = activeIndex === null ? null : xAt(activeIndex);
+  const highlightedIndex = highlightDay ? points.findIndex(point => point.day === highlightDay) : -1;
   const date = (value: string) => formatBusinessDay(value, dateFormat);
   const percentChange = showPrevious && selected && selected.previousSalesUgx > 0 ? Math.round((selected.salesUgx - selected.previousSalesUgx) / selected.previousSalesUgx * 100) : null;
   const axisIndices = [...new Set([0, Math.floor((points.length - 1) / 2), points.length - 1])];
@@ -88,6 +89,7 @@ export function InteractiveFinanceChart({
           const value = max - (max - min) * tick / 3;
           return <g key={tick}><line className="chart-grid-line" x1={left} x2={right} y1={y} y2={y} /><text className="chart-axis-label" x={left - 7} y={y + 3} textAnchor="end">{new Intl.NumberFormat(locale, { notation: "compact", maximumFractionDigits: 1 }).format(value / scale)}</text></g>;
         })}
+        {highlightedIndex >= 0 && <rect className="chart-highlight-band" x={xAt(highlightedIndex) - gap / 2} y={top} width={gap} height={bottom - top} />}
         {activeIndex !== null && selectedX !== null && <rect className="chart-hover-band" x={selectedX - gap / 2} y={top} width={gap} height={bottom - top} />}
         {points.map((point, index) => {
           const barWidth = Math.max(3, Math.min(18, gap * 0.52));
@@ -100,6 +102,7 @@ export function InteractiveFinanceChart({
         <path className="chart-net-line" d={netLine} />
         {showPrevious && <path className="chart-previous-line" d={salesLine} />}
         {showPrevious && points.map((point, index) => <circle key={`previous-${point.day}`} className={`chart-previous-point${activeIndex === index ? " is-active" : ""}`} cx={xAt(index)} cy={yAt(point.previousSalesUgx)} r={activeIndex === index ? 4 : 2.5} />)}
+        {highlightedIndex >= 0 && <line className="chart-highlight-line" x1={xAt(highlightedIndex)} x2={xAt(highlightedIndex)} y1={top} y2={bottom} />}
         {points.map((point, index) => <rect key={`hit-${point.day}`} className="chart-hit-area" x={xAt(index) - gap / 2} y={top} width={gap} height={bottom - top} tabIndex={activeIndex === index || (activeIndex === null && index === 0) ? 0 : -1} role="button" aria-pressed={activeIndex === index} aria-label={`${date(point.day)}. Sales ${money(point.salesUgx, currency, scale, locale)}. Expenses ${money(point.expensesUgx, currency, scale, locale)}. Net ${money(point.netUgx, currency, scale, locale)}.${showPrevious ? ` Previous period sales ${money(point.previousSalesUgx, currency, scale, locale)}.` : ""}`} onPointerEnter={() => setActiveIndex(index)} onPointerLeave={event => { if (event.pointerType !== "touch") setActiveIndex(null); }} onFocus={() => setActiveIndex(index)} onBlur={() => setActiveIndex(null)} onClick={() => setActiveIndex(index)} onKeyDown={event => { if (event.key === "ArrowRight" || event.key === "ArrowLeft") { event.preventDefault(); const next = Math.max(0, Math.min(points.length - 1, index + (event.key === "ArrowRight" ? 1 : -1))); setActiveIndex(next); event.currentTarget.parentElement?.querySelector<SVGRectElement>(`[data-chart-index="${next}"]`)?.focus(); } if (event.key === "Enter" || event.key === " ") { event.preventDefault(); setActiveIndex(index); } if (event.key === "Escape") setActiveIndex(null); }} data-chart-index={index} />)}
         {axisIndices.map(index => <text key={`axis-${index}`} className="chart-axis-label chart-date-label" x={xAt(index)} y={height - (mini ? 4 : 8)} textAnchor={index === 0 ? "start" : index === points.length - 1 ? "end" : "middle"}>{date(points[index]!.day)}</text>)}
       </svg>

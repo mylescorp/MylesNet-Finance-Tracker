@@ -963,6 +963,8 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .interactive-chart-svg { display:block; width:100%; min-width:0; height:auto; overflow:visible; }
 .chart-grid-line { stroke:var(--mn-line); stroke-width:1; }
 .chart-axis-label { fill:var(--mn-subtle); font:var(--mn-type-caption-weight) var(--mn-type-caption-size)/var(--mn-type-caption-line) var(--mn-type-caption-family); }
+.chart-highlight-band { fill:color-mix(in srgb,var(--mn-accent) 8%,transparent); }
+.chart-highlight-line { stroke:color-mix(in srgb,var(--mn-accent) 60%,transparent); stroke-width:1; stroke-dasharray:3 3; pointer-events:none; }
 .chart-hover-band { fill:color-mix(in srgb,var(--mn-accent) 10%,transparent); }
 .chart-sales-bar { fill:var(--mn-chart-1); opacity:.83; transition:opacity var(--mn-dur-fast),filter var(--mn-dur-fast); }
 .chart-sales-bar.is-active { opacity:1; filter:drop-shadow(0 0 4px color-mix(in srgb,var(--mn-chart-1) 45%,transparent)); }

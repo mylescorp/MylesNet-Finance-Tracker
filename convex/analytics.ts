@@ -168,7 +168,22 @@ export const overview = query({
     const partnerSnapshot = periodOwnership.map(partner => ({
       ...partner,
       shareOfNetUgx: ownershipComplete ? Math.round(netUgx * partner.ownershipBps / 10000) : 0,
-    }));
+    })).sort((a, b) => b.ownershipBps - a.ownershipBps);
+    const leadingPartners = partnerSnapshot.slice(0, 3);
+    const remainingPartners = partnerSnapshot.slice(3);
+    const partnerChart = remainingPartners.length ? [
+      ...leadingPartners,
+      {
+        id: "other-partners",
+        name: `Other partners (${remainingPartners.length})`,
+        ownershipBps: remainingPartners.reduce((sum, partner) => safeAdd(sum, partner.ownershipBps, "Other partner ownership"), 0),
+        active: true,
+        existedAtPeriodEnd: true,
+        shareOfNetUgx: remainingPartners.reduce((sum, partner) => safeAdd(sum, partner.shareOfNetUgx, "Other partner net share"), 0),
+      },
+    ] : leadingPartners;
+    const monthComplete = scopedRecentComplete;
+    const cashRunwayComplete = (!args.account || args.account === "cash") && scopedRecentComplete;
 
     const issues: { id: string; title: string; detail: string; severity: "review" | "warning" | "action"; href: string; amountUgx: number }[] = [];
     const weakDays = scopedRecentComplete ? scopedWeakRows.filter(row => row.salesUgx > 0 && row.salesUgx < weakThreshold) : [];
@@ -194,6 +209,8 @@ export const overview = query({
     const payoutBalanceUgx = pendingPayouts.reduce((sum, row) => safeAdd(sum, Math.max(0, row.distributionUgx - row.paidUgx), "Unpaid partner distributions"), 0);
     const savingsTotalUgx = savingsHoldings.reduce((sum, row) => safeAdd(sum, row.balanceUgx, "Savings balance"), 0);
     const activeLoanTotalUgx = activeLoans.reduce((sum, row) => safeAdd(sum, row.outstandingPrincipalUgx, "Outstanding loan principal"), 0);
+    const netRecordedPositionComplete = canViewSavings && savingsHoldings.length < 101 && canViewLoans && activeLoans.length < 101;
+    const netRecordedPositionUgx = safeAdd(safeAdd(liquidUgx, savingsTotalUgx, "Recorded wealth"), -activeLoanTotalUgx, "Net recorded position");
     const estimatedMonthlyLoanPaymentsUgx = activeLoans.reduce((sum, row) => {
       const monthlyRate = row.annualRateBps / 10000 / 12;
       const payment = monthlyRate === 0
@@ -244,11 +261,14 @@ export const overview = query({
       currencyMinorDigits: new Intl.NumberFormat("en", { style: "currency", currency: business.currency }).resolvedOptions().maximumFractionDigits,
       locale: preferences?.locale ?? "en-UG",
       period: { from: args.from, toExclusive: args.toExclusive, salesUgx, expensesUgx, netUgx, days },
-      target: { amountUgx: salesTarget, monthSalesUgx: monthSales, monthExpensesUgx: monthExpenses, monthNetUgx: monthSales - monthExpenses, elapsedDays: month.elapsedDays, daysInMonth: month.daysInMonth, projectedSalesUgx: Math.round(monthSales / Math.max(1, month.elapsedDays) * month.daysInMonth), requiredSalesPerDayUgx: Math.ceil(Math.max(0, salesTarget - monthSales) / Math.max(1, month.daysInMonth - month.elapsedDays)) },
+      target: { amountUgx: salesTarget, weeklyAmountUgx: Math.round(salesTarget * 7 / month.daysInMonth), monthPaceRequiredUgx: Math.ceil(salesTarget * month.elapsedDays / month.daysInMonth), monthComplete, monthSalesUgx: monthSales, monthExpensesUgx: monthExpenses, monthNetUgx: monthSales - monthExpenses, elapsedDays: month.elapsedDays, daysInMonth: month.daysInMonth, projectedSalesUgx: Math.round(monthSales / Math.max(1, month.elapsedDays) * month.daysInMonth), requiredSalesPerDayUgx: Math.ceil(Math.max(0, salesTarget - monthSales) / Math.max(1, month.daysInMonth - month.elapsedDays)) },
       balances: { cashUgx, mobileMoneyUgx: mobileUgx, totalUgx: liquidUgx, cashShareBps: liquidUgx > 0 ? Math.round(cashUgx / liquidUgx * 10000) : 0, mobileShareBps: liquidUgx > 0 ? Math.round(mobileUgx / liquidUgx * 10000) : 0, lowCashThresholdUgx: lowCashThreshold },
       runway: { trailingDays: 30, expensesUgx: runwayExpenses, averageDailyExpenseUgx: dailyBurnUgx, days: dailyBurnUgx > 0 ? Math.max(0, Math.floor(liquidUgx / dailyBurnUgx)) : null },
       dashboardCards: {
-        cashRunwayDays: dailyBurnUgx > 0 ? Math.max(0, Math.floor(cashUgx / dailyBurnUgx)) : null,
+        cashRunwayDays: cashRunwayComplete && dailyBurnUgx > 0 ? Math.max(0, Math.floor(cashUgx / dailyBurnUgx)) : null,
+        cashRunwayComplete,
+        netRecordedPositionUgx,
+        netRecordedPositionComplete,
         dailyExpenseUgx: dailyBurnUgx,
         withdrawalTotalUgx,
         withdrawalCount: postedWithdrawals.length,
@@ -277,6 +297,8 @@ export const overview = query({
         auditAvailable: canViewAudit,
       },
       partners: partnerSnapshot,
+      partnerChartComplete: scopedPeriodComplete,
+      partnerChart,
       ownershipComplete,
       unallocated: { count: unallocated.length, amountUgx: unallocatedUgx, complete: unallocatedComplete },
       issues: issueRows,
