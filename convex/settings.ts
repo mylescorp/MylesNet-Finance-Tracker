@@ -363,7 +363,7 @@ export const accessOverview = query({
       return user ? { id: user._id, email: user.email ?? "Signed-in account", createdAt: request.createdAt } : null;
     }));
     const canViewAudit = await hasPermission(ctx, current.membership, "audit.view");
-    return { access: "ready" as const, canViewMembers, canManage: canManageAccess, canManageRoles, canInitializeRoleTemplates: isOwnerMembership(current.membership), canViewAudit, members: canViewMembers ? members : [], pendingUsers: canManageAccess ? pendingUsers.filter((user): user is NonNullable<typeof user> => user !== null) : [], pendingUsersContinueCursor: requestsPage.continueCursor, pendingUsersIsDone: requestsPage.isDone, roles: canManageRoles || canManageAccess || canViewMembers ? roles.map(r => ({ id: r._id, name: r.name, description: r.description, permissions: r.permissions, builtIn: r.builtIn ?? null, active: r.active, memberCount: memberships.filter(m => m.roleId === r._id || !m.roleId && (m.role === r.builtIn || m.role.toLowerCase() === r.name.toLowerCase())).length })) : [], partners: canManageAccess || canViewMembers ? partners.map(partner => ({ id: partner._id, name: partner.name })) : [], invitations: canManageAccess ? invitations.map(i => ({ id: i._id, email: i.email, role: i.role, roleId: i.roleId ?? null, partnerId: i.partnerId ?? null, partnerName: i.partnerId ? partnerNames.get(i.partnerId) : undefined, expiresAt: i.expiresAt })) : [], audit: canViewAudit ? audit.map(a => ({ id: a._id, action: a.action, summary: a.summary, occurredAt: a.occurredAt })) : [] };
+    return { access: "ready" as const, canViewMembers, canManage: canManageAccess, canManageRoles, canInitializeRoleTemplates: isOwnerMembership(current.membership), canViewAudit, members: canViewMembers ? members : [], pendingUsers: canManageAccess ? pendingUsers.filter((user): user is NonNullable<typeof user> => user !== null) : [], pendingUsersContinueCursor: requestsPage.continueCursor, pendingUsersIsDone: requestsPage.isDone, roles: canManageRoles || canManageAccess || canViewMembers ? roles.map(r => ({ id: r._id, name: r.name, description: r.description, permissions: r.builtIn === "member" ? ["dashboard.view", "analytics.view"] : r.permissions, builtIn: r.builtIn ?? null, active: r.active, memberCount: memberships.filter(m => m.roleId === r._id || !m.roleId && (m.role === r.builtIn || m.role.toLowerCase() === r.name.toLowerCase())).length })) : [], partners: canManageAccess || canViewMembers ? partners.map(partner => ({ id: partner._id, name: partner.name })) : [], invitations: canManageAccess ? invitations.map(i => ({ id: i._id, email: i.email, role: i.role, roleId: i.roleId ?? null, partnerId: i.partnerId ?? null, partnerName: i.partnerId ? partnerNames.get(i.partnerId) : undefined, expiresAt: i.expiresAt })) : [], audit: canViewAudit ? audit.map(a => ({ id: a._id, action: a.action, summary: a.summary, occurredAt: a.occurredAt })) : [] };
   },
 });
 
@@ -392,8 +392,8 @@ export const requestWorkspaceAccess = mutation({
         businessId: business._id,
         name: "Member",
         builtIn: "member",
-        permissions: ["dashboard.view", "analytics.view", "reports.view"],
-        description: "Read-only access to the dashboard and analytics. Cannot view or change individual records or workspace settings.",
+        permissions: ["dashboard.view", "analytics.view"],
+        description: "Read-only access to dashboard and analytics summaries; no access to individual records or workspace settings.",
         active: true,
         createdBy: userId,
         createdAt: now,
@@ -441,7 +441,7 @@ export const initializeRoleTemplates = mutation({
     const now = Date.now();
     const templates = [
       { name: "Owner", builtIn: "owner" as const, permissions: [...PERMISSIONS], description: "Full workspace control." },
-      { name: "Member", builtIn: "member" as const, permissions: ["dashboard.view", "analytics.view", "reports.view"], description: "Read-only access to the dashboard and analytics." },
+      { name: "Member", builtIn: "member" as const, permissions: ["dashboard.view", "analytics.view"], description: "Read-only access to dashboard and analytics summaries; no access to individual records or workspace settings." },
       { name: "Cashier", builtIn: "cashier" as const, permissions: ["dashboard.view", "sales.view", "sales.create", "expenses.view", "expenses.create", "reports.view"], description: "Record sales and expenses and view standard reports." },
       { name: "Partner", builtIn: "partner" as const, permissions: ["dashboard.view", "partners.view"], description: "View partner area only; financial totals are not exposed." },
       { name: "Finance Approver", builtIn: "finance_approver" as const, permissions: ["partners.view", "partners.distributions.approve"], description: "Review partner distributions without workspace-wide finance access." },
@@ -470,6 +470,7 @@ export const updateRole = mutation({
     if (role.builtIn === "owner") throw new Error("The protected Owner role cannot be changed.");
     const name = args.name.trim(); const permissions = [...new Set(args.permissions)];
     if (name.length < 2 || name.length > 50 || permissions.some(p => !(PERMISSIONS as readonly string[]).includes(p))) throw new Error("Enter a valid role name and permission set.");
+    if (role.builtIn === "member" && (permissions.length !== 2 || !permissions.includes("dashboard.view") || !permissions.includes("analytics.view"))) throw new Error("The protected Member role is read-only and limited to dashboard and analytics summaries. Create a separate custom role to grant more access.");
     if (!isOwnerMembership(current.membership) && permissions.some(p => p === "access.manage" || p === "roles.manage" || p === "data.export" || p === "imports.manage" || p === "integrations.manage" || p === "balanceAdjustments.manage" || p === "partners.distributions.manage" || p === "partners.distributions.approve")) throw new Error("Only the workspace owner can grant privileged role permissions.");
     const duplicate = await ctx.db.query("workspaceRoles").withIndex("by_business", q => q.eq("businessId", current.business._id)).take(100);
     if (duplicate.some(r => r._id !== role._id && r.name.toLowerCase() === name.toLowerCase())) throw new Error("A role with that name already exists.");
@@ -599,8 +600,8 @@ export const acceptInvite = mutation({
     if (!invite.roleId && !role) {
       const legacyTemplate = legacyRole === "member" ? {
         name: "Member", builtIn: "member" as const,
-        permissions: ["dashboard.view", "analytics.view", "reports.view"],
-        description: "Read-only access to the dashboard and analytics.",
+        permissions: ["dashboard.view", "analytics.view"],
+        description: "Read-only access to dashboard and analytics summaries; no access to individual records or workspace settings.",
       } : legacyRole === "cashier" ? {
         name: "Cashier", builtIn: "cashier" as const,
         permissions: ["dashboard.view", "sales.view", "sales.create", "expenses.view", "expenses.create", "reports.view"],
@@ -624,7 +625,9 @@ export const acceptInvite = mutation({
       if (!partner || partner.businessId !== invite.businessId || !partner.active) throw new Error("This partner account is no longer active. Ask the workspace owner for a new invitation.");
     }
     const existing = await ctx.db.query("memberships").withIndex("by_business_and_user", q => q.eq("businessId", invite.businessId).eq("userId", userId)).unique();
-    if (existing?.active) throw new Error("You already have access to this workspace.");
+    const existingRole = existing?.roleId ? await ctx.db.get("workspaceRoles", existing.roleId) : null;
+    const isAutoMember = Boolean(existing?.active && !existing.partnerId && (existingRole?.builtIn === "member" || (!existing.roleId && existing.role.toLowerCase() === "member")));
+    if (existing?.active && !isAutoMember) throw new Error("You already have access to this workspace.");
     const currentMemberships = await ctx.db.query("memberships").withIndex("by_user", q => q.eq("userId", userId)).take(1001);
     if (currentMemberships.length > 1000) throw new Error("This account has reached the workspace membership limit. Contact support for help.");
     if (invite.partnerId) {
