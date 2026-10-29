@@ -313,6 +313,20 @@ export default defineSchema({
     .index("by_business_and_date", ["businessId", "occurredOn"])
     .index("by_business_and_idempotency", ["businessId", "idempotencyKey"])
     .index("by_holding_and_date", ["holdingId", "occurredOn"]),
+  savingsContributionBatches: defineTable({
+    businessId: v.id("businesses"),
+    holdingId: v.id("savingsHoldings"),
+    amountUgx: v.number(),
+    account: v.union(v.literal("cash"), v.literal("mobile_money")),
+    weekday: v.number(),
+    startOn: v.string(),
+    latestOn: v.string(),
+    note: v.string(),
+    idempotencyKey: v.string(),
+    flowIds: v.array(v.id("savingsFlows")),
+    createdBy: v.id("users"),
+    createdAt: v.number(),
+  }).index("by_business_and_idempotency", ["businessId", "idempotencyKey"]),
   loans: defineTable({
     businessId: v.id("businesses"),
     lender: v.string(),

@@ -409,10 +409,13 @@ export const dashboardSummary = query({
     if (partnerScoped || !(canViewDashboard || canViewReports || canViewAnalytics)) return { access: "restricted" as const };
     // Ledger entries are authoritative. dailyTotals is a write-through cache and may
     // drift after older corrections or imports, so dashboard figures are rebuilt here.
-    const [sales, expenses] = await Promise.all([
-      ctx.db.query("entries").withIndex("by_business_and_kind_and_date", q => q.eq("businessId", current.business._id).eq("kind", "sale").gte("occurredOn", args.from).lt("occurredOn", args.toExclusive)).take(5001),
-      ctx.db.query("entries").withIndex("by_business_and_kind_and_date", q => q.eq("businessId", current.business._id).eq("kind", "expense").gte("occurredOn", args.from).lt("occurredOn", args.toExclusive)).take(1001),
-    ]);
+    let salesQuery = ctx.db.query("entries").withIndex("by_business_and_kind_and_date", q => q.eq("businessId", current.business._id).eq("kind", "sale").gte("occurredOn", args.from).lt("occurredOn", args.toExclusive));
+    let expensesQuery = ctx.db.query("entries").withIndex("by_business_and_kind_and_date", q => q.eq("businessId", current.business._id).eq("kind", "expense").gte("occurredOn", args.from).lt("occurredOn", args.toExclusive));
+    if (args.account) {
+      salesQuery = salesQuery.filter(q => q.eq(q.field("account"), args.account!));
+      expensesQuery = expensesQuery.filter(q => q.eq(q.field("account"), args.account!));
+    }
+    const [sales, expenses] = await Promise.all([salesQuery.take(5001), expensesQuery.take(1001)]);
     const accountFilterComplete = sales.length < 5001 && expenses.length < 1001;
     const byDay = new Map<string, { salesUgx: number; expensesUgx: number }>();
     const addEntry = (day: string, kind: "sale" | "expense", amountUgx: number) => {
@@ -548,18 +551,19 @@ export const recentEntries = query({
     if (args.kind === "sale" && !canViewSales || args.kind === "expense" && !canViewExpenses) return [];
     const limit = Math.max(1, Math.min(Math.floor(args.limit ?? 10), 500));
     if ((args.from && !isIsoDay(args.from)) || (args.toExclusive && !isIsoDay(args.toExclusive)) || (args.from && args.toExclusive && args.from >= args.toExclusive)) throw new Error("Choose a valid entry date range.");
-    const readLimit = args.account ? 5000 : limit;
-    const rows = args.kind
-      ? await ctx.db.query("entries").withIndex("by_business_and_kind_and_date", q =>
+    let entriesQuery = args.kind
+      ? ctx.db.query("entries").withIndex("by_business_and_kind_and_date", q =>
         args.from && args.toExclusive ? q.eq("businessId", current.business._id).eq("kind", args.kind!).gte("occurredOn", args.from).lt("occurredOn", args.toExclusive)
           : args.from ? q.eq("businessId", current.business._id).eq("kind", args.kind!).gte("occurredOn", args.from)
           : args.toExclusive ? q.eq("businessId", current.business._id).eq("kind", args.kind!).lt("occurredOn", args.toExclusive)
-          : q.eq("businessId", current.business._id).eq("kind", args.kind!)).order("desc").take(readLimit)
-      : await ctx.db.query("entries").withIndex("by_business_and_date", q =>
+          : q.eq("businessId", current.business._id).eq("kind", args.kind!))
+      : ctx.db.query("entries").withIndex("by_business_and_date", q =>
         args.from && args.toExclusive ? q.eq("businessId", current.business._id).gte("occurredOn", args.from).lt("occurredOn", args.toExclusive)
           : args.from ? q.eq("businessId", current.business._id).gte("occurredOn", args.from)
           : args.toExclusive ? q.eq("businessId", current.business._id).lt("occurredOn", args.toExclusive)
-          : q.eq("businessId", current.business._id)).order("desc").take(readLimit);
+          : q.eq("businessId", current.business._id));
+    if (args.account) entriesQuery = entriesQuery.filter(q => q.eq(q.field("account"), args.account!));
+    const rows = await entriesQuery.order("desc").take(args.account ? 5000 : limit);
     const visibleRows = rows.filter(row => (row.kind === "sale" ? canViewSales : canViewExpenses) && (!args.account || row.account === args.account)).slice(0, limit);
     return await Promise.all(visibleRows.map(async ({ _id, kind, amountUgx, occurredOn, account, category, note, state, operationSource, source, correctionOf, correctedBy, idempotencyKey, businessId }) => {
       let importedBatchReady = false;
@@ -592,6 +596,7 @@ export const entriesForExport = query({
     kind: v.optional(v.union(v.literal("sale"), v.literal("expense"))),
     from: v.string(),
     toExclusive: v.string(),
+    account: v.optional(v.union(v.literal("cash"), v.literal("mobile_money"), v.literal("unallocated"))),
     paginationOpts: paginationOptsValidator,
   },
   returns: paginationResultValidator(v.object({
@@ -618,10 +623,11 @@ export const entriesForExport = query({
     if (!isIsoDay(args.from) || !isIsoDay(args.toExclusive) || args.from >= args.toExclusive) throw new Error("Choose a valid export date range.");
     const rangeDays = (Date.parse(`${args.toExclusive}T00:00:00.000Z`) - Date.parse(`${args.from}T00:00:00.000Z`)) / 86_400_000;
     if (rangeDays > 370 || args.paginationOpts.numItems > 100) throw new Error("Cashbook exports are limited to 370 days and 100 rows per page. Narrow the date range if needed.");
-    const rows = args.kind
+    let rowsQuery = args.kind
       ? ctx.db.query("entries").withIndex("by_business_and_kind_and_date", q => q.eq("businessId", current.business._id).eq("kind", args.kind!).gte("occurredOn", args.from).lt("occurredOn", args.toExclusive))
       : ctx.db.query("entries").withIndex("by_business_and_date", q => q.eq("businessId", current.business._id).gte("occurredOn", args.from).lt("occurredOn", args.toExclusive));
-    const page = await rows.order("desc").paginate(args.paginationOpts);
+    if (args.account) rowsQuery = rowsQuery.filter(q => q.eq(q.field("account"), args.account!));
+    const page = await rowsQuery.order("desc").paginate(args.paginationOpts);
     return { ...page, page: page.page.map(({ _id, kind, amountUgx, occurredOn, account, category, note, state, source, createdAt, createdBy }) => ({ entryId: _id, kind, amountUgx, occurredOn, account, category, note, state, source, createdAt, createdBy })) };
   },
 });

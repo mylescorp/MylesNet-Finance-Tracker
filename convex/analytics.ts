@@ -33,9 +33,15 @@ function monthBounds(day: string) {
 }
 
 async function ledgerDailyTotals(ctx: QueryCtx, businessId: Id<"businesses">, from: string, toExclusive: string, account?: "cash" | "mobile_money" | "unallocated") {
+  let salesQuery = ctx.db.query("entries").withIndex("by_business_and_kind_and_date", q => q.eq("businessId", businessId).eq("kind", "sale").gte("occurredOn", from).lt("occurredOn", toExclusive));
+  let expensesQuery = ctx.db.query("entries").withIndex("by_business_and_kind_and_date", q => q.eq("businessId", businessId).eq("kind", "expense").gte("occurredOn", from).lt("occurredOn", toExclusive));
+  if (account) {
+    salesQuery = salesQuery.filter(q => q.eq(q.field("account"), account));
+    expensesQuery = expensesQuery.filter(q => q.eq(q.field("account"), account));
+  }
   const [sales, expenses] = await Promise.all([
-    ctx.db.query("entries").withIndex("by_business_and_kind_and_date", q => q.eq("businessId", businessId).eq("kind", "sale").gte("occurredOn", from).lt("occurredOn", toExclusive)).take(5001),
-    ctx.db.query("entries").withIndex("by_business_and_kind_and_date", q => q.eq("businessId", businessId).eq("kind", "expense").gte("occurredOn", from).lt("occurredOn", toExclusive)).take(1001),
+    salesQuery.take(5001),
+    expensesQuery.take(1001),
   ]);
   const byDay = new Map<string, { salesUgx: number; expensesUgx: number; saleCount: number; expenseCount: number }>();
   const add = (day: string, kind: "sale" | "expense", amountUgx: number) => {
@@ -49,12 +55,12 @@ async function ledgerDailyTotals(ctx: QueryCtx, businessId: Id<"businesses">, fr
     }
     byDay.set(day, totals);
   };
-  for (const entry of sales) if (entry.state === "posted" && (!account || entry.account === account)) add(entry.occurredOn, "sale", entry.amountUgx);
-  for (const entry of expenses) if (entry.state === "posted" && (!account || entry.account === account)) add(entry.occurredOn, "expense", entry.amountUgx);
+  for (const entry of sales) if (entry.state === "posted") add(entry.occurredOn, "sale", entry.amountUgx);
+  for (const entry of expenses) if (entry.state === "posted") add(entry.occurredOn, "expense", entry.amountUgx);
   return {
     rows: [...byDay].map(([day, totals]) => ({ day, ...totals })),
-    salesEntries: sales.filter(entry => entry.state === "posted" && (!account || entry.account === account)),
-    expenseEntries: expenses.filter(entry => entry.state === "posted" && (!account || entry.account === account)),
+    salesEntries: sales.filter(entry => entry.state === "posted"),
+    expenseEntries: expenses.filter(entry => entry.state === "posted"),
     salesComplete: sales.length < 5001,
     expensesComplete: expenses.length < 1001,
   };

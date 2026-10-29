@@ -153,15 +153,31 @@ export const overview = query({
     if (current.membership.partnerId || (canViewPartners && ![canViewMovements, canViewSavings, canViewLoans, canViewBills, canViewReconciliation].some(Boolean))) return { access: "restricted" as const };
     if (![canViewMovements, canViewSavings, canViewLoans, canViewBills, canViewReconciliation, canViewPartners].some(Boolean)) return { access: "restricted" as const };
     const businessId = current.business._id;
+    let movementsQuery = ctx.db.query("movements").withIndex("by_business_and_date", q => q.eq("businessId", businessId).gte("occurredOn", args.from).lt("occurredOn", args.toExclusive));
+    let savingsFlowsQuery = ctx.db.query("savingsFlows").withIndex("by_business_and_date", q => q.eq("businessId", businessId).gte("occurredOn", args.from).lt("occurredOn", args.toExclusive));
+    let loansQuery = ctx.db.query("loans").withIndex("by_business_and_status", q => q.eq("businessId", businessId).eq("status", "active"));
+    let repaymentsQuery = ctx.db.query("loanRepayments").withIndex("by_business_and_date", q => q.eq("businessId", businessId).gte("paidOn", args.from).lt("paidOn", args.toExclusive));
+    let billsQuery = ctx.db.query("bills").withIndex("by_business_and_active_due", q => q.eq("businessId", businessId).eq("active", true));
+    let billPaymentsQuery = ctx.db.query("billPayments").withIndex("by_business_and_date", q => q.eq("businessId", businessId).gte("paidOn", args.from).lt("paidOn", args.toExclusive));
+    let reconciliationsQuery = ctx.db.query("reconciliations").withIndex("by_business_and_date", q => q.eq("businessId", businessId).gte("asOfDate", args.from).lt("asOfDate", args.toExclusive));
+    if (args.account) {
+      movementsQuery = movementsQuery.filter(q => q.or(q.eq(q.field("fromAccount"), args.account!), q.eq(q.field("toAccount"), args.account!)));
+      savingsFlowsQuery = savingsFlowsQuery.filter(q => q.eq(q.field("account"), args.account!));
+      loansQuery = loansQuery.filter(q => q.eq(q.field("account"), args.account!));
+      repaymentsQuery = repaymentsQuery.filter(q => q.eq(q.field("account"), args.account!));
+      billsQuery = billsQuery.filter(q => q.eq(q.field("account"), args.account!));
+      billPaymentsQuery = billPaymentsQuery.filter(q => q.eq(q.field("account"), args.account!));
+      reconciliationsQuery = reconciliationsQuery.filter(q => q.eq(q.field("account"), args.account!));
+    }
     const [movements, savings, savingsFlows, loans, loanRepayments, bills, billPayments, reconciliations, partners] = await Promise.all([
-      ctx.db.query("movements").withIndex("by_business_and_date", q => q.eq("businessId", businessId).gte("occurredOn", args.from).lt("occurredOn", args.toExclusive)).order("desc").take(100),
+      movementsQuery.order("desc").take(100),
       ctx.db.query("savingsHoldings").withIndex("by_business_and_active", q => q.eq("businessId", businessId).eq("active", true)).take(101),
-      ctx.db.query("savingsFlows").withIndex("by_business_and_date", q => q.eq("businessId", businessId).gte("occurredOn", args.from).lt("occurredOn", args.toExclusive)).order("desc").take(100),
-      ctx.db.query("loans").withIndex("by_business_and_status", q => q.eq("businessId", businessId).eq("status", "active")).take(101),
-      ctx.db.query("loanRepayments").withIndex("by_business_and_date", q => q.eq("businessId", businessId).gte("paidOn", args.from).lt("paidOn", args.toExclusive)).order("desc").take(100),
-      ctx.db.query("bills").withIndex("by_business_and_active_due", q => q.eq("businessId", businessId).eq("active", true)).take(101),
-      ctx.db.query("billPayments").withIndex("by_business_and_date", q => q.eq("businessId", businessId).gte("paidOn", args.from).lt("paidOn", args.toExclusive)).order("desc").take(100),
-      ctx.db.query("reconciliations").withIndex("by_business_and_date", q => q.eq("businessId", businessId).gte("asOfDate", args.from).lt("asOfDate", args.toExclusive)).order("desc").take(100),
+      savingsFlowsQuery.order("desc").take(100),
+      loansQuery.take(101),
+      repaymentsQuery.order("desc").take(100),
+      billsQuery.take(101),
+      billPaymentsQuery.order("desc").take(100),
+      reconciliationsQuery.order("desc").take(100),
       ctx.db.query("partners").withIndex("by_business_and_active", q => q.eq("businessId", businessId).eq("active", true)).take(101),
     ]);
     const businessToday = dayInZone(Date.now(), current.business.timezone);
@@ -497,15 +513,20 @@ export const recordSavingsFlow = mutation({
 
 export const recordWeeklySavingsContributions = mutation({
   args: {
-    businessId: v.id("businesses"), holdingId: v.id("savingsHoldings"), amountUgx: v.number(), account: accountV,
+    businessId: v.id("businesses"), holdingId: v.id("savingsHoldings"), amountUgx: v.number(), account: accountV, weekday: v.number(),
     startOn: v.string(), latestOn: v.string(), note: v.string(), idempotencyKey: v.string(), confirmNegativeBalance: v.optional(v.boolean()),
   },
   returns: v.array(v.id("savingsFlows")),
   handler: async (ctx, args) => {
     const current = await workspace(ctx, args.businessId);
     if (!current || !(await hasPermission(ctx, current.membership, "savings.create"))) throw new Error("Your role cannot record savings activity.");
-    if (!Number.isSafeInteger(args.amountUgx) || args.amountUgx <= 0 || !validDay(args.startOn) || !validDay(args.latestOn) || args.startOn > args.latestOn || args.note.length > 300 || args.idempotencyKey.length < 16 || args.idempotencyKey.length > 80) {
+    if (!Number.isSafeInteger(args.amountUgx) || args.amountUgx <= 0 || !Number.isInteger(args.weekday) || args.weekday < 0 || args.weekday > 6 || !validDay(args.startOn) || !validDay(args.latestOn) || args.startOn > args.latestOn || args.note.length > 300 || args.idempotencyKey.length < 16 || args.idempotencyKey.length > 80) {
       throw new Error("Weekly savings details are invalid.");
+    }
+    const existingBatch = await ctx.db.query("savingsContributionBatches").withIndex("by_business_and_idempotency", q => q.eq("businessId", current.business._id).eq("idempotencyKey", args.idempotencyKey)).unique();
+    if (existingBatch) {
+      assertSameRequest(existingBatch.holdingId === args.holdingId && existingBatch.amountUgx === args.amountUgx && existingBatch.account === args.account && existingBatch.weekday === args.weekday && existingBatch.startOn === args.startOn && existingBatch.latestOn === args.latestOn && existingBatch.note === args.note.trim());
+      return existingBatch.flowIds;
     }
     if (args.latestOn > dayInZone(Date.now(), current.business.timezone)) throw new Error("Weekly savings contributions can only be backdated through today. Record future contributions after they happen.");
     const holding = await ctx.db.get("savingsHoldings", args.holdingId);
@@ -513,14 +534,14 @@ export const recordWeeklySavingsContributions = mutation({
 
     const start = new Date(`${args.startOn}T00:00:00.000Z`);
     const latest = new Date(`${args.latestOn}T00:00:00.000Z`);
-    const firstThursday = new Date(start);
-    firstThursday.setUTCDate(firstThursday.getUTCDate() + ((4 - firstThursday.getUTCDay() + 7) % 7));
+    const firstSelectedDay = new Date(start);
+    firstSelectedDay.setUTCDate(firstSelectedDay.getUTCDate() + ((args.weekday - firstSelectedDay.getUTCDay() + 7) % 7));
     const dates: string[] = [];
-    for (const date = new Date(firstThursday); date <= latest; date.setUTCDate(date.getUTCDate() + 7)) {
+    for (const date = new Date(firstSelectedDay); date <= latest; date.setUTCDate(date.getUTCDate() + 7)) {
       dates.push(date.toISOString().slice(0, 10));
-      if (dates.length > 520) throw new Error("Choose a range of 520 Thursday contributions or fewer (up to 10 years).");
+      if (dates.length > 520) throw new Error("Choose a range of 520 weekly contributions or fewer (up to 10 years).");
     }
-    if (dates.length === 0) throw new Error("The selected range contains no Thursday. Extend the latest date to include the first Thursday.");
+    if (dates.length === 0) throw new Error("The selected range contains no contribution day. Extend the latest date to include the selected weekday.");
     if (!Number.isSafeInteger(args.amountUgx * dates.length)) throw new Error("The total contribution is too large to record safely.");
 
     let holdingBalanceUgx = holding.balanceUgx;
@@ -544,6 +565,11 @@ export const recordWeeklySavingsContributions = mutation({
       flowIds.push(flowId);
     }
     if (holdingBalanceUgx !== holding.balanceUgx) await ctx.db.patch("savingsHoldings", holding._id, { balanceUgx: holdingBalanceUgx });
+    await ctx.db.insert("savingsContributionBatches", {
+      businessId: current.business._id, holdingId: holding._id, amountUgx: args.amountUgx, account: args.account, weekday: args.weekday,
+      startOn: args.startOn, latestOn: args.latestOn, note: args.note.trim(), idempotencyKey: args.idempotencyKey, flowIds,
+      createdBy: current.userId, createdAt: Date.now(),
+    });
     return flowIds;
   },
 });
