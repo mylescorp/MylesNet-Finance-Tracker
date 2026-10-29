@@ -6,7 +6,7 @@ export default function ChangelogPage() {
   const entries = readChangelog();
 
   return <>
-    <WorkspaceTitle eyebrow="MYLESNET · UPDATES" title="What's new" description="Product updates, fixes, and improvements to your finance workspace." />
+    <WorkspaceTitle title="What's new" description="Product updates, fixes, and improvements to your finance workspace." />
     <div className="changelog-list" aria-label="Product updates">
       {entries.map((entry) => <article className="changelog-entry" key={entry.id}>
         <div className="changelog-date">{entry.status === "upcoming" ? entry.date : <time dateTime={entry.date}>{new Date(`${entry.date}T00:00:00.000Z`).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric", timeZone: "UTC" })}</time>}</div>
