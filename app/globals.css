@@ -432,6 +432,31 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .settings-links a { border:1px solid var(--mn-line); background:var(--mn-card); border-radius:8px; padding:9px 12px; color:var(--mn-muted); }
 .settings-links a[aria-current="page"] { color:var(--mn-accent); border-color:var(--mn-accent); background:var(--mn-accent-bg); }
 .settings-stack { display:grid; gap:16px; }
+.issues-page { gap:16px; }
+.issues-overview { display:grid; gap:20px; }
+.issues-page-heading { display:flex; justify-content:space-between; align-items:flex-start; gap:16px; }
+.issues-page-heading .card-title { margin:5px 0 4px; font-size:26px; }
+.issues-summary-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px; }
+.issues-summary-item { display:grid; gap:5px; padding:14px 16px; border:1px solid var(--mn-line); border-radius:12px; background:var(--mn-inset); }
+.issues-summary-item span,.issues-summary-item small { color:var(--mn-muted); font-size:12px; }
+.issues-summary-item strong { color:var(--mn-ink); font-size:22px; line-height:1.2; }
+.issues-toolbar { display:flex; flex-wrap:wrap; align-items:end; gap:12px; margin:14px 0 18px; padding:12px; border:1px solid var(--mn-line); border-radius:12px; background:var(--mn-inset); }
+.issues-toolbar .field { min-width:200px; }
+.issues-toolbar .muted-note { margin:0 0 10px auto; }
+.issues-list { display:grid; gap:10px; }
+.issue-card { display:grid; gap:13px; padding:16px; border:1px solid var(--mn-line); border-left:3px solid var(--mn-ok-fg); border-radius:12px; background:var(--mn-card); }
+.issue-card-action { border-left-color:var(--mn-warn-fg); }
+.issue-card-heading,.issue-card-title,.issue-card-footer { display:flex; align-items:flex-start; gap:12px; }
+.issue-card-heading,.issue-card-footer { justify-content:space-between; }
+.issue-card-title { flex:1; }
+.issue-card-title > div { min-width:0; }
+.issue-card-title h3 { margin:1px 0 5px; font-size:15px; font-weight:650; }
+.issue-card-title p { margin:0; color:var(--mn-muted); font-size:13px; line-height:1.55; }
+.issue-card-footer { align-items:center; }
+.issue-review-details { border-top:1px solid var(--mn-line); padding-top:10px; }
+.issue-review-details summary { color:var(--mn-accent); font-size:13px; font-weight:600; cursor:pointer; }
+.issue-review-details .form-layout { margin-top:12px; }
+@media (max-width:600px) { .issues-summary-grid { grid-template-columns:1fr; } .issues-summary-item { grid-template-columns:1fr auto; align-items:center; } .issues-summary-item small { grid-column:1/-1; } .issues-page-heading,.issue-card-heading { flex-wrap:wrap; } .issues-toolbar .field { min-width:100%; } .issues-toolbar .muted-note { margin-left:0; } .issue-card-title { flex-wrap:wrap; } }
 .settings-card .form-layout { max-width:none; margin-top:8px; }
 .settings-note-card { margin-top:16px; }
 .settings-readonly-note { margin:16px 0 0; }

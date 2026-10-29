@@ -2,7 +2,7 @@
 
 import { useMutation, useQuery } from "convex/react";
 import {
-  Activity, ArrowDownUp, ArrowUpRight, BarChart3, Bell, CalendarDays, ChevronDown,
+  Activity, AlertTriangle, ArrowDownUp, ArrowUpRight, BarChart3, Bell, CalendarDays, ChevronDown,
   ChevronsLeft, ChevronsRight, FileBarChart, HandCoins, LayoutDashboard,
   Menu, MessageCircle, Newspaper, PiggyBank, Receipt, Settings2, UsersRound, Wallet, X,
 } from "lucide-react";
@@ -59,6 +59,9 @@ const navGroups = [
   { label: "Reports", items: [
     { label: "Daily Report", href: "/daily-report", icon: Activity, permission: "dailyReport.view" },
     { label: "Monthly P&L", href: "/monthly-pnl", icon: FileBarChart, permission: "monthlyPnl.view" },
+  ] },
+  { label: "Controls", items: [
+    { label: "Issues", href: "/issues", icon: AlertTriangle, permission: "reports.view" },
     { label: "Reconcile", href: "/reconcile", icon: ArrowDownUp, permission: "reconcile.view" },
   ] },
   { label: "Workspace", items: [
@@ -182,7 +185,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   };
   const routePageLabel = pathname === "/account" ? "Your account" : pathname === "/staff/access" ? "Staff & access" : pathname === "/audits" ? "Audit log" : pathname === "/add-entry" ? "Add an entry" : activePage?.label
     ?? (pathname.startsWith("/settings/") ? settingsPageLabels[pathname.split("/")[2]] ?? "Settings" : undefined)
-    ?? (pathname === "/issues" ? "Needs attention" : pathname === "/changelog" ? "What's new" : "Workspace");
+    ?? (pathname === "/issues" ? "Issues" : pathname === "/changelog" ? "What's new" : "Workspace");
   const closeAccount = useCallback(() => {
     router.replace(accountReturnTo === "/account" ? "/dashboard" : accountReturnTo);
   }, [accountReturnTo, router]);
