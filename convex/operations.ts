@@ -154,34 +154,44 @@ export const overview = query({
     if (current.membership.partnerId || (canViewPartners && ![canViewMovements, canViewSavings, canViewLoans, canViewBills, canViewReconciliation].some(Boolean))) return { access: "restricted" as const };
     if (![canViewMovements, canViewSavings, canViewLoans, canViewBills, canViewReconciliation, canViewPartners].some(Boolean)) return { access: "restricted" as const };
     const businessId = current.business._id;
-    let movementsQuery = ctx.db.query("movements").withIndex("by_business_and_date", q => q.eq("businessId", businessId).gte("occurredOn", args.from).lt("occurredOn", args.toExclusive));
-    let savingsFlowsQuery = ctx.db.query("savingsFlows").withIndex("by_business_and_date", q => q.eq("businessId", businessId).gte("occurredOn", args.from).lt("occurredOn", args.toExclusive));
-    let savingsSummaryFlowsQuery = ctx.db.query("savingsFlows").withIndex("by_business_and_date", q => q.eq("businessId", businessId).gte("occurredOn", args.from).lt("occurredOn", args.toExclusive));
-    let loansQuery = ctx.db.query("loans").withIndex("by_business_and_status", q => q.eq("businessId", businessId).eq("status", "active"));
-    let repaymentsQuery = ctx.db.query("loanRepayments").withIndex("by_business_and_date", q => q.eq("businessId", businessId).gte("paidOn", args.from).lt("paidOn", args.toExclusive));
-    let billsQuery = ctx.db.query("bills").withIndex("by_business_and_active_due", q => q.eq("businessId", businessId).eq("active", true));
-    let billPaymentsQuery = ctx.db.query("billPayments").withIndex("by_business_and_date", q => q.eq("businessId", businessId).gte("paidOn", args.from).lt("paidOn", args.toExclusive));
-    let reconciliationsQuery = ctx.db.query("reconciliations").withIndex("by_business_and_date", q => q.eq("businessId", businessId).gte("asOfDate", args.from).lt("asOfDate", args.toExclusive));
-    if (args.account) {
-      movementsQuery = movementsQuery.filter(q => q.or(q.eq(q.field("fromAccount"), args.account!), q.eq(q.field("toAccount"), args.account!)));
-      savingsFlowsQuery = savingsFlowsQuery.filter(q => q.eq(q.field("account"), args.account!));
-      savingsSummaryFlowsQuery = savingsSummaryFlowsQuery.filter(q => q.eq(q.field("account"), args.account!));
-      loansQuery = loansQuery.filter(q => q.eq(q.field("account"), args.account!));
-      repaymentsQuery = repaymentsQuery.filter(q => q.eq(q.field("account"), args.account!));
-      billsQuery = billsQuery.filter(q => q.eq(q.field("account"), args.account!));
-      billPaymentsQuery = billPaymentsQuery.filter(q => q.eq(q.field("account"), args.account!));
-      reconciliationsQuery = reconciliationsQuery.filter(q => q.eq(q.field("account"), args.account!));
-    }
+    const accountFilter = args.account === "cash" || args.account === "mobile_money" ? args.account : undefined;
+    const movementsRead = accountFilter
+      ? Promise.all([
+        ctx.db.query("movements").withIndex("by_business_and_from_account_and_date", q => q.eq("businessId", businessId).eq("fromAccount", accountFilter).gte("occurredOn", args.from).lt("occurredOn", args.toExclusive)).order("desc").take(100),
+        ctx.db.query("movements").withIndex("by_business_and_to_account_and_date", q => q.eq("businessId", businessId).eq("toAccount", accountFilter).gte("occurredOn", args.from).lt("occurredOn", args.toExclusive)).order("desc").take(100),
+      ]).then(([from, to]) => [...new Map([...from, ...to].map(row => [row._id, row])).values()].sort((a, b) => b.occurredOn.localeCompare(a.occurredOn)).slice(0, 100))
+      : ctx.db.query("movements").withIndex("by_business_and_date", q => q.eq("businessId", businessId).gte("occurredOn", args.from).lt("occurredOn", args.toExclusive)).order("desc").take(100);
+    const savingsFlowsRead = accountFilter
+      ? ctx.db.query("savingsFlows").withIndex("by_business_and_account_and_date", q => q.eq("businessId", businessId).eq("account", accountFilter).gte("occurredOn", args.from).lt("occurredOn", args.toExclusive)).order("desc").take(100)
+      : ctx.db.query("savingsFlows").withIndex("by_business_and_date", q => q.eq("businessId", businessId).gte("occurredOn", args.from).lt("occurredOn", args.toExclusive)).order("desc").take(100);
+    const savingsSummaryFlowsRead = accountFilter
+      ? ctx.db.query("savingsFlows").withIndex("by_business_and_account_and_date", q => q.eq("businessId", businessId).eq("account", accountFilter).gte("occurredOn", args.from).lt("occurredOn", args.toExclusive)).order("desc").take(5001)
+      : ctx.db.query("savingsFlows").withIndex("by_business_and_date", q => q.eq("businessId", businessId).gte("occurredOn", args.from).lt("occurredOn", args.toExclusive)).order("desc").take(5001);
+    const loansRead = accountFilter
+      ? ctx.db.query("loans").withIndex("by_business_and_account_and_status", q => q.eq("businessId", businessId).eq("account", accountFilter).eq("status", "active")).take(101)
+      : ctx.db.query("loans").withIndex("by_business_and_status", q => q.eq("businessId", businessId).eq("status", "active")).take(101);
+    const repaymentsRead = accountFilter
+      ? ctx.db.query("loanRepayments").withIndex("by_business_and_account_and_date", q => q.eq("businessId", businessId).eq("account", accountFilter).gte("paidOn", args.from).lt("paidOn", args.toExclusive)).order("desc").take(100)
+      : ctx.db.query("loanRepayments").withIndex("by_business_and_date", q => q.eq("businessId", businessId).gte("paidOn", args.from).lt("paidOn", args.toExclusive)).order("desc").take(100);
+    const billsRead = accountFilter
+      ? ctx.db.query("bills").withIndex("by_business_and_account_and_active_due", q => q.eq("businessId", businessId).eq("account", accountFilter).eq("active", true)).take(101)
+      : ctx.db.query("bills").withIndex("by_business_and_active_due", q => q.eq("businessId", businessId).eq("active", true)).take(101);
+    const billPaymentsRead = accountFilter
+      ? ctx.db.query("billPayments").withIndex("by_business_and_account_and_date", q => q.eq("businessId", businessId).eq("account", accountFilter).gte("paidOn", args.from).lt("paidOn", args.toExclusive)).order("desc").take(100)
+      : ctx.db.query("billPayments").withIndex("by_business_and_date", q => q.eq("businessId", businessId).gte("paidOn", args.from).lt("paidOn", args.toExclusive)).order("desc").take(100);
+    const reconciliationsRead = accountFilter
+      ? ctx.db.query("reconciliations").withIndex("by_business_and_account_and_date", q => q.eq("businessId", businessId).eq("account", accountFilter).gte("asOfDate", args.from).lt("asOfDate", args.toExclusive)).order("desc").take(100)
+      : ctx.db.query("reconciliations").withIndex("by_business_and_date", q => q.eq("businessId", businessId).gte("asOfDate", args.from).lt("asOfDate", args.toExclusive)).order("desc").take(100);
     const [movements, savings, savingsFlows, savingsSummaryFlows, loans, loanRepayments, bills, billPayments, reconciliations, partners] = await Promise.all([
-      movementsQuery.order("desc").take(100),
+      movementsRead,
       ctx.db.query("savingsHoldings").withIndex("by_business_and_active", q => q.eq("businessId", businessId).eq("active", true)).take(101),
-      savingsFlowsQuery.order("desc").take(100),
-      savingsSummaryFlowsQuery.order("desc").take(5001),
-      loansQuery.take(101),
-      repaymentsQuery.order("desc").take(100),
-      billsQuery.take(101),
-      billPaymentsQuery.order("desc").take(100),
-      reconciliationsQuery.order("desc").take(100),
+      savingsFlowsRead,
+      savingsSummaryFlowsRead,
+      loansRead,
+      repaymentsRead,
+      billsRead,
+      billPaymentsRead,
+      reconciliationsRead,
       ctx.db.query("partners").withIndex("by_business_and_active", q => q.eq("businessId", businessId).eq("active", true)).take(101),
     ]);
     const businessToday = dayInZone(Date.now(), current.business.timezone);

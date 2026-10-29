@@ -33,12 +33,12 @@ function monthBounds(day: string) {
 }
 
 async function ledgerDailyTotals(ctx: QueryCtx, businessId: Id<"businesses">, from: string, toExclusive: string, account?: "cash" | "mobile_money" | "unallocated") {
-  let salesQuery = ctx.db.query("entries").withIndex("by_business_and_kind_and_date", q => q.eq("businessId", businessId).eq("kind", "sale").gte("occurredOn", from).lt("occurredOn", toExclusive));
-  let expensesQuery = ctx.db.query("entries").withIndex("by_business_and_kind_and_date", q => q.eq("businessId", businessId).eq("kind", "expense").gte("occurredOn", from).lt("occurredOn", toExclusive));
-  if (account) {
-    salesQuery = salesQuery.filter(q => q.eq(q.field("account"), account));
-    expensesQuery = expensesQuery.filter(q => q.eq(q.field("account"), account));
-  }
+  const salesQuery = account
+    ? ctx.db.query("entries").withIndex("by_business_and_kind_and_account_and_date", q => q.eq("businessId", businessId).eq("kind", "sale").eq("account", account).gte("occurredOn", from).lt("occurredOn", toExclusive))
+    : ctx.db.query("entries").withIndex("by_business_and_kind_and_date", q => q.eq("businessId", businessId).eq("kind", "sale").gte("occurredOn", from).lt("occurredOn", toExclusive));
+  const expensesQuery = account
+    ? ctx.db.query("entries").withIndex("by_business_and_kind_and_account_and_date", q => q.eq("businessId", businessId).eq("kind", "expense").eq("account", account).gte("occurredOn", from).lt("occurredOn", toExclusive))
+    : ctx.db.query("entries").withIndex("by_business_and_kind_and_date", q => q.eq("businessId", businessId).eq("kind", "expense").gte("occurredOn", from).lt("occurredOn", toExclusive));
   const [sales, expenses] = await Promise.all([
     salesQuery.take(5001),
     expensesQuery.take(1001),

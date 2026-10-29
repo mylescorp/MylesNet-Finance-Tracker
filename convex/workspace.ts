@@ -425,12 +425,12 @@ export const dashboardSummary = query({
     if (partnerScoped || !hasRequestedAccess) return { access: "restricted" as const };
     // Ledger entries are authoritative. dailyTotals is a write-through cache and may
     // drift after older corrections or imports, so dashboard figures are rebuilt here.
-    let salesQuery = ctx.db.query("entries").withIndex("by_business_and_kind_and_date", q => q.eq("businessId", current.business._id).eq("kind", "sale").gte("occurredOn", args.from).lt("occurredOn", args.toExclusive));
-    let expensesQuery = ctx.db.query("entries").withIndex("by_business_and_kind_and_date", q => q.eq("businessId", current.business._id).eq("kind", "expense").gte("occurredOn", args.from).lt("occurredOn", args.toExclusive));
-    if (args.account) {
-      salesQuery = salesQuery.filter(q => q.eq(q.field("account"), args.account!));
-      expensesQuery = expensesQuery.filter(q => q.eq(q.field("account"), args.account!));
-    }
+    let salesQuery = args.account
+      ? ctx.db.query("entries").withIndex("by_business_and_kind_and_account_and_date", q => q.eq("businessId", current.business._id).eq("kind", "sale").eq("account", args.account!).gte("occurredOn", args.from).lt("occurredOn", args.toExclusive))
+      : ctx.db.query("entries").withIndex("by_business_and_kind_and_date", q => q.eq("businessId", current.business._id).eq("kind", "sale").gte("occurredOn", args.from).lt("occurredOn", args.toExclusive));
+    let expensesQuery = args.account
+      ? ctx.db.query("entries").withIndex("by_business_and_kind_and_account_and_date", q => q.eq("businessId", current.business._id).eq("kind", "expense").eq("account", args.account!).gte("occurredOn", args.from).lt("occurredOn", args.toExclusive))
+      : ctx.db.query("entries").withIndex("by_business_and_kind_and_date", q => q.eq("businessId", current.business._id).eq("kind", "expense").gte("occurredOn", args.from).lt("occurredOn", args.toExclusive));
     const [sales, expenses] = await Promise.all([salesQuery.take(5001), expensesQuery.take(1001)]);
     const accountFilterComplete = sales.length < 5001 && expenses.length < 1001;
     const byDay = new Map<string, { salesUgx: number; expensesUgx: number }>();
@@ -596,18 +596,25 @@ export const recentEntries = query({
     if (args.kind === "sale" && !canViewSales || args.kind === "expense" && !canViewExpenses) return [];
     const limit = Math.max(1, Math.min(Math.floor(args.limit ?? 10), 500));
     if ((args.from && !isIsoDay(args.from)) || (args.toExclusive && !isIsoDay(args.toExclusive)) || (args.from && args.toExclusive && args.from >= args.toExclusive)) throw new Error("Choose a valid entry date range.");
-    let entriesQuery = args.kind
-      ? ctx.db.query("entries").withIndex("by_business_and_kind_and_date", q =>
-        args.from && args.toExclusive ? q.eq("businessId", current.business._id).eq("kind", args.kind!).gte("occurredOn", args.from).lt("occurredOn", args.toExclusive)
-          : args.from ? q.eq("businessId", current.business._id).eq("kind", args.kind!).gte("occurredOn", args.from)
-          : args.toExclusive ? q.eq("businessId", current.business._id).eq("kind", args.kind!).lt("occurredOn", args.toExclusive)
-          : q.eq("businessId", current.business._id).eq("kind", args.kind!))
-      : ctx.db.query("entries").withIndex("by_business_and_date", q =>
-        args.from && args.toExclusive ? q.eq("businessId", current.business._id).gte("occurredOn", args.from).lt("occurredOn", args.toExclusive)
-          : args.from ? q.eq("businessId", current.business._id).gte("occurredOn", args.from)
-          : args.toExclusive ? q.eq("businessId", current.business._id).lt("occurredOn", args.toExclusive)
-          : q.eq("businessId", current.business._id));
-    if (args.account) entriesQuery = entriesQuery.filter(q => q.eq(q.field("account"), args.account!));
+    let entriesQuery = args.kind && args.account
+      ? ctx.db.query("entries").withIndex("by_business_and_kind_and_account_and_date", q => {
+        const base = q.eq("businessId", current.business._id).eq("kind", args.kind!).eq("account", args.account!);
+        return args.from && args.toExclusive ? base.gte("occurredOn", args.from).lt("occurredOn", args.toExclusive) : args.from ? base.gte("occurredOn", args.from) : args.toExclusive ? base.lt("occurredOn", args.toExclusive) : base;
+      })
+      : args.kind
+        ? ctx.db.query("entries").withIndex("by_business_and_kind_and_date", q => {
+          const base = q.eq("businessId", current.business._id).eq("kind", args.kind!);
+          return args.from && args.toExclusive ? base.gte("occurredOn", args.from).lt("occurredOn", args.toExclusive) : args.from ? base.gte("occurredOn", args.from) : args.toExclusive ? base.lt("occurredOn", args.toExclusive) : base;
+        })
+        : args.account
+          ? ctx.db.query("entries").withIndex("by_business_and_account_and_date", q => {
+            const base = q.eq("businessId", current.business._id).eq("account", args.account!);
+            return args.from && args.toExclusive ? base.gte("occurredOn", args.from).lt("occurredOn", args.toExclusive) : args.from ? base.gte("occurredOn", args.from) : args.toExclusive ? base.lt("occurredOn", args.toExclusive) : base;
+          })
+          : ctx.db.query("entries").withIndex("by_business_and_date", q => {
+            const base = q.eq("businessId", current.business._id);
+            return args.from && args.toExclusive ? base.gte("occurredOn", args.from).lt("occurredOn", args.toExclusive) : args.from ? base.gte("occurredOn", args.from) : args.toExclusive ? base.lt("occurredOn", args.toExclusive) : base;
+          });
     const rows = await entriesQuery.order("desc").take(args.account ? 5000 : limit);
     const visibleRows = rows.filter(row => (row.kind === "sale" ? canViewSales : canViewExpenses) && (!args.account || row.account === args.account)).slice(0, limit);
     return await Promise.all(visibleRows.map(async ({ _id, kind, amountUgx, occurredOn, account, category, note, state, operationSource, source, correctionOf, correctedBy, idempotencyKey, businessId }) => {
@@ -668,10 +675,13 @@ export const entriesForExport = query({
     if (!isIsoDay(args.from) || !isIsoDay(args.toExclusive) || args.from >= args.toExclusive) throw new Error("Choose a valid export date range.");
     const rangeDays = (Date.parse(`${args.toExclusive}T00:00:00.000Z`) - Date.parse(`${args.from}T00:00:00.000Z`)) / 86_400_000;
     if (rangeDays > 370 || args.paginationOpts.numItems > 100) throw new Error("Cashbook exports are limited to 370 days and 100 rows per page. Narrow the date range if needed.");
-    let rowsQuery = args.kind
-      ? ctx.db.query("entries").withIndex("by_business_and_kind_and_date", q => q.eq("businessId", current.business._id).eq("kind", args.kind!).gte("occurredOn", args.from).lt("occurredOn", args.toExclusive))
-      : ctx.db.query("entries").withIndex("by_business_and_date", q => q.eq("businessId", current.business._id).gte("occurredOn", args.from).lt("occurredOn", args.toExclusive));
-    if (args.account) rowsQuery = rowsQuery.filter(q => q.eq(q.field("account"), args.account!));
+    const rowsQuery = args.kind && args.account
+      ? ctx.db.query("entries").withIndex("by_business_and_kind_and_account_and_date", q => q.eq("businessId", current.business._id).eq("kind", args.kind!).eq("account", args.account!).gte("occurredOn", args.from).lt("occurredOn", args.toExclusive))
+      : args.kind
+        ? ctx.db.query("entries").withIndex("by_business_and_kind_and_date", q => q.eq("businessId", current.business._id).eq("kind", args.kind!).gte("occurredOn", args.from).lt("occurredOn", args.toExclusive))
+        : args.account
+          ? ctx.db.query("entries").withIndex("by_business_and_account_and_date", q => q.eq("businessId", current.business._id).eq("account", args.account!).gte("occurredOn", args.from).lt("occurredOn", args.toExclusive))
+          : ctx.db.query("entries").withIndex("by_business_and_date", q => q.eq("businessId", current.business._id).gte("occurredOn", args.from).lt("occurredOn", args.toExclusive));
     const page = await rowsQuery.order("desc").paginate(args.paginationOpts);
     return { ...page, page: page.page.map(({ _id, kind, amountUgx, occurredOn, account, category, note, state, source, createdAt, createdBy }) => ({ entryId: _id, kind, amountUgx, occurredOn, account, category, note, state, source, createdAt, createdBy })) };
   },
