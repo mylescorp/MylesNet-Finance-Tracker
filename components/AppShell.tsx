@@ -78,8 +78,6 @@ export function AppShell({ children }: { children: ReactNode }) {
   const [collapsed, setCollapsed] = useState(false);
   const [accountMenuOpen, setAccountMenuOpen] = useState(false);
   const [unreadChanges, setUnreadChanges] = useState(0);
-  const [changelogSummary, setChangelogSummary] = useState<ChangelogSummary | null>(null);
-  const changelogSummaryRef = useRef<ChangelogSummary | null>(null);
   const [accountReturnTo, setAccountReturnTo] = useState("/dashboard");
   const [workspaceError, setWorkspaceError] = useState("");
   const [switchingWorkspace, setSwitchingWorkspace] = useState(false);
@@ -131,34 +129,42 @@ export function AppShell({ children }: { children: ReactNode }) {
       window.removeEventListener("storage", applyStoredTheme);
     };
   }, []);
+  const refreshChangelogSummary = useCallback((seenValue?: string | null) => fetch("/api/changelog/summary", { cache: "no-store" })
+    .then(response => response.ok ? response.json() as Promise<ChangelogSummary> : null)
+    .then(summary => {
+      if (!summary || typeof summary.contentHash !== "string" || !Array.isArray(summary.entryIds) || !Number.isSafeInteger(summary.totalChanges)) return null;
+      setUnreadChanges(unreadChangelogCount(summary, seenValue === undefined ? readSeenChangelog() : seenValue));
+      return summary;
+    })
+    .catch(() => null), []);
   useEffect(() => {
-    let active = true;
-    void fetch("/api/changelog/summary", { cache: "no-store" })
-      .then(response => response.ok ? response.json() as Promise<ChangelogSummary> : null)
-      .then(summary => {
-        if (!active || !summary || typeof summary.contentHash !== "string" || !Array.isArray(summary.entryIds) || !Number.isSafeInteger(summary.totalChanges)) return;
-        changelogSummaryRef.current = summary;
-        setChangelogSummary(summary);
-        setUnreadChanges(unreadChangelogCount(summary, readSeenChangelog()));
-      })
-      .catch(() => {});
+    void refreshChangelogSummary();
     const onStorage = (event: StorageEvent) => {
-      const summary = changelogSummaryRef.current;
-      if (event.key === changelogSeenKey && summary) setUnreadChanges(unreadChangelogCount(summary, event.newValue));
+      if (event.key === changelogSeenKey) void refreshChangelogSummary(event.newValue);
     };
+    const onFocus = () => void refreshChangelogSummary();
+    const onVisibility = () => { if (document.visibilityState === "visible") void refreshChangelogSummary(); };
     window.addEventListener("storage", onStorage);
-    return () => { active = false; window.removeEventListener("storage", onStorage); };
-  }, []);
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      window.removeEventListener("storage", onStorage);
+      window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, [refreshChangelogSummary]);
   const markChangelogRead = useCallback(() => {
-    const summary = changelogSummaryRef.current;
-    if (!summary) return;
-    try { window.localStorage.setItem(changelogSeenKey, JSON.stringify(summary)); }
-    catch { /* The current tab still clears the badge when storage is unavailable. */ }
-    setUnreadChanges(0);
-  }, []);
+    void refreshChangelogSummary().then(summary => {
+      if (summary) {
+        try { window.localStorage.setItem(changelogSeenKey, JSON.stringify(summary)); }
+        catch { /* The current tab still clears the badge when storage is unavailable. */ }
+        setUnreadChanges(0);
+      }
+    });
+  }, [refreshChangelogSummary]);
   useEffect(() => {
-    if (pathname === "/changelog" && changelogSummary) markChangelogRead();
-  }, [changelogSummary, markChangelogRead, pathname]);
+    if (pathname === "/changelog") markChangelogRead();
+  }, [markChangelogRead, pathname]);
   useEffect(() => {
     if (access?.access === "pending") void requestWorkspaceAccess({}).catch(() => {});
   }, [access?.access, requestWorkspaceAccess]);
