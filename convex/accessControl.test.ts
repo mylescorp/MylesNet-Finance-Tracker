@@ -47,4 +47,44 @@ describe("legacy Member role compatibility", () => {
 
     expect(permissions).toEqual(["dashboard.view", "analytics.view"]);
   });
+
+  it("preserves permissions for a custom role named Member", async () => {
+    const t = convexTest(schema, modules);
+    const membershipId = await t.run(async ctx => {
+      const userId = await ctx.db.insert("users", { name: "Custom Member" });
+      const businessId = await ctx.db.insert("businesses", {
+        name: "Custom role test workspace",
+        currency: "UGX",
+        timezone: "Africa/Kampala",
+        createdBy: userId,
+        createdAt: Date.now(),
+      });
+      const roleId = await ctx.db.insert("workspaceRoles", {
+        businessId,
+        name: "Member",
+        description: "Owner-created custom role.",
+        permissions: ["dashboard.view", "sales.create"],
+        active: true,
+        createdBy: userId,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      });
+      return await ctx.db.insert("memberships", {
+        businessId,
+        userId,
+        role: "Member",
+        roleId,
+        active: true,
+        createdAt: Date.now(),
+      });
+    });
+
+    const permissions = await t.run(async ctx => {
+      const membership = await ctx.db.get("memberships", membershipId);
+      if (!membership) throw new Error("Custom Member fixture was not saved.");
+      return await permissionsForMembership(ctx, membership);
+    });
+
+    expect(permissions).toEqual(["dashboard.view", "sales.create"]);
+  });
 });

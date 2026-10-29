@@ -26,8 +26,6 @@ const FINANCE_APPROVER: Permission[] = ["partners.view", "partners.distributions
 
 export async function permissionsForMembership(ctx: QueryCtx | MutationCtx, membership: Doc<"memberships">) {
   if (membership.role === "owner" && !membership.roleId) return OWNER;
-  // Preserve the fixed default access even if legacy data links a Member to a broader role.
-  if (membership.role.trim().toLowerCase() === "member") return MEMBER;
   if (membership.roleId) {
     const role = await ctx.db.get("workspaceRoles", membership.roleId);
     if (!role || !role.active || role.businessId !== membership.businessId) return [] as string[];
@@ -40,7 +38,8 @@ export async function permissionsForMembership(ctx: QueryCtx | MutationCtx, memb
     .withIndex("by_business", q => q.eq("businessId", membership.businessId))
     .take(100);
   const legacyTemplate = templates.find(role => role.builtIn === membership.role || role.name.toLowerCase() === membership.role.toLowerCase());
-  if (legacyTemplate?.active) return legacyTemplate.permissions;
+  if (legacyTemplate?.active) return legacyTemplate.builtIn === "member" ? MEMBER : legacyTemplate.permissions;
+  if (membership.role.trim().toLowerCase() === "member") return MEMBER;
   if (membership.role === "cashier") return CASHIER;
   if (membership.role === "partner") return PARTNER;
   if (membership.role === "finance_approver") return FINANCE_APPROVER;
