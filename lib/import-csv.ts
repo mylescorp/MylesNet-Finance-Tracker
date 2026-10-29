@@ -32,6 +32,85 @@ function amount(value: string) {
 export type ImportRow = { rowNumber: number; kind: "sale" | "expense"; amountUgx: number; occurredOn: string; account: "cash" | "mobile_money" | "unallocated"; category: string; note: string };
 export type CentipidReport = { summary: Record<string, string | number>; paymentMethods: Array<{ method: string; amount: number; count: number }>; dailyRevenue: Array<{ date: string; amount: number }>; dailyUsage: Array<{ date: string; bytes: number }>; routers: Array<{ router: string; online: string; revenue: number; sessions: number; bytes: number; subscribers: number }>; usageBytes: number; revenueTotal: number; rows: ImportRow[] };
 
+const monthNumbers: Record<string, number> = {
+  jan: 1, january: 1, feb: 2, february: 2, mar: 3, march: 3, apr: 4, april: 4,
+  may: 5, jun: 6, june: 6, jul: 7, july: 7, aug: 8, august: 8, sep: 9,
+  sept: 9, september: 9, oct: 10, october: 10, nov: 11, november: 11, dec: 12, december: 12,
+};
+
+function pastedDate(value: string) {
+  const match = /^(\w+)\s+(\d{1,2}),\s*(\d{4}),\s*(\d{1,2}):(\d{2})\s*(AM|PM)$/i.exec(value.trim());
+  const month = match ? monthNumbers[match[1].toLowerCase()] : undefined;
+  if (!match || !month) return null;
+  const day = Number(match[2]); const year = Number(match[3]);
+  const hour = Number(match[4]); const minute = Number(match[5]);
+  if (day < 1 || day > 31 || hour < 1 || hour > 12 || minute > 59) return null;
+  const date = new Date(Date.UTC(year, month - 1, day));
+  if (date.getUTCFullYear() !== year || date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day) return null;
+  return date.toISOString().slice(0, 10);
+}
+
+/** Parse tab-separated expense rows copied from a table, including notes that wrap onto their own lines. */
+export function parsePlainTextExpenses(text: string, defaultAccount: "cash" | "mobile_money" = "cash"): ImportRow[] {
+  const records: Array<{ cells: string[]; line: number }> = [];
+  let current: { cells: string[]; line: number } | undefined;
+  const lines = text.replace(/^\uFEFF/, "").replace(/\r\n?/g, "\n").split("\n");
+  const firstCell = (line: string) => line.split("\t", 1)[0]?.trim() ?? "";
+  const isDateShaped = (line: string) => /^[A-Za-z]{3,9}\s+\d{1,2},\s*\d{4},\s*\d{1,2}:\d{2}\s*(?:AM|PM)$/i.test(firstCell(line));
+  const finish = () => { if (current) records.push(current); current = undefined; };
+
+  for (let index = 0; index < lines.length; index++) {
+    const line = lines[index];
+    if (!line.trim()) continue;
+    if (isDateShaped(line)) {
+      if (!pastedDate(firstCell(line))) throw new Error(`Line ${index + 1}: the date and time are not recognized.`);
+      finish();
+      current = { cells: line.split("\t"), line: index + 1 };
+      continue;
+    }
+    if (!current) throw new Error(`Line ${index + 1}: expected a date such as “Oct 27, 2026, 11:42 PM”.`);
+
+    const continuation = line.split("\t");
+    const accountName = continuation[0]?.trim().toLowerCase() ?? "";
+    const amountText = continuation[1]?.trim() ?? "";
+    const isPaymentContinuation = /^(cash|other|m[\s-]?pesa|mpesa|mobile money|airtel|centipid(?: wallet)?)$/i.test(accountName)
+      && /^(?:ush|ugx|shs?\.?\s*)?\s*[\d,]+(?:\.\d+)?$/i.test(amountText);
+    if (isPaymentContinuation && current.cells.length < 5) current.cells.push(...continuation);
+    else if (current.cells.length < 5 && continuation.length >= 3
+      && /^(cash|other|m[\s-]?pesa|mpesa|mobile money|airtel|centipid(?: wallet)?)$/i.test(continuation[1]?.trim() ?? "")
+      && /^(?:ush|ugx|shs?\.?\s*)?\s*[\d,]+(?:\.\d+)?$/i.test(continuation[2]?.trim() ?? "")) {
+      current.cells[2] = `${current.cells[2] ?? ""}${current.cells[2] ? "\n" : ""}${continuation[0]}`;
+      current.cells.push(...continuation.slice(1));
+    }
+    else {
+      current.cells[2] = `${current.cells[2] ?? ""}${current.cells[2] ? "\n" : ""}${line}`;
+    }
+  }
+  finish();
+  if (!records.length) throw new Error("Paste at least one dated expense row.");
+  if (records.length > 10_000) throw new Error("Paste no more than 10,000 expense rows at a time.");
+
+  return records.map(({ cells, line }, index) => {
+    const occurredOn = pastedDate(cells[0] ?? "");
+    if (!occurredOn) throw new Error(`Line ${line}: the date and time are not recognized.`);
+    const category = (cells[1] ?? "").trim();
+    const note = (cells[2] ?? "").trim();
+    const rawAccount = (cells[3] ?? "").trim().toLowerCase();
+    const account: "cash" | "mobile_money" = rawAccount === "cash"
+      ? "cash"
+      : !rawAccount || rawAccount === "other" ? defaultAccount
+        : /m[\s-]?pesa|mpesa|mobile|airtel|centipid/.test(rawAccount) ? "mobile_money"
+        : (() => { throw new Error(`Line ${line}: account “${cells[3]}” is not recognized. Use Cash, M-Pesa, or Other.`); })();
+    const amountText = (cells[4] ?? "").trim().replace(/^(?:ush|ugx|shs?\.?)\s*/i, "");
+    let amountUgx: number;
+    try { amountUgx = parseAmount(amountText, 1); }
+    catch { throw new Error(`Line ${line}: amount “${cells[4] ?? ""}” is not a whole-shilling amount.`); }
+    if (!category || category.length > 80) throw new Error(`Line ${line}: category must be 1 to 80 characters.`);
+    if (note.length > 300) throw new Error(`Line ${line}: description and receipt must be 300 characters or fewer.`);
+    return { rowNumber: index + 1, kind: "expense" as const, amountUgx, occurredOn, account, category, note };
+  });
+}
+
 export function parseCentipid(rows: CsvRow[]): CentipidReport | null {
   if (rows[0]?.[0]?.trim() !== "Centipid Analytics Report") return null;
   const summaryAt = sectionIndex(rows, "Summary");
