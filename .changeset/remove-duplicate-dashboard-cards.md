@@ -2,4 +2,6 @@
 mylesnet-finance-tracker: patch
 ---
 
-Remove the duplicate legacy dashboard cards and summaries.
+Remove duplicate dashboard cards
+
+Remove the appended legacy dashboard summaries and charts so the dashboard shows one consistent overview.
