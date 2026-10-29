@@ -370,6 +370,7 @@ export const dashboardSummary = query({
       netUgx: v.number(),
       cashBalanceUgx: v.number(),
       mobileMoneyBalanceUgx: v.number(),
+      totalBalanceUgx: v.number(),
       accountFilterComplete: v.boolean(),
       days: v.array(
         v.object({
@@ -454,6 +455,7 @@ export const dashboardSummary = query({
     const mobileMoneyBalanceUgx = !args.account || args.account === "mobile_money"
       ? balances.find((balance) => balance.account === "mobile_money")?.balanceUgx ?? 0
       : 0;
+    const totalBalanceUgx = addSafeInteger(cashBalanceUgx, mobileMoneyBalanceUgx, "Liquid balance");
     return {
       access: "ready" as const,
       salesUgx,
@@ -461,6 +463,7 @@ export const dashboardSummary = query({
       netUgx: addSafeInteger(salesUgx, -expensesUgx, "Cashbook net"),
       cashBalanceUgx,
       mobileMoneyBalanceUgx,
+      totalBalanceUgx,
       accountFilterComplete,
       days: days.map(({ day, salesUgx, expensesUgx }) => ({
         day,
