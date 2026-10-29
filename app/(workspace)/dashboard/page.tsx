@@ -1,16 +1,13 @@
 "use client";
 
 import { useQuery } from "convex/react";
-import { ArrowDownRight, ArrowUpRight, CircleHelp, Download, Printer, Receipt, Share2, Wallet } from "lucide-react";
+import { CircleHelp, Download, Printer, Share2 } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { api } from "@/convex/_generated/api";
-import { accountLabel } from "@/lib/finance";
 import { Card } from "@/components/AppShell";
-import { OwnerSetup } from "@/components/workspace/OwnerSetup";
 import { formatBusinessDay } from "@/lib/format";
-import { AnalyticsInsights } from "@/components/workspace/AnalyticsInsights";
 import { FinancePeriodFilters } from "@/components/workspace/FinancePeriodFilters";
 import { InteractiveFinanceChart } from "@/components/workspace/InteractiveFinanceChart";
 import { financePeriodRange, previousFinanceRange, validateFinanceCustomRange, type FinanceAccount, type FinancePeriod } from "@/lib/finance-period";
@@ -116,10 +113,8 @@ export default function DashboardPage() {
   const yearSummary = useQuery(api.workspace.dashboardSummary, { ...yearRange, ...accountFilter });
   const monthRange = useMemo(() => periodRange("month", businessDay, weekStartsOn, fiscalStartMonth), [businessDay, weekStartsOn, fiscalStartMonth]);
   const monthSummary = useQuery(api.workspace.dashboardSummary, { ...monthRange, ...accountFilter });
-  const recent = useQuery(api.workspace.recentEntries, { limit: 8, from: range.from, toExclusive: range.toExclusive, ...accountFilter });
   const summaryData = summary?.access === "ready" ? summary : null;
   const readySummary = summaryData?.accountFilterComplete ? summaryData : null;
-  const isReady = summaryData !== null;
   const today = businessDay;
   const fmtDate = (value: string) => formatBusinessDay(value, dateFormat);
   const todaySummaryReady = todaySummary?.access === "ready" && todaySummary.accountFilterComplete ? todaySummary : null;
@@ -239,44 +234,8 @@ export default function DashboardPage() {
         <Card><CardHeading title="Audit trail · dashboard" subtitle="Recent audited workspace actions" badge={analyticsOverview.dashboardCards.auditAvailable ? "Logged" : undefined} />{analyticsOverview.dashboardCards.auditAvailable && analyticsOverview.dashboardCards.recentAudit.length ? analyticsOverview.dashboardCards.recentAudit.slice(0, 5).map(event => <div className="dashboard-detail-row" key={event.id}><span>{event.summary} · {event.actor}</span><strong>{new Intl.DateTimeFormat(locale, { hour: "2-digit", minute: "2-digit" }).format(event.occurredAt)}</strong></div>) : <p className="muted-note">{analyticsOverview.dashboardCards.auditAvailable ? "No recent audit events." : "Audit details are unavailable for your role."}</p>}<Link className="text-link" href="/audits">Open audit log →</Link></Card>
       </section>
     </>}
-    <div className="metric-grid dashboard-kpi-grid">
-      <Metric label="Sales today" value={todaySales} note={todaySales === null && todaySummary?.access === "ready" ? "Unavailable · narrow the date range" : "Recorded entries only"} currency={currency} scale={currencyScale} locale={locale} icon={<ArrowUpRight size={16} />} />
-      <Metric label="Sales this period" value={readySummary?.salesUgx ?? null} note={summaryData && !summaryData.accountFilterComplete ? "Unavailable · narrow the date range" : "Gross sales recorded"} currency={currency} scale={currencyScale} locale={locale} icon={<Receipt size={16} />} />
-      <Metric label="Expenses this period" value={readySummary?.expensesUgx ?? null} note={summaryData && !summaryData.accountFilterComplete ? "Unavailable · narrow the date range" : "Expenses recorded"} currency={currency} scale={currencyScale} locale={locale} icon={<ArrowDownRight size={16} />} />
-      <Metric label="Net this period" value={readySummary?.netUgx ?? null} note={summaryData && !summaryData.accountFilterComplete ? "Unavailable · narrow the date range" : "Sales less expenses"} currency={currency} scale={currencyScale} locale={locale} icon={<Wallet size={16} />} />
-    </div>
-    <div className="dashboard-period-row">
-      <Card className="dashboard-period-card"><div className="card-heading"><div><h2 className="card-title">Year to date</h2><p className="card-subtitle">From your configured financial year</p></div></div><div className="dashboard-ytd-metrics"><div><span>Sales</span><strong>{yearSummaryReady ? `${formatMoney(yearSummaryReady.salesUgx)} ${currency}` : "—"}</strong></div><div><span>Expenses</span><strong>{yearSummaryReady ? `${formatMoney(yearSummaryReady.expensesUgx)} ${currency}` : "—"}</strong></div><div><span>Net</span><strong className={yearSummaryReady && yearSummaryReady.netUgx < 0 ? "amount-negative" : ""}>{yearSummaryReady ? `${formatMoney(yearSummaryReady.netUgx)} ${currency}` : "—"}</strong></div></div>{yearSummary?.access === "ready" && !yearSummary.accountFilterComplete && <p className="muted-note">Totals unavailable · narrow the date range to include every matching record.</p>}</Card>
-      <Card className="dashboard-period-card dashboard-trend-card"><div className="card-heading"><div><h2 className="card-title">Sales trend · selected period</h2><p className="card-subtitle">{fmtDate(range.from)} — {fmtDate(rangeLastDay.toISOString().slice(0, 10))} · today highlighted</p></div></div>{customRangeInvalid ? <div className="muted-note">{customRangeError}</div> : summary === undefined ? <div className="muted-note">Loading trend…</div> : summary.access !== "ready" ? <div className="muted-note">Trend is unavailable.</div> : !summary.accountFilterComplete ? <div className="muted-note">Trend unavailable · narrow the date range.</div> : <InteractiveFinanceChart points={chartPoints} currency={currency} scale={currencyScale} locale={locale} dateFormat={dateFormat} accountFiltered={account !== "all"} showPrevious={previousSummary?.access === "ready" && previousSummary.accountFilterComplete && previousSummary.days.some(day => day.salesUgx > 0 || day.expensesUgx > 0)} compact highlightDay={today} />}</Card>
-    </div>
-    {summary?.access === "setup" && <Card className="workspace-setup-card"><div className="card-heading"><div><h2 className="card-title">Set up the first workspace owner</h2><p className="card-subtitle">Use this one-time setup only for a new workspace. It grants your account the owner role.</p></div></div><OwnerSetup /></Card>}
-    {summary?.access === "pending" && <Card className="workspace-setup-card"><div className="card-heading"><div><h2 className="card-title">Workspace access pending</h2><p className="card-subtitle">Your account is being assigned read-only Member access to the single MylesNet workspace.</p></div></div></Card>}
-    <div className="dashboard-grid">
-      <Card>
-        <div className="card-heading"><div><h2 className="card-title">Performance by period</h2><p className="card-subtitle">Sales, expenses, and net from saved cashbook entries</p></div></div>
-        {!isReady ? <Empty message={summary === undefined ? "Loading your workspace…" : summary.access === "pending" ? "Your limited Member access is being set up." : "Finance totals are not available for this workspace."} /> : <div className="table-scroll"><table className="dashboard-performance-table"><thead><tr><th>Period</th><th>Sales</th><th>Expenses</th><th>Net</th></tr></thead><tbody>
-          <PerformanceRow label="Today" summary={todaySummaryReady} day={today} currency={currency} formatMoney={formatMoney} />
-          <PerformanceRow label="This week" summary={weekSummaryReady} currency={currency} formatMoney={formatMoney} />
-          <PerformanceRow label="Selected period" summary={readySummary} currency={currency} formatMoney={formatMoney} />
-          <PerformanceRow label="Year to date" summary={yearSummaryReady} currency={currency} formatMoney={formatMoney} />
-        </tbody></table></div>}
-      </Card>
-      <Card>
-        <div className="card-heading"><div><h2 className="card-title">Recent entries</h2><p className="card-subtitle">Latest cashbook activity</p></div><Link className="muted-note" href="/sales">View all</Link></div>
-        {recent === undefined ? <Empty message="Loading entries…" /> : recent.length === 0 ? <Empty message={isReady ? "No entries yet. Add a sale or expense to begin." : summary?.access === "restricted" ? "Partner entry details are hidden until statement access is scoped." : "Entries appear here after you are invited to a workspace."} /> : <div className="entry-list">{recent.map((entry) => <div className="entry-row" key={entry._id}><div className="entry-main"><span className="entry-icon">{entry.kind === "sale" ? <Receipt size={16} /> : <Wallet size={16} />}</span><div style={{ minWidth: 0 }}><div className="entry-description">{entry.note || entry.category}</div><div className="entry-meta">{entry.category} · {fmtDate(entry.occurredOn)} · {accountLabel(entry.account)}{entry.state === "void" ? " · Voided" : ""}</div></div></div><span className={`entry-amount ${entry.state === "void" ? "muted-note" : entry.kind === "sale" ? "amount-positive" : "amount-negative"}`}>{entry.kind === "sale" ? "+" : "−"}{formatMoney(entry.amountUgx)}</span></div>)}</div>}
-      </Card>
-    </div>
-    <div className="dashboard-insight-grid">
-      <Card><div className="card-heading"><div><h2 className="card-title">Cash flow this period</h2><p className="card-subtitle">Sales, expenses, and net from saved entries.</p></div></div>{readySummary ? <><FlowRow label="Sales" value={readySummary.salesUgx} max={Math.max(1, readySummary.salesUgx, readySummary.expensesUgx)} tone="sales" currency={currency} scale={currencyScale} locale={locale} /><FlowRow label="Expenses" value={readySummary.expensesUgx} max={Math.max(1, readySummary.salesUgx, readySummary.expensesUgx)} tone="expenses" currency={currency} scale={currencyScale} locale={locale} /><FlowRow label="Net" value={readySummary.netUgx} max={Math.max(1, readySummary.salesUgx, readySummary.expensesUgx)} tone="net" currency={currency} scale={currencyScale} locale={locale} /></> : <p className="muted-note">Cash flow totals unavailable · narrow the date range or wait for workspace data.</p>}</Card>
-      <Card><div className="card-heading"><div><h2 className="card-title">Account balances</h2><p className="card-subtitle">Balances reflect entries recorded in this workspace.</p></div></div><div className="balance-detail"><span>Cash on hand</span><strong>{isReady ? `${formatMoney(summaryData?.cashBalanceUgx ?? 0)} ${currency}` : "—"}</strong></div><div className="balance-detail"><span>Mobile money</span><strong>{isReady ? `${formatMoney(summaryData?.mobileMoneyBalanceUgx ?? 0)} ${currency}` : "—"}</strong></div><p className="muted-note">Add opening balances in Finance settings before using these as a full business position.</p></Card>
-      <Card><div className="card-heading"><div><h2 className="card-title">Data health</h2><p className="card-subtitle">Coverage follows configured finance workflows.</p></div></div><div className="health-row"><span>Sales and expenses</span><span className="status-chip status-ok">Live</span></div><div className="health-row"><span>Recurring bills</span><span className="status-chip status-warning">Setup needed</span></div><div className="health-row"><span>Opening balance</span><span className="status-chip status-warning">Review</span></div><Link className="text-link" href="/reconcile">Review reconciliation →</Link></Card>
-    </div>
-    {!customRangeInvalid && <AnalyticsInsights range={range} today={today} currency={currency} scale={currencyScale} locale={locale} compact account={account === "all" ? undefined : account} />}
-  </>;
-}
 
-function Metric({ label, value, note, icon, currency, scale, locale }: { label: string; value: number | null; note: string; icon: ReactNode; currency: string; scale: number; locale: string }) {
-  return <Card className="metric-card"><div className="card-heading"><span className="eyebrow">{label}</span><span className="entry-icon">{icon}</span></div><div className={`metric-value ${value !== null && value < 0 ? "amount-negative" : ""}`}>{value === null ? "—" : `${money(value, scale, locale)} ${currency}`}</div><div className="metric-note">{note}</div></Card>;
+  </>;
 }
 
 function ReferenceMetric({ label, value, note, currency, formatMoney, tone = "" }: { label: string; value: number | null; note: string; currency: string; formatMoney: (amount: number) => string; tone?: string }) {
@@ -310,13 +269,6 @@ function Meter({ value, max, tone = "sales" }: { value: number; max: number; ton
 
 function Empty({ message }: { message: string }) {
   return <div className="empty-state"><CircleHelp size={20} style={{ margin: "0 auto 8px" }} /><strong>{message}</strong><span>Numbers are calculated from saved cashbook entries, not the sample figures in the design boards.</span></div>;
-}
-
-function PerformanceRow({ label, summary, day, currency, formatMoney }: { label: string; summary: { salesUgx: number; expensesUgx: number; netUgx: number; days: { day: string; salesUgx: number; expensesUgx: number }[] } | null; day?: string; currency: string; formatMoney: (amount: number) => string }) {
-  const sales = summary ? day ? summary.days.find((item) => item.day === day)?.salesUgx ?? 0 : summary.salesUgx : null;
-  const expenses = summary ? day ? summary.days.find((item) => item.day === day)?.expensesUgx ?? 0 : summary.expensesUgx : null;
-  const net = sales === null || expenses === null ? null : sales - expenses;
-  return <tr><th scope="row">{label}</th><td>{sales === null ? "—" : `${formatMoney(sales)} ${currency}`}</td><td>{expenses === null ? "—" : `${formatMoney(expenses)} ${currency}`}</td><td className={net !== null && net < 0 ? "amount-negative" : ""}>{net === null ? "—" : `${formatMoney(net)} ${currency}`}</td></tr>;
 }
 
 function FlowRow({ label, value, max, tone, currency, scale, locale }: { label: string; value: number; max: number; tone: "sales" | "expenses" | "net"; currency: string; scale: number; locale: string }) {
