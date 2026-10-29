@@ -716,6 +716,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .data-reset-card { border-color:var(--mn-danger-bg); }
 .data-reset-warning { margin:0; padding:var(--mn-space-3) var(--mn-space-4); border:1px solid var(--mn-danger-bg); border-radius:var(--mn-radius-md); color:var(--mn-danger-fg); background:var(--mn-danger-bg); font:var(--mn-type-body-sm-weight) var(--mn-type-body-sm-size)/1.5 var(--mn-type-body-sm-family); }
 .data-reset-form { display:flex; align-items:flex-end; flex-wrap:wrap; gap:var(--mn-space-3); margin-top:var(--mn-space-4); }
+.data-reset-progress { display:grid; justify-items:start; gap:var(--mn-space-2); margin-top:var(--mn-space-4); }
 .data-reset-form .field { flex:1 1 260px; }
 .data-reset-form .field span { display:block; margin-bottom:var(--mn-space-2); color:var(--mn-muted); font:var(--mn-type-body-sm-weight) var(--mn-type-body-sm-size)/var(--mn-type-body-sm-line) var(--mn-type-body-sm-family); }
 .data-reset-form .field strong { color:var(--mn-ink); }

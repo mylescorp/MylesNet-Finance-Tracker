@@ -240,8 +240,10 @@ function DataSettings() {
 function WorkspaceDataReset() {
   const state = useQuery(api.dataReset.status, {});
   const start = useMutation(api.dataReset.start);
+  const resume = useMutation(api.dataReset.resume);
   const [confirmation, setConfirmation] = useState("");
   const [busy, setBusy] = useState(false);
+  const [resuming, setResuming] = useState(false);
   const [error, setError] = useState("");
   if (state?.access !== "ready") return null;
   async function submit(event: FormEvent<HTMLFormElement>) {
@@ -252,12 +254,18 @@ function WorkspaceDataReset() {
     catch (cause) { setError(cause instanceof Error ? cause.message : "The workspace could not be reset."); }
     finally { setBusy(false); }
   }
+  async function continueReset() {
+    setResuming(true); setError("");
+    try { await resume({}); }
+    catch (cause) { setError(cause instanceof Error ? cause.message : "The reset could not be resumed."); }
+    finally { setResuming(false); }
+  }
   return <section className="card settings-card data-reset-card" aria-labelledby="data-reset-title">
     <div className="card-heading"><div><h2 className="card-title" id="data-reset-title">Reset workspace data</h2><p className="card-subtitle">Clear saved finance records and start with an empty cashbook.</p></div><span className="status-chip status-danger">Permanent</span></div>
     <p className="data-reset-warning">This removes entries, balances and adjustments, movements, savings and loans, bills and payments, reconciliations, partner distributions, import history, and review flags. It also clears opening balances. This action cannot be undone.</p>
     <p className="muted-note">Your sign-in, workspace, memberships, roles, preferences, partner profiles, integration connections, duplicate-protection receipts, and audit history stay. Receipt links to deleted transactions are cleared, and failed webhook retries are suppressed. Connected systems can add new records after the reset completes.</p>
     {state?.latest?.status === "completed" && <p className="form-feedback form-success" role="status">Last reset removed {state.latest.deletedRecords.toLocaleString()} records. The reset event remains in the audit log.</p>}
-    {state?.resetting ? <p className="form-feedback" role="status">Reset in progress. Finance entry is temporarily paused; this page will update when it completes.</p> : <form className="data-reset-form" onSubmit={submit}>
+    {state?.resetting ? <div className="data-reset-progress"><p className="form-feedback" role="status">Reset in progress. Finance entry is temporarily paused; this page will update when it completes.</p><p className="muted-note">If progress stops, you can resume from the saved reset cursor. This is safe if a previous batch is still finishing.</p><button className="button" type="button" onClick={() => void continueReset()} disabled={resuming}>{resuming ? "Resuming…" : "Resume reset"}</button></div> : <form className="data-reset-form" onSubmit={submit}>
       <label className="field" htmlFor="data-reset-confirm"><span>Type <strong>{state?.businessName ?? "your workspace name"}</strong> to confirm</span><input id="data-reset-confirm" autoComplete="off" value={confirmation} onChange={event => setConfirmation(event.target.value)} disabled={!state || busy} /></label>
       <button className="button data-reset-button" type="submit" disabled={!state || busy || confirmation !== state.businessName}>{busy ? "Starting reset…" : "Reset all finance data"}</button>
     </form>}

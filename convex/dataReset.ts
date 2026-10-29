@@ -38,7 +38,7 @@ export const status = query({
     if (!membership || !business || membership.role !== "owner" || membership.roleId) return { access: "restricted" as const };
     const latest = await ctx.db.query("workspaceDataResets").withIndex("by_business_and_created", q => q.eq("businessId", business._id)).order("desc").first();
     return { access: "ready" as const, businessName: business.name, resetting: business.dataResetting === true,
-      latest: latest ? { status: latest.status, deletedRecords: latest.deletedRecords, startedAt: latest.startedAt, completedAt: latest.completedAt } : null };
+      latest: latest ? { resetId: latest._id, status: latest.status, phase: latest.phase, deletedRecords: latest.deletedRecords, startedAt: latest.startedAt, completedAt: latest.completedAt } : null };
   },
 });
 
@@ -55,6 +55,20 @@ export const start = mutation({
     await ctx.db.insert("auditEvents", { businessId: business._id, actorId: userId, action: "workspace.data_reset_started", entityType: "workspace", entityId: String(business._id), occurredAt: now, summary: "Owner started a workspace finance data reset. Memberships, workspace preferences, roles, partner profiles, and integration settings are preserved." });
     await ctx.scheduler.runAfter(0, internal.dataReset.runBatch, { resetId });
     return resetId;
+  },
+});
+
+export const resume = mutation({
+  args: {},
+  returns: v.null(),
+  handler: async ctx => {
+    const { userId, business } = await owner(ctx);
+    if (!business.dataResetting) throw new ConvexError("There is no paused workspace reset to resume.");
+    const reset = await ctx.db.query("workspaceDataResets").withIndex("by_business_and_created", q => q.eq("businessId", business._id)).order("desc").first();
+    if (!reset || reset.status !== "running") throw new ConvexError("The workspace reset has no resumable progress record.");
+    await ctx.scheduler.runAfter(0, internal.dataReset.runBatch, { resetId: reset._id });
+    await ctx.db.insert("auditEvents", { businessId: business._id, actorId: userId, action: "workspace.data_reset_resumed", entityType: "workspace", entityId: String(business._id), occurredAt: Date.now(), summary: `Owner resumed workspace data reset at phase ${reset.phase + 1}.` });
+    return null;
   },
 });
 

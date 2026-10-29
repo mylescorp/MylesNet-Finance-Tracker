@@ -134,7 +134,9 @@ export const overview = query({
     const runwayExpenses = scopedRunwayRows.reduce((sum, row) => safeAdd(sum, row.expensesUgx, "Recent expenses"), 0);
     const observationStart = latestReset?.completedAt ?? business.createdAt;
     const observationStartDay = new Intl.DateTimeFormat("en-CA", { timeZone: business.timezone, year: "numeric", month: "2-digit", day: "2-digit" }).format(observationStart);
-    const observedCalendarDays = Math.max(1, Math.floor((Date.parse(`${args.today}T00:00:00.000Z`) - Date.parse(`${observationStartDay}T00:00:00.000Z`)) / 86_400_000) + 1);
+    const earliestLedgerDay = recentData.expenseEntries.reduce<string | null>((earliest, entry) => !earliest || entry.occurredOn < earliest ? entry.occurredOn : earliest, null);
+    const availableDataStartDay = earliestLedgerDay && earliestLedgerDay < observationStartDay ? earliestLedgerDay : observationStartDay;
+    const observedCalendarDays = Math.max(1, Math.floor((Date.parse(`${args.today}T00:00:00.000Z`) - Date.parse(`${availableDataStartDay}T00:00:00.000Z`)) / 86_400_000) + 1);
     const runwayWindowDays = Math.min(30, observedCalendarDays);
     const dailyBurnUgx = Math.round(runwayExpenses / runwayWindowDays);
     const currencyScale = 10 ** (new Intl.NumberFormat("en", { style: "currency", currency: business.currency }).resolvedOptions().maximumFractionDigits ?? 0);
@@ -310,7 +312,8 @@ export const reviewQueue = query({
   handler: async (ctx, args) => {
     const callerId = await getAuthUserId(ctx);
     const membership = callerId ? await ctx.db.query("memberships").withIndex("by_business_and_user", q => q.eq("businessId", args.businessId).eq("userId", callerId)).unique() : null;
-    if (!membership?.active || !(await hasPermission(ctx, membership, "reports.view"))) throw new Error("Your role cannot review the workspace issue queue.");
+    const business = membership?.active ? await ctx.db.get("businesses", args.businessId) : null;
+    if (!membership?.active || !business || business.dataResetting || !(await hasPermission(ctx, membership, "reports.view"))) throw new Error("Your role cannot review the workspace issue queue while the workspace is resetting.");
     if (args.paginationOpts.numItems > 50) throw new Error("Issue queue pages are limited to 50 records.");
     const query = args.status
       ? ctx.db.query("issueReviews").withIndex("by_business_and_status_and_updated", q => q.eq("businessId", args.businessId).eq("status", args.status!))
@@ -371,7 +374,7 @@ export const updateIssueReview = mutation({
     const callerMembership = callerId ? await ctx.db.query("memberships").withIndex("by_business_and_user", q => q.eq("businessId", args.businessId).eq("userId", callerId)).unique() : null;
     const requestedBusiness = callerMembership?.active ? await ctx.db.get("businesses", args.businessId) : null;
     const current = callerId && callerMembership && requestedBusiness ? { userId: callerId, membership: callerMembership, business: requestedBusiness } : null;
-    if (!current || !(await hasPermission(ctx, current.membership, "reports.view"))) throw new Error("Your role cannot update data-health reviews.");
+    if (!current || current.business.dataResetting || !(await hasPermission(ctx, current.membership, "reports.view"))) throw new Error("Your role cannot update data-health reviews while the workspace is resetting.");
     const { userId, business } = current;
     if (!validDay(args.from) || !validDay(args.toExclusive) || args.from >= args.toExclusive || !/^[a-z0-9-]{3,80}$/.test(args.issueId) || !Number.isSafeInteger(args.amountUgx) || args.issueKey !== `${args.from}:${args.toExclusive}:${args.issueId}:${args.amountUgx}`) throw new Error("The issue reference is invalid or has expired.");
     const note = args.note.trim();
