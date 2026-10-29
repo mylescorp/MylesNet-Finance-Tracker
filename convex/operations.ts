@@ -546,9 +546,10 @@ export const saveSavingsCashBufferThreshold = mutation({
     if (!Number.isSafeInteger(args.thresholdUgx) || args.thresholdUgx < 0) throw new Error("Enter a non-negative whole-unit cash-alert threshold.");
     const preferences = await ctx.db.query("workspacePreferences").withIndex("by_business", q => q.eq("businessId", current.business._id)).unique();
     const now = Date.now();
+    const currencyScale = 10 ** (new Intl.NumberFormat("en", { style: "currency", currency: current.business.currency }).resolvedOptions().maximumFractionDigits ?? 0);
     if (preferences) await ctx.db.patch("workspacePreferences", preferences._id, { lowCashAlertUgx: args.thresholdUgx, updatedAt: now, updatedBy: current.userId });
     else await ctx.db.insert("workspacePreferences", { businessId: current.business._id, lowCashAlertUgx: args.thresholdUgx, updatedAt: now, updatedBy: current.userId });
-    await ctx.db.insert("auditEvents", { businessId: current.business._id, actorId: current.userId, action: "savings.cash_buffer_alert_updated", entityType: "workspacePreferences", entityId: preferences?._id ?? current.business._id, occurredAt: now, summary: args.thresholdUgx === 0 ? "Disabled the savings low-cash alert." : `Updated the savings low-cash alert to ${args.thresholdUgx}.`, details: JSON.stringify({ beforeUgx: preferences?.lowCashAlertUgx ?? 100_000, afterUgx: args.thresholdUgx }) });
+    await ctx.db.insert("auditEvents", { businessId: current.business._id, actorId: current.userId, action: "savings.cash_buffer_alert_updated", entityType: "workspacePreferences", entityId: preferences?._id ?? current.business._id, occurredAt: now, summary: args.thresholdUgx === 0 ? "Disabled the savings low-cash alert." : `Updated the savings low-cash alert to ${args.thresholdUgx}.`, details: JSON.stringify({ beforeUgx: preferences?.lowCashAlertUgx ?? 100_000 * currencyScale, afterUgx: args.thresholdUgx }) });
     return null;
   },
 });

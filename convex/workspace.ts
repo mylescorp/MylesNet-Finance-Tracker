@@ -373,6 +373,9 @@ export const dashboardSummary = query({
       cashBalanceUgx: v.number(),
       mobileMoneyBalanceUgx: v.number(),
       totalBalanceUgx: v.number(),
+      periodTotals: v.object({ salesUgx: v.number(), expensesUgx: v.number(), netUgx: v.number() }),
+      monthTotals: v.array(v.object({ month: v.string(), salesUgx: v.number(), expensesUgx: v.number(), netUgx: v.number() })),
+      categoryTotals: v.object({ sales: v.array(v.object({ category: v.string(), amountUgx: v.number(), sharePercent: v.number() })), expenses: v.array(v.object({ category: v.string(), amountUgx: v.number(), sharePercent: v.number() })) }),
       cashBufferDays: v.union(v.number(), v.null()),
       selectedSetAsidePercent: v.number(),
       recommendedSetAsideUgx: v.union(v.number(), v.null()),
@@ -383,6 +386,7 @@ export const dashboardSummary = query({
           day: v.string(),
           salesUgx: v.number(),
           expensesUgx: v.number(),
+          netUgx: v.number(),
         }),
       ),
     }),
@@ -461,6 +465,25 @@ export const dashboardSummary = query({
       : 0;
     const totalBalanceUgx = addSafeInteger(cashBalanceUgx, mobileMoneyBalanceUgx, "Liquid balance");
     const netUgx = addSafeInteger(salesUgx, -expensesUgx, "Cashbook net");
+    const monthTotalsMap = new Map<string, { salesUgx: number; expensesUgx: number }>();
+    for (const day of days) {
+      const month = day.day.slice(0, 7);
+      const totals = monthTotalsMap.get(month) ?? { salesUgx: 0, expensesUgx: 0 };
+      totals.salesUgx = addSafeInteger(totals.salesUgx, day.salesUgx, "Monthly sales");
+      totals.expensesUgx = addSafeInteger(totals.expensesUgx, day.expensesUgx, "Monthly expenses");
+      monthTotalsMap.set(month, totals);
+    }
+    const monthTotals = [...monthTotalsMap].sort(([first], [second]) => first.localeCompare(second)).map(([month, totals]) => ({ month, ...totals, netUgx: addSafeInteger(totals.salesUgx, -totals.expensesUgx, "Monthly net") }));
+    const categoryAmounts = (categoryEntries: typeof sales, kind: "sale" | "expense") => {
+      const totals = new Map<string, number>();
+      for (const entry of categoryEntries) {
+        if (entry.state !== "posted" || entry.kind !== kind || args.account && entry.account !== args.account) continue;
+        totals.set(entry.category, addSafeInteger(totals.get(entry.category) ?? 0, entry.amountUgx, `${kind} category total`));
+      }
+      const rows = [...totals].map(([category, amountUgx]) => ({ category, amountUgx })).sort((first, second) => second.amountUgx - first.amountUgx);
+      const total = rows.reduce((sum, row) => addSafeInteger(sum, row.amountUgx, `${kind} categories total`), 0);
+      return rows.map(row => ({ ...row, sharePercent: total > 0 ? Math.round(row.amountUgx / total * 100) : 0 }));
+    };
     const averageDailyExpensesUgx = expensesUgx / rangeDays;
     return {
       access: "ready" as const,
@@ -470,6 +493,9 @@ export const dashboardSummary = query({
       cashBalanceUgx,
       mobileMoneyBalanceUgx,
       totalBalanceUgx,
+      periodTotals: { salesUgx, expensesUgx, netUgx },
+      monthTotals,
+      categoryTotals: { sales: categoryAmounts(sales, "sale"), expenses: categoryAmounts(expenses, "expense") },
       cashBufferDays: averageDailyExpensesUgx > 0 ? Math.floor(cashBalanceUgx / averageDailyExpensesUgx) : null,
       selectedSetAsidePercent,
       recommendedSetAsideUgx: netUgx > 0 ? Math.round(netUgx * selectedSetAsidePercent / 100) : null,
@@ -479,6 +505,7 @@ export const dashboardSummary = query({
         day,
         salesUgx,
         expensesUgx,
+        netUgx: addSafeInteger(salesUgx, -expensesUgx, "Daily net"),
       })),
     };
   },

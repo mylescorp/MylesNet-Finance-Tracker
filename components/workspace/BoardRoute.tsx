@@ -284,7 +284,6 @@ export function BoardRoute({ route }: { route: string }) {
 
   const summaryReady = summary?.access === "ready" ? summary : null;
   const stats = summaryReady?.accountFilterComplete ? summaryReady : null;
-  const yearDays = yearSummary?.access === "ready" && yearSummary.accountFilterComplete ? yearSummary.days : undefined;
   const weekDays = trailingSevenSummary?.access === "ready" && trailingSevenSummary.accountFilterComplete ? trailingSevenSummary.days : undefined;
   const metricValues: Record<string, string> = {
     Sales: fmt(stats?.salesUgx),
@@ -300,7 +299,7 @@ export function BoardRoute({ route }: { route: string }) {
     "Average per day": stats ? fmt(Math.round((screen?.title === "Expenses" ? stats.expensesUgx : stats.salesUgx) / Math.max(1, stats.days.length))) : "—",
     "Entry basis": "Recorded",
     "Approval queue": "—",
-    "Sales YTD": fmt(yearSummary?.access === "ready" ? yearSummary.salesUgx : undefined),
+    "Sales YTD": fmt(yearSummary?.access === "ready" && yearSummary.accountFilterComplete ? yearSummary.salesUgx : undefined),
     "Total expenses": fmt(stats?.expensesUgx),
     "Cashbook net": stats ? fmt(stats.salesUgx - stats.expensesUgx) : "—",
     // A net profit figure is withheld until equipment and other adjustments are modeled.
@@ -409,19 +408,20 @@ export function BoardRoute({ route }: { route: string }) {
         <div className="metric-note">{summaryReady && !summaryReady.accountFilterComplete ? "Unavailable · narrow the date range" : metricValues[label] === undefined ? "Available when this record type is configured" : "Based on saved workspace records"}</div>
       </Card>)}
     </div>}
-    {financeRangeError ? <Card><div className="empty-state compact-empty"><strong>Choose a valid date range.</strong><span>{financeRangeError}</span></div></Card> : screen.title === "Analytics" ? <AnalyticsInsights range={range} today={today} currency={currency} scale={currencyScale} locale={locale} dateFormat={dateFormat} account={account === "all" ? undefined : account} /> : screen.title === "Needs attention" ? <AnalyticsInsights range={range} today={today} currency={currency} scale={currencyScale} locale={locale} account={account === "all" ? undefined : account} issuesOnly /> : operationalScreen ? <OperationsWorkspace screen={screen.title as "Movements" | "Savings" | "Loans" | "Partners" | "Bills" | "Reconcile"} currency={currency} scale={currencyScale} locale={locale} timezone={timezone} dateFormat={dateFormat} range={range} account={account} recordFormOpen={recordFormOpen} onRecordSaved={() => setOpenRecordRoute(null)} onOpenRecord={() => setOpenRecordRoute(route)} /> : <div className="board-grid">
+    {financeRangeError && <Card><div className="empty-state compact-empty"><strong>Choose a valid date range.</strong><span>{financeRangeError}</span></div></Card>}
+    <div hidden={Boolean(financeRangeError)}>{screen.title === "Analytics" ? <AnalyticsInsights range={range} today={today} currency={currency} scale={currencyScale} locale={locale} dateFormat={dateFormat} account={account === "all" ? undefined : account} /> : screen.title === "Needs attention" ? <AnalyticsInsights range={range} today={today} currency={currency} scale={currencyScale} locale={locale} account={account === "all" ? undefined : account} issuesOnly /> : operationalScreen ? <OperationsWorkspace screen={screen.title as "Movements" | "Savings" | "Loans" | "Partners" | "Bills" | "Reconcile"} currency={currency} scale={currencyScale} locale={locale} timezone={timezone} dateFormat={dateFormat} range={range} account={account} recordFormOpen={recordFormOpen} onRecordSaved={() => setOpenRecordRoute(null)} onOpenRecord={() => setOpenRecordRoute(route)} /> : <div className="board-grid">
       {screen.entryKind && <div id="record-entry-card" hidden={!recordFormOpen}><Card className="board-feature-card">
         <div className="card-heading"><div><h2 className="card-title">{screen.entryKind === "sale" ? "Add a sale" : "Add an expense"}</h2><p className="card-subtitle">Saved values update the cashbook and account balance.</p></div></div>
         <EntryForm kind={screen.entryKind} onSaved={() => setOpenRecordRoute(null)} />
       </Card></div>}
       {screen.sections.map((section) => <Card className="board-section-card" key={section.title}>
         <div className="card-heading"><div><h2 className="card-title">{section.title === "Daily sales · last 14 days" ? `Sales activity · ${financePeriodLabel}` : section.title === "Daily activity" ? `Daily entries · ${financePeriodLabel}` : section.title === "Profit and loss by month" ? `Profit and loss · ${financePeriodLabel}` : section.title}</h2><p className="card-subtitle">{section.title === "Profit and loss statement" ? `Statement · ${financePeriodLabel} · ${fmtDate(range.from)} — ${fmtDate(rangeLastDay.toISOString().slice(0, 10))}` : section.detail}</p></div>{section.kind === "table" && section.title === (entryKind === "sale" ? "Daily sales · last 14 days" : "Expenses by category") && entryKind && access?.access === "ready" && access.permissions.includes("data.export") && <EntryCsvExportControl businessId={access.businessId} kind={entryKind} from={range.from} toExclusive={range.toExclusive} account={account} currency={currency} scale={currencyScale} />}</div>
-        {section.kind === "table" && section.title === "Expenses by category" ? <CategoryBreakdown entries={selectedEntries} kind="expense" formatMoney={fmt} truncated={selectedEntries?.length === entryLimit} />
+        {section.kind === "table" && section.title === "Expenses by category" ? <CategoryBreakdown categories={stats?.categoryTotals.expenses} formatMoney={fmt} />
         : section.kind === "table" && (screen.title === "Sales" || screen.title === "Expenses") ? (
           hasRecordData ? <div className="table-scroll"><table className="data-table"><thead><tr><th>Date</th><th>Type</th><th>Category</th><th>Account</th><th>Amount</th><th>Status</th><th>Actions</th></tr></thead><tbody>{selectedEntries.map((entry) => <tr key={entry._id}><td>{fmtDate(entry.occurredOn)}</td><td>{entry.kind}</td><td>{entry.category}</td><td>{accountLabel(entry.account)}</td><td>{fmt(entry.amountUgx)}</td><td><span className={`status-chip ${entry.state === "posted" ? "status-ok" : "status-warning"}`}>{entry.state}</span></td><td>{canCorrectEntry(entry.kind) && entry.state === "posted" && entry.canCorrect && <button className="button" type="button" onClick={() => void requestEntryCorrection(entry)}>Correct…</button>} {canVoidEntry(entry.kind) && entry.state === "posted" && entry.canVoid && <button className="button" type="button" onClick={() => void requestEntryVoid(entry._id)}>Void…</button>}</td></tr>)}</tbody></table></div> : <EmptyPanel message="No entries yet." next="Add an entry to populate this view. The design preview figures are examples, not live business data." />
-        ) : section.kind === "table" && screen.title === "Daily Report" ? <DailyHistoryTable days={weekDays} range={range} periodLabel={financePeriodLabel} loading={trailingSevenSummary === undefined} formatDay={fmtDate} formatMoney={fmt} />
-          : section.kind === "table" && screen.title === "Monthly P&L" ? <MonthlyPnlTable days={yearDays} loading={yearSummary === undefined} locale={locale} periodLabel={financePeriodLabel} formatMoney={fmt} />
-          : section.kind === "chart" && section.title === "Sales by income type" ? <CategoryBreakdown entries={selectedEntries} kind="sale" formatMoney={fmt} truncated={selectedEntries?.length === entryLimit} />
+        ) : section.kind === "table" && screen.title === "Daily Report" ? <DailyHistoryTable days={weekDays} totals={trailingSevenSummary?.access === "ready" && trailingSevenSummary.accountFilterComplete ? trailingSevenSummary.periodTotals : undefined} range={range} periodLabel={financePeriodLabel} loading={trailingSevenSummary === undefined} formatDay={fmtDate} formatMoney={fmt} />
+          : section.kind === "table" && screen.title === "Monthly P&L" ? <MonthlyPnlTable months={yearSummary?.access === "ready" && yearSummary.accountFilterComplete ? yearSummary.monthTotals : undefined} totals={yearSummary?.access === "ready" && yearSummary.accountFilterComplete ? yearSummary.periodTotals : undefined} loading={yearSummary === undefined} locale={locale} periodLabel={financePeriodLabel} formatMoney={fmt} />
+          : section.kind === "chart" && section.title === "Sales by income type" ? <CategoryBreakdown categories={summaryReady?.accountFilterComplete ? summaryReady.categoryTotals.sales : undefined} formatMoney={fmt} />
           : section.kind === "chart" ? <ChartPanel summary={screen.title === "Analytics" ? summaryReady : stats} previous={previousSummary?.access === "ready" ? previousSummary : null} range={range} previousRange={previousRange} interactive={screen.title === "Analytics" && section.title.toLowerCase().includes("sales and expenses over time")} account={account} dateFormat={dateFormat} title={section.title} message={section.detail} currency={currency} scale={currencyScale} locale={locale} />
           : section.kind === "workflow" ? <WorkflowPanel screen={screen} section={section.title} currency={currency} scale={currencyScale} businessDay={today} />
             : <EmptyPanel
@@ -440,7 +440,7 @@ export function BoardRoute({ route }: { route: string }) {
         {entryActionFeedback && <p className="form-feedback" role="status">{entryActionFeedback}</p>}
         {hasRecordData ? <><div className="entry-list">{selectedEntries.map((entry) => <div className="entry-row" key={entry._id}><div className="entry-main"><span className="entry-icon">{entry.kind === "sale" ? <ArrowUpRight size={15} /> : <ArrowDownRight size={15} />}</span><div><div className="entry-description">{entry.note || entry.category}</div><div className="entry-meta">{fmtDate(entry.occurredOn)} · {entry.category} · {accountLabel(entry.account)} · {entry.state}</div></div></div><span className={`entry-amount ${entry.kind === "sale" ? "amount-positive" : "amount-negative"}`}>{entry.kind === "sale" ? "+" : "−"}{fmt(entry.amountUgx)}</span>{canCorrectEntry(entry.kind) && entry.state === "posted" && entry.canCorrect && <button className="button" type="button" onClick={() => void requestEntryCorrection(entry)}>Correct…</button>}{canVoidEntry(entry.kind) && entry.state === "posted" && entry.canVoid && <button className="button" type="button" onClick={() => void requestEntryVoid(entry._id)}>Void…</button>}</div>)}</div>{entries?.length === entryLimit && entryLimit < 500 && <button className="button" type="button" onClick={() => setEntryLimit(limit => Math.min(limit + 100, 500))}>Load more entries</button>}{entries?.length === 500 && <p className="muted-note">Showing the latest 500 matching records. Narrow the date range to review older entries.</p>}</> : <EmptyPanel message="No entries have been recorded." next="Use the form to save the first entry." />}
       </Card> : null}
-    </div>}
+    </div>}</div>
     <div className="board-source-note">{screen.source} · Values shown here come from authorized Convex records. Sample values from the design references are not loaded into the workspace.</div>
   </>;
 }
@@ -494,10 +494,10 @@ function EntryCsvExportControl({ businessId, kind, from, toExclusive, account, c
   return <div className="form-actions"><button className="button" type="button" disabled={exporting} onClick={() => void exportCsv()}><Download size={14} />{exporting ? "Preparing CSV…" : "Export CSV"}</button>{message && <span className="muted-note" role="status">{message}</span>}</div>;
 }
 
-type DailyTotal = { day: string; salesUgx: number; expensesUgx: number };
+type DailyTotal = { day: string; salesUgx: number; expensesUgx: number; netUgx: number };
 
-function DailyHistoryTable({ days, range, periodLabel, loading, formatDay, formatMoney }: { days: DailyTotal[] | undefined; range: { from: string; toExclusive: string }; periodLabel: string; loading: boolean; formatDay: (day: string) => string; formatMoney: (amount: number) => string }) {
-  if (!days) return <EmptyPanel message={loading ? "Loading daily activity…" : "Daily history is not available for this account."} next={`Daily rows for the selected ${periodLabel.toLowerCase()} period are shown here.`} />;
+function DailyHistoryTable({ days, totals, range, periodLabel, loading, formatDay, formatMoney }: { days: DailyTotal[] | undefined; totals: { salesUgx: number; expensesUgx: number; netUgx: number } | undefined; range: { from: string; toExclusive: string }; periodLabel: string; loading: boolean; formatDay: (day: string) => string; formatMoney: (amount: number) => string }) {
+  if (!days || !totals) return <EmptyPanel message={loading ? "Loading daily activity…" : "Daily history is not available for this account."} next={`Complete daily rows and totals for the selected ${periodLabel.toLowerCase()} period are shown here.`} />;
   const byDate = new Map(days.map(day => [day.day, day]));
   const start = new Date(`${range.from}T00:00:00.000Z`);
   const count = Math.min(370, Math.max(0, (Date.parse(`${range.toExclusive}T00:00:00.000Z`) - start.getTime()) / 86_400_000));
@@ -505,40 +505,23 @@ function DailyHistoryTable({ days, range, periodLabel, loading, formatDay, forma
     const date = new Date(start);
     date.setUTCDate(date.getUTCDate() + index);
     const key = date.toISOString().slice(0, 10);
-    return byDate.get(key) ?? { day: key, salesUgx: 0, expensesUgx: 0 };
+    return byDate.get(key) ?? { day: key, salesUgx: 0, expensesUgx: 0, netUgx: 0 };
   });
-  const totals = recentDays.reduce((result, day) => ({ sales: result.sales + day.salesUgx, expenses: result.expenses + day.expensesUgx }), { sales: 0, expenses: 0 });
-  return <div className="table-scroll"><table className="data-table"><thead><tr><th>Business date</th><th>Sales</th><th>Total expenses</th><th>Cashbook net</th><th>Activity</th></tr></thead><tbody>{recentDays.map(day => <tr key={day.day}><td>{formatDay(day.day)}</td><td>{formatMoney(day.salesUgx)}</td><td>{formatMoney(day.expensesUgx)}</td><td>{formatMoney(day.salesUgx - day.expensesUgx)}</td><td>{byDate.has(day.day) ? "Recorded" : "No recorded activity"}</td></tr>)}</tbody><tfoot><tr><th>{periodLabel} total</th><th>{formatMoney(totals.sales)}</th><th>{formatMoney(totals.expenses)}</th><th>{formatMoney(totals.sales - totals.expenses)}</th><th /></tr></tfoot></table></div>;
+  return <div className="table-scroll"><table className="data-table"><thead><tr><th>Business date</th><th>Sales</th><th>Total expenses</th><th>Cashbook net</th><th>Activity</th></tr></thead><tbody>{recentDays.map(day => <tr key={day.day}><td>{formatDay(day.day)}</td><td>{formatMoney(day.salesUgx)}</td><td>{formatMoney(day.expensesUgx)}</td><td>{formatMoney(day.netUgx)}</td><td>{byDate.has(day.day) ? "Recorded" : "No recorded activity"}</td></tr>)}</tbody><tfoot><tr><th>{periodLabel} total</th><th>{formatMoney(totals.salesUgx)}</th><th>{formatMoney(totals.expensesUgx)}</th><th>{formatMoney(totals.netUgx)}</th><th /></tr></tfoot></table></div>;
 }
 
-function MonthlyPnlTable({ days, loading, locale, periodLabel, formatMoney }: { days: DailyTotal[] | undefined; loading: boolean; locale: string; periodLabel: string; formatMoney: (amount: number) => string }) {
-  if (!days) return <EmptyPanel message={loading ? "Loading selected-period statement…" : "This statement is not available for this account."} next={`Values reflect the selected ${periodLabel.toLowerCase()} period and saved cashbook totals.`} />;
-  const monthTotals = new Map<string, { sales: number; expenses: number }>();
-  for (const day of days) {
-    const month = day.day.slice(0, 7);
-    const current = monthTotals.get(month) ?? { sales: 0, expenses: 0 };
-    current.sales += day.salesUgx;
-    current.expenses += day.expensesUgx;
-    monthTotals.set(month, current);
-  }
-  const rows = [...monthTotals.entries()].sort(([first], [second]) => first.localeCompare(second));
-  if (rows.length === 0) return <EmptyPanel message="No activity in the selected period." next="Monthly results will appear here as sales and expenses are saved." />;
-  const totals = rows.reduce((result, [, month]) => ({ sales: result.sales + month.sales, expenses: result.expenses + month.expenses }), { sales: 0, expenses: 0 });
+function MonthlyPnlTable({ months, totals, loading, locale, periodLabel, formatMoney }: { months: { month: string; salesUgx: number; expensesUgx: number; netUgx: number }[] | undefined; totals: { salesUgx: number; expensesUgx: number; netUgx: number } | undefined; loading: boolean; locale: string; periodLabel: string; formatMoney: (amount: number) => string }) {
+  if (!months || !totals) return <EmptyPanel message={loading ? "Loading selected-period statement…" : "This statement is not available for this account."} next={`Values reflect the selected ${periodLabel.toLowerCase()} period and saved cashbook totals.`} />;
+  if (months.length === 0) return <EmptyPanel message="No activity in the selected period." next="Monthly results will appear here as sales and expenses are saved." />;
   const monthLabel = (month: string) => new Intl.DateTimeFormat(locale, { month: "long", year: "numeric", timeZone: "UTC" }).format(new Date(`${month}-01T00:00:00.000Z`));
-  return <div className="table-scroll"><table className="data-table"><thead><tr><th>Month in selected period</th><th>Sales</th><th>Total expenses</th><th>Cashbook net</th></tr></thead><tbody>{rows.map(([month, values]) => <tr key={month}><td>{monthLabel(month)}</td><td>{formatMoney(values.sales)}</td><td>{formatMoney(values.expenses)}</td><td>{formatMoney(values.sales - values.expenses)}</td></tr>)}</tbody><tfoot><tr><th>{periodLabel} total</th><th>{formatMoney(totals.sales)}</th><th>{formatMoney(totals.expenses)}</th><th>{formatMoney(totals.sales - totals.expenses)}</th></tr></tfoot></table></div>;
+  return <div className="table-scroll"><table className="data-table"><thead><tr><th>Month in selected period</th><th>Sales</th><th>Total expenses</th><th>Cashbook net</th></tr></thead><tbody>{months.map(values => <tr key={values.month}><td>{monthLabel(values.month)}</td><td>{formatMoney(values.salesUgx)}</td><td>{formatMoney(values.expensesUgx)}</td><td>{formatMoney(values.netUgx)}</td></tr>)}</tbody><tfoot><tr><th>{periodLabel} total</th><th>{formatMoney(totals.salesUgx)}</th><th>{formatMoney(totals.expensesUgx)}</th><th>{formatMoney(totals.netUgx)}</th></tr></tfoot></table></div>;
 }
 
-function CategoryBreakdown({ entries, kind, formatMoney, truncated = false }: { entries: { kind: "sale" | "expense"; category: string; amountUgx: number; state: "posted" | "void" }[] | undefined; kind: "sale" | "expense"; formatMoney: (amount: number) => string; truncated?: boolean }) {
-  if (!entries) return <EmptyPanel message="Loading saved category totals…" next="Only posted records in this workspace are included." />;
-  const totals = new Map<string, number>();
-  for (const entry of entries) if (entry.kind === kind && entry.state === "posted") totals.set(entry.category, (totals.get(entry.category) ?? 0) + entry.amountUgx);
-  const rows = [...totals].sort((a, b) => b[1] - a[1]);
-  const total = rows.reduce((sum, [, amount]) => sum + amount, 0);
-  return <>
-    {truncated && <p className="notice-banner notice-warning" role="status">Showing category totals from the latest 500 matching entries only. Older entries and categories may be missing; narrow the period to see a complete view.</p>}
-    {!rows.length ? <EmptyPanel message="No saved category activity in the loaded records." next="Category totals will appear when posted entries are recorded." />
-      : <div className="category-breakdown-list">{rows.map(([category, amount]) => <div className="category-breakdown-row" key={category}><span>{category}</span><span className="category-breakdown-track"><i style={{ width: `${Math.max(1, amount / total * 100)}%` }} /></span><strong>{formatMoney(amount)}</strong><small>{Math.round(amount / total * 100)}%</small></div>)}</div>}
-  </>;
+function CategoryBreakdown({ categories, formatMoney }: { categories: { category: string; amountUgx: number; sharePercent: number }[] | undefined; formatMoney: (amount: number) => string }) {
+  if (!categories) return <EmptyPanel message="Loading complete category totals…" next="Category totals appear when the selected period is within its safe reporting limit." />;
+  return categories.length === 0
+    ? <EmptyPanel message="No saved category activity in this period." next="Category totals will appear when posted entries are recorded." />
+    : <div className="category-breakdown-list">{categories.map(({ category, amountUgx, sharePercent }) => <div className="category-breakdown-row" key={category}><span>{category}</span><span className="category-breakdown-track"><i style={{ width: `${Math.max(1, sharePercent)}%` }} /></span><strong>{formatMoney(amountUgx)}</strong><small>{sharePercent}%</small></div>)}</div>;
 }
 
 function ChartPanel({ summary, previous, range, previousRange, interactive, account, dateFormat, title, message, currency, scale, locale }: { summary: { days: { day: string; salesUgx: number; expensesUgx: number }[]; accountFilterComplete?: boolean } | null; previous: { days: { day: string; salesUgx: number; expensesUgx: number }[]; accountFilterComplete?: boolean } | null; range: { from: string; toExclusive: string }; previousRange: { from: string; toExclusive: string }; interactive: boolean; account: FinanceAccount; dateFormat: DateFormat; title: string; message: string; currency: string; scale: number; locale: string }) {
