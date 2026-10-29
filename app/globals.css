@@ -623,6 +623,134 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .live-balance-tile strong { display:block; margin-top:13px; overflow-wrap:anywhere; font-size:clamp(18px,2.5vw,24px); line-height:1.2; }
 .live-balance-tile small { display:block; margin-top:6px; color:var(--mn-muted); font-size:11px; }
 .live-balance-estimate { border-color:color-mix(in srgb,var(--mn-accent) 45%,var(--mn-line)); }
+
+/* Expenses board: compact card matrix from the supplied reference, using the
+   existing finance tokens and the page's shared period/account filters. */
+.expenses-metric-grid { grid-template-columns:repeat(5,minmax(0,1fr)); gap:10px; margin:12px 0; }
+.expenses-metric-grid .board-metric-card { min-height:116px; padding:13px; }
+.expenses-metric-grid .board-metric-card .card-heading { margin-bottom:7px; }
+.expenses-metric-grid .board-metric-card .entry-icon { display:none; }
+.expenses-metric-grid .board-metric-card .eyebrow { font-size:9px; }
+.expenses-metric-grid .board-metric-card .metric-value { font-size:clamp(18px,2vw,24px); }
+.expenses-metric-grid .board-metric-card .metric-note { margin-top:5px; font-size:10px; }
+.expenses-metric-grid .metric-value-muted { color:var(--mn-muted); font-size:17px !important; }
+.board-grid-expenses { grid-template-columns:repeat(12,minmax(0,1fr)); gap:12px; }
+.board-grid-expenses > .board-section-card { min-width:0; min-height:0; padding:15px; }
+.board-grid-expenses > .expenses-panel-expenses-by-category { grid-column:1/-1; }
+.board-grid-expenses-record-open > .expenses-panel-expenses-by-category { grid-column:span 7; }
+.board-grid-expenses > .expenses-panel-category-budgets,
+.board-grid-expenses > .expenses-panel-recurring-expense-detector { grid-column:span 7; }
+.board-grid.board-grid-expenses > .expenses-record-card-wrapper,
+.board-grid.board-grid-expenses > .expenses-panel-recurring-costs,
+.board-grid.board-grid-expenses > .expenses-panel-audit-trail { grid-column:span 5; }
+.board-grid.board-grid-expenses > .expenses-panel-expenses-by-category-year-to-date { grid-column:span 5; }
+.board-grid.board-grid-expenses > .expenses-panel-operating-vs-equipment { grid-column:span 3; }
+.board-grid.board-grid-expenses > .expenses-panel-alerts { grid-column:span 4; }
+.board-grid.board-grid-expenses > .expenses-panel-supplier-tracking { grid-column:1/-1; }
+.board-grid.board-grid-expenses > .expenses-panel-recent { grid-column:1/-1; }
+.expenses-panel .card-heading { margin-bottom:10px; }
+.expenses-panel .card-title { font-size:14px; }
+.expenses-panel .card-subtitle { font-size:10px; }
+.expenses-panel .table-scroll { width:100%; }
+.expenses-panel .expense-category-table { min-width:0; font-size:10px; }
+.expenses-panel .expense-category-table th { padding:7px 8px; font-size:9px; }
+.expenses-panel .expense-category-table td { padding:7px 8px; }
+.expenses-panel .expense-category-table td:nth-child(2),.expenses-panel .expense-category-table th:nth-child(2) { text-align:right; white-space:nowrap; }
+.expenses-panel .expense-category-table td:nth-child(3),.expenses-panel .expense-category-table th:nth-child(3) { width:48px; text-align:right; white-space:nowrap; }
+.expenses-panel .expense-category-table td:last-child,.expenses-panel .expense-category-table th:last-child { width:74px; }
+.expenses-panel .expense-category-table tfoot th { border-top:1px solid var(--mn-line-strong); background:transparent; color:var(--mn-ink); letter-spacing:0; text-transform:none; }
+.expense-mini-track,.expense-mix-track { display:flex; width:100%; height:6px; overflow:hidden; border-radius:999px; background:var(--mn-inset); }
+.expense-mini-track i { display:block; min-width:0; border-radius:inherit; background:var(--mn-chart-1); }
+.expense-add-prompt,.expense-info-panel { display:grid; align-content:start; justify-items:start; gap:9px; }
+.expense-add-prompt p,.expense-info-panel p { margin:0; color:var(--mn-muted); font-size:11px; line-height:1.5; }
+.expense-add-prompt .button { min-height:32px; font-size:11px; }
+.expense-add-prompt > span { color:var(--mn-subtle); font-size:10px; }
+.expense-mix-content { display:grid; gap:11px; }
+.expense-mix-total { font-size:20px; font-weight:550; font-variant-numeric:tabular-nums; }
+.expense-mix-operating { display:block; height:100%; background:var(--mn-chart-3); }
+.expense-mix-equipment { display:block; height:100%; background:var(--mn-chart-1); }
+.legend-equipment { background:var(--mn-chart-1) !important; }
+.expense-mix-legend { display:grid; gap:8px; }
+.expense-mix-legend span { display:grid; grid-template-columns:8px minmax(0,1fr) auto; gap:6px; align-items:center; color:var(--mn-muted); font-size:10px; }
+.expense-mix-legend i { width:7px; height:7px; border-radius:50%; background:var(--mn-chart-3); }
+.expense-mix-legend b { grid-column:2/-1; color:var(--mn-ink); font-weight:600; }
+.expense-mix-content > .muted-note { margin:0; font-size:10px; }
+.expense-signal-list { display:grid; gap:0; }
+.expense-signal-list > div { display:grid; gap:4px; padding:7px 0; border-bottom:1px solid var(--mn-line); }
+.expense-signal-list span,.expense-signal-list small { color:var(--mn-muted); font-size:10px; }
+.expense-signal-list strong { font-size:11px; font-weight:600; }
+.expense-suggestion-list { display:grid; gap:9px; }
+.expense-suggestion-list > div { display:grid; grid-template-columns:auto 1fr; gap:5px 8px; align-items:center; padding:8px; border-radius:var(--mn-radius-sm); background:var(--mn-inset); }
+.expense-suggestion-list > div strong { font-size:10px; }
+.expense-suggestion-list > div small { grid-column:2; color:var(--mn-muted); font-size:9px; }
+.expense-suggestion-list > .muted-note { margin:0; font-size:10px; }
+.expense-suggestion-list .status-info { color:var(--mn-info-fg); background:var(--mn-info-bg); }
+.expense-inline-form { display:grid; gap:9px; }
+.expense-inline-form .expense-form-description { color:var(--mn-muted); font-size:10px; line-height:1.45; }
+.expense-inline-form .form-layout { grid-template-columns:repeat(2,minmax(0,1fr)); gap:9px; }
+.expense-inline-form .field { gap:4px; }
+.expense-inline-form .field label { font-size:10px; }
+.expense-inline-form input,.expense-inline-form select,.expense-inline-form textarea { min-height:34px; padding:7px 9px; font-size:11px; }
+.expense-inline-form .field-full,.expense-inline-form .form-actions,.expense-inline-form .form-feedback { grid-column:1/-1; }
+.expense-inline-form .form-actions .button { min-height:32px; font-size:11px; }
+.expense-budget-unset { color:var(--mn-muted); font-size:10px; }
+.expense-budget-footer { display:flex; flex-wrap:wrap; justify-content:space-between; align-items:center; gap:8px; margin-top:9px; color:var(--mn-muted); font-size:10px; }
+.expense-budget-footer .text-link { white-space:nowrap; }
+.expense-recurring-list { display:grid; gap:10px; }
+.expense-recurring-row { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:5px 10px; padding:8px 0; border-bottom:1px solid var(--mn-line); align-items:center; }
+.expense-recurring-row>span { font-size:11px; font-weight:550; }
+.expense-recurring-row>span small,.expense-recurring-row>small { display:block; margin-top:3px; color:var(--mn-muted); font-size:9px; font-weight:400; }
+.expense-recurring-row>strong { font-size:10px; font-weight:600; white-space:nowrap; }
+.expense-recurring-row>small { grid-column:1/-1; }
+.expense-receipt-placeholders { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:7px; }
+.expense-receipt-placeholders div { min-height:72px; display:grid; place-items:center; border:1px dashed var(--mn-line-strong); border-radius:var(--mn-radius-sm); color:var(--mn-muted); font-size:9px; }
+.expenses-panel-supplier-tracking>.muted-note { margin:8px 0 0; font-size:9px; }
+.expense-audit-list { display:grid; gap:0; margin-bottom:8px; }
+.expense-audit-list>div { display:grid; grid-template-columns:7px minmax(0,1fr) auto; gap:8px; align-items:start; padding:8px 0; border-bottom:1px solid var(--mn-line); font-size:10px; }
+.expense-audit-list>div>i { width:6px; height:6px; margin-top:4px; border-radius:50%; background:var(--mn-chart-1); }
+.expense-audit-list>div>span { min-width:0; line-height:1.4; }
+.expense-audit-list>div>span small { display:block; margin-top:3px; color:var(--mn-muted); font-size:9px; text-transform:capitalize; }
+.expense-audit-list time { color:var(--mn-muted); font-size:9px; white-space:nowrap; }
+.expense-audit-list>.muted-note { margin:0; font-size:10px; }
+.expenses-panel .compact-empty { min-height:74px; padding:12px; }
+.expenses-panel .compact-empty strong { font-size:11px; }
+.expenses-panel .compact-empty span { font-size:10px; }
+@media (max-width:900px) {
+  .expenses-metric-grid { grid-template-columns:repeat(3,minmax(0,1fr)); }
+  .board-grid-expenses { grid-template-columns:repeat(2,minmax(0,1fr)); }
+  .board-grid.board-grid-expenses > .expenses-panel-expenses-by-category,
+  .board-grid.board-grid-expenses > .expenses-panel-category-budgets,
+  .board-grid.board-grid-expenses > .expenses-panel-recurring-expense-detector,
+  .board-grid.board-grid-expenses > .expenses-record-card-wrapper,
+  .board-grid.board-grid-expenses > .expenses-panel-recurring-costs,
+  .board-grid.board-grid-expenses > .expenses-panel-audit-trail,
+  .board-grid.board-grid-expenses > .expenses-panel-expenses-by-category-year-to-date,
+  .board-grid.board-grid-expenses > .expenses-panel-operating-vs-equipment,
+  .board-grid.board-grid-expenses > .expenses-panel-alerts,
+  .board-grid.board-grid-expenses > .expenses-panel-supplier-tracking { grid-column:span 1; }
+  .expense-inline-form .form-layout { grid-template-columns:minmax(0,1fr); }
+  .expense-inline-form .field-full,.expense-inline-form .form-actions,.expense-inline-form .form-feedback { grid-column:auto; }
+  .board-grid.board-grid-expenses > .expenses-panel-expenses-by-category,
+  .board-grid.board-grid-expenses > .expenses-panel-category-budgets,
+  .board-grid.board-grid-expenses > .expenses-panel-recurring-expense-detector,
+  .board-grid.board-grid-expenses > .expenses-panel-recent { grid-column:1/-1; }
+}
+@media (max-width:560px) {
+  .expenses-metric-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
+  .board-grid-expenses { grid-template-columns:minmax(0,1fr); }
+  .board-grid.board-grid-expenses > .expenses-panel-expenses-by-category,
+  .board-grid.board-grid-expenses > .expenses-panel-category-budgets,
+  .board-grid.board-grid-expenses > .expenses-panel-recurring-expense-detector,
+  .board-grid.board-grid-expenses > .expenses-record-card-wrapper,
+  .board-grid.board-grid-expenses > .expenses-panel-recurring-costs,
+  .board-grid.board-grid-expenses > .expenses-panel-audit-trail,
+  .board-grid.board-grid-expenses > .expenses-panel-expenses-by-category-year-to-date,
+  .board-grid.board-grid-expenses > .expenses-panel-operating-vs-equipment,
+  .board-grid.board-grid-expenses > .expenses-panel-alerts,
+  .board-grid.board-grid-expenses > .expenses-panel-supplier-tracking,
+  .board-grid.board-grid-expenses > .expenses-panel-recent { grid-column:1/-1; }
+  .expense-receipt-placeholders div { min-height:62px; }
+}
 .live-balance-facts { grid-template-columns:repeat(4,minmax(0,1fr)); margin-top:10px; }
 .live-balance-note { margin:12px 0 0; }
 .live-balance-warning { display:flex; align-items:flex-start; gap:8px; margin:12px 0 0; color:var(--mn-warn-fg); font-size:12px; }
