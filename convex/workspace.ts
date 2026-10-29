@@ -359,8 +359,7 @@ export const dashboardSummary = query({
     toExclusive: v.string(),
     account: v.optional(v.union(v.literal("cash"), v.literal("mobile_money"), v.literal("unallocated"))),
     setAsidePercent: v.optional(v.number()),
-    scope: v.optional(v.union(v.literal("savings"), v.literal("expenses"))),
-    today: v.optional(v.string()),
+    scope: v.optional(v.literal("savings")),
   },
   returns: v.union(
     v.object({ access: v.literal("setup") }),
@@ -377,8 +376,6 @@ export const dashboardSummary = query({
       periodTotals: v.object({ salesUgx: v.number(), expensesUgx: v.number(), netUgx: v.number() }),
       monthTotals: v.array(v.object({ month: v.string(), salesUgx: v.number(), expensesUgx: v.number(), netUgx: v.number() })),
       categoryTotals: v.object({ sales: v.array(v.object({ category: v.string(), amountUgx: v.number(), sharePercent: v.number() })), expenses: v.array(v.object({ category: v.string(), amountUgx: v.number(), sharePercent: v.number() })) }),
-      expenseInsights: v.object({ operatingUgx: v.number(), equipmentUgx: v.number(), operatingPercent: v.number(), equipmentPercent: v.number(), expenseRatioPercent: v.number(), averagePerDayUgx: v.number(), largest: v.union(v.object({ category: v.string(), amountUgx: v.number(), occurredOn: v.string() }), v.null()), recurringPatterns: v.array(v.object({ category: v.string(), amountUgx: v.number(), count: v.number(), latest: v.string() })) }),
-      monthlyExpense: v.object({ totalUgx: v.union(v.number(), v.null()), warningUgx: v.number(), status: v.union(v.literal("not_set"), v.literal("within_limit"), v.literal("reached"), v.literal("unavailable")) }),
       cashBufferDays: v.union(v.number(), v.null()),
       selectedSetAsidePercent: v.number(),
       recommendedSetAsideUgx: v.union(v.number(), v.null()),
@@ -402,7 +399,6 @@ export const dashboardSummary = query({
     ) {
       throw new Error("Choose a valid date range.");
     }
-    if (args.today !== undefined && !isIsoDay(args.today)) throw new Error("Choose a valid current date.");
     const selectedSetAsidePercent = args.setAsidePercent ?? 30;
     if (!Number.isInteger(selectedSetAsidePercent) || selectedSetAsidePercent < 0 || selectedSetAsidePercent > 100) throw new Error("Set-aside percentage must be a whole number from 0 to 100.");
     const rangeDays =
@@ -415,20 +411,17 @@ export const dashboardSummary = query({
       const businesses = await ctx.db.query("businesses").take(1);
       return { access: businesses.length === 0 ? "setup" as const : "pending" as const };
     }
-    const [canViewDashboard, canViewReports, canViewAnalytics, canViewSavings, canViewExpenses] = await Promise.all([
+    const [canViewDashboard, canViewReports, canViewAnalytics, canViewSavings] = await Promise.all([
       hasPermission(ctx, current.membership, "dashboard.view"),
       hasPermission(ctx, current.membership, "reports.view"),
       hasPermission(ctx, current.membership, "analytics.view"),
       hasPermission(ctx, current.membership, "savings.view"),
-      hasPermission(ctx, current.membership, "expenses.view"),
     ]);
     const assignedRole = current.membership.roleId ? await ctx.db.get("workspaceRoles", current.membership.roleId) : null;
     const partnerScoped = Boolean(current.membership.partnerId) || current.membership.role === "partner" || assignedRole?.builtIn === "partner";
     const hasRequestedAccess = args.scope === "savings"
       ? canViewSavings && (canViewDashboard || canViewReports || canViewAnalytics)
-      : args.scope === "expenses"
-        ? canViewExpenses
-        : canViewDashboard || canViewReports || canViewAnalytics;
+      : canViewDashboard || canViewReports || canViewAnalytics;
     if (partnerScoped || !hasRequestedAccess) return { access: "restricted" as const };
     // Ledger entries are authoritative. dailyTotals is a write-through cache and may
     // drift after older corrections or imports, so dashboard figures are rebuilt here.
@@ -438,15 +431,7 @@ export const dashboardSummary = query({
     let expensesQuery = args.account
       ? ctx.db.query("entries").withIndex("by_business_and_kind_and_account_and_date", q => q.eq("businessId", current.business._id).eq("kind", "expense").eq("account", args.account!).gte("occurredOn", args.from).lt("occurredOn", args.toExclusive))
       : ctx.db.query("entries").withIndex("by_business_and_kind_and_date", q => q.eq("businessId", current.business._id).eq("kind", "expense").gte("occurredOn", args.from).lt("occurredOn", args.toExclusive));
-    const preferences = args.scope === "expenses" ? await ctx.db.query("workspacePreferences").withIndex("by_business", q => q.eq("businessId", current.business._id)).unique() : null;
-    const scale = 10 ** (new Intl.NumberFormat("en", { style: "currency", currency: current.business.currency }).resolvedOptions().maximumFractionDigits ?? 0);
-    const monthlyExpenseWarningUgx = preferences?.monthlyExpenseWarningUgx ?? 0;
-    const monthStart = args.today?.slice(0, 7) + "-01";
-    const monthToExclusive = args.today ? new Date(Date.parse(`${args.today}T00:00:00.000Z`) + 86_400_000).toISOString().slice(0, 10) : undefined;
-    const monthExpensesQuery = args.today ? (args.account
-      ? ctx.db.query("entries").withIndex("by_business_and_kind_and_account_and_date", q => q.eq("businessId", current.business._id).eq("kind", "expense").eq("account", args.account!).gte("occurredOn", monthStart!).lt("occurredOn", monthToExclusive!))
-      : ctx.db.query("entries").withIndex("by_business_and_kind_and_date", q => q.eq("businessId", current.business._id).eq("kind", "expense").gte("occurredOn", monthStart!).lt("occurredOn", monthToExclusive!))) : null;
-    const [sales, expenses, monthExpenses] = await Promise.all([salesQuery.take(5001), expensesQuery.take(1001), monthExpensesQuery ? monthExpensesQuery.take(1001) : Promise.resolve(undefined)]);
+    const [sales, expenses] = await Promise.all([salesQuery.take(5001), expensesQuery.take(1001)]);
     const accountFilterComplete = sales.length < 5001 && expenses.length < 1001;
     const byDay = new Map<string, { salesUgx: number; expensesUgx: number }>();
     const addEntry = (day: string, kind: "sale" | "expense", amountUgx: number) => {
@@ -499,23 +484,6 @@ export const dashboardSummary = query({
       const total = rows.reduce((sum, row) => addSafeInteger(sum, row.amountUgx, `${kind} categories total`), 0);
       return rows.map(row => ({ ...row, sharePercent: total > 0 ? Math.round(row.amountUgx / total * 100) : 0 }));
     };
-    const postedExpenses = expenses.filter(entry => entry.kind === "expense" && entry.state === "posted" && (!args.account || entry.account === args.account));
-    const equipmentNames = new Set((preferences?.expenseCategories ?? []).filter(name => /^(equipment|equipment purchase|equipment purchases|capital equipment)$/i.test(name.trim())));
-    const equipmentUgx = postedExpenses.filter(entry => equipmentNames.has(entry.category)).reduce((sum, entry) => addSafeInteger(sum, entry.amountUgx, "Equipment expenses"), 0);
-    const operatingUgx = addSafeInteger(expensesUgx, -equipmentUgx, "Operating expenses");
-    const expenseGroups = new Map<string, { category: string; amountUgx: number; count: number; latest: string }>();
-    for (const entry of postedExpenses) {
-      const key = `${entry.category}\u0000${entry.amountUgx}`;
-      const group = expenseGroups.get(key) ?? { category: entry.category, amountUgx: entry.amountUgx, count: 0, latest: entry.occurredOn };
-      group.count += 1;
-      if (entry.occurredOn > group.latest) group.latest = entry.occurredOn;
-      expenseGroups.set(key, group);
-    }
-    const recurringPatterns = [...expenseGroups.values()].filter(group => group.count > 1).sort((first, second) => second.count - first.count || second.amountUgx - first.amountUgx).slice(0, 3);
-    const largestExpense = postedExpenses.reduce<typeof postedExpenses[number] | undefined>((found, entry) => !found || entry.amountUgx > found.amountUgx ? entry : found, undefined);
-    const monthExpensesComplete = monthExpenses !== undefined && monthExpenses.length < 1001;
-    const monthExpenseTotal = monthExpensesComplete ? monthExpenses.reduce((sum, entry) => entry.kind === "expense" && entry.state === "posted" && (!args.account || entry.account === args.account) ? addSafeInteger(sum, entry.amountUgx, "Monthly expenses") : sum, 0) : null;
-    const monthlyExpenseStatus = args.today === undefined || !monthExpensesComplete ? "unavailable" as const : monthlyExpenseWarningUgx <= 0 ? "not_set" as const : monthExpenseTotal !== null && monthExpenseTotal >= monthlyExpenseWarningUgx ? "reached" as const : "within_limit" as const;
     const averageDailyExpensesUgx = expensesUgx / rangeDays;
     return {
       access: "ready" as const,
@@ -528,17 +496,6 @@ export const dashboardSummary = query({
       periodTotals: { salesUgx, expensesUgx, netUgx },
       monthTotals,
       categoryTotals: { sales: categoryAmounts(sales, "sale"), expenses: categoryAmounts(expenses, "expense") },
-      expenseInsights: {
-        operatingUgx,
-        equipmentUgx,
-        operatingPercent: expensesUgx > 0 ? Math.round(operatingUgx / expensesUgx * 100) : 0,
-        equipmentPercent: expensesUgx > 0 ? Math.round(equipmentUgx / expensesUgx * 100) : 0,
-        expenseRatioPercent: salesUgx > 0 ? Math.round(expensesUgx / salesUgx * 100) : 0,
-        averagePerDayUgx: Math.round(expensesUgx / rangeDays),
-        largest: largestExpense ? { category: largestExpense.category, amountUgx: largestExpense.amountUgx, occurredOn: largestExpense.occurredOn } : null,
-        recurringPatterns,
-      },
-      monthlyExpense: { totalUgx: monthExpenseTotal, warningUgx: monthlyExpenseWarningUgx, status: monthlyExpenseStatus },
       cashBufferDays: averageDailyExpensesUgx > 0 ? Math.floor(cashBalanceUgx / averageDailyExpensesUgx) : null,
       selectedSetAsidePercent,
       recommendedSetAsideUgx: netUgx > 0 ? Math.round(netUgx * selectedSetAsidePercent / 100) : null,
@@ -550,6 +507,100 @@ export const dashboardSummary = query({
         expensesUgx,
         netUgx: addSafeInteger(salesUgx, -expensesUgx, "Daily net"),
       })),
+    };
+  },
+});
+
+export const expensesSummary = query({
+  args: {
+    from: v.string(),
+    toExclusive: v.string(),
+    today: v.string(),
+    account: v.optional(v.union(v.literal("cash"), v.literal("mobile_money"), v.literal("unallocated"))),
+  },
+  returns: v.union(
+    v.object({ access: v.literal("setup") }),
+    v.object({ access: v.literal("pending") }),
+    v.object({ access: v.literal("restricted") }),
+    v.object({
+      access: v.literal("ready"),
+      expensesUgx: v.number(),
+      accountFilterComplete: v.boolean(),
+      categoryTotals: v.array(v.object({ category: v.string(), amountUgx: v.number(), sharePercent: v.number() })),
+      expenseInsights: v.object({ operatingUgx: v.number(), equipmentUgx: v.number(), operatingPercent: v.number(), equipmentPercent: v.number(), expenseRatioPercent: v.union(v.number(), v.null()), averagePerDayUgx: v.number(), largest: v.union(v.object({ category: v.string(), amountUgx: v.number(), occurredOn: v.string() }), v.null()), recurringPatterns: v.array(v.object({ category: v.string(), amountUgx: v.number(), count: v.number(), latest: v.string() })) }),
+      monthlyExpense: v.object({ totalUgx: v.union(v.number(), v.null()), warningUgx: v.number(), status: v.union(v.literal("not_set"), v.literal("within_limit"), v.literal("reached"), v.literal("unavailable")) }),
+    }),
+  ),
+  handler: async (ctx, args) => {
+    if (!isIsoDay(args.from) || !isIsoDay(args.toExclusive) || !isIsoDay(args.today) || args.from >= args.toExclusive) throw new Error("Choose a valid expense date range.");
+    const rangeDays = (Date.parse(`${args.toExclusive}T00:00:00.000Z`) - Date.parse(`${args.from}T00:00:00.000Z`)) / 86_400_000;
+    if (rangeDays > 370) throw new Error("Choose a reporting period of 370 days or less.");
+    const current = await getMembership(ctx);
+    if (!current) {
+      const businesses = await ctx.db.query("businesses").take(1);
+      return { access: businesses.length === 0 ? "setup" as const : "pending" as const };
+    }
+    const assignedRole = current.membership.roleId ? await ctx.db.get("workspaceRoles", current.membership.roleId) : null;
+    const partnerScoped = Boolean(current.membership.partnerId) || current.membership.role === "partner" || assignedRole?.builtIn === "partner";
+    if (partnerScoped || !(await hasPermission(ctx, current.membership, "expenses.view"))) return { access: "restricted" as const };
+    const canViewSales = await hasPermission(ctx, current.membership, "sales.view");
+
+    const account = args.account;
+    const byRange = (from: string, toExclusive: string) => account
+      ? ctx.db.query("entries").withIndex("by_business_and_kind_and_account_and_date", q => q.eq("businessId", current.business._id).eq("kind", "expense").eq("account", account).gte("occurredOn", from).lt("occurredOn", toExclusive))
+      : ctx.db.query("entries").withIndex("by_business_and_kind_and_date", q => q.eq("businessId", current.business._id).eq("kind", "expense").gte("occurredOn", from).lt("occurredOn", toExclusive));
+    const monthStart = `${args.today.slice(0, 7)}-01`;
+    const monthToExclusive = new Date(Date.parse(`${args.today}T00:00:00.000Z`) + 86_400_000).toISOString().slice(0, 10);
+    const salesQuery = canViewSales ? (account
+      ? ctx.db.query("entries").withIndex("by_business_and_kind_and_account_and_date", q => q.eq("businessId", current.business._id).eq("kind", "sale").eq("account", account).gte("occurredOn", args.from).lt("occurredOn", args.toExclusive))
+      : ctx.db.query("entries").withIndex("by_business_and_kind_and_date", q => q.eq("businessId", current.business._id).eq("kind", "sale").gte("occurredOn", args.from).lt("occurredOn", args.toExclusive))) : null;
+    const [expenses, monthExpenses, preferences, sales] = await Promise.all([
+      byRange(args.from, args.toExclusive).take(1001),
+      byRange(monthStart, monthToExclusive).take(1001),
+      ctx.db.query("workspacePreferences").withIndex("by_business", q => q.eq("businessId", current.business._id)).unique(),
+      salesQuery ? salesQuery.take(5001) : Promise.resolve(undefined),
+    ]);
+    const accountFilterComplete = expenses.length < 1001;
+    const postedExpenses = expenses.filter(entry => entry.state === "posted");
+    const expensesUgx = postedExpenses.reduce((sum, entry) => addSafeInteger(sum, entry.amountUgx, "Expenses total"), 0);
+    const amounts = new Map<string, number>();
+    for (const entry of postedExpenses) amounts.set(entry.category, addSafeInteger(amounts.get(entry.category) ?? 0, entry.amountUgx, "Expense category total"));
+    const categoryTotals = [...amounts].map(([category, amountUgx]) => ({ category, amountUgx, sharePercent: expensesUgx > 0 ? Math.round(amountUgx / expensesUgx * 100) : 0 })).sort((first, second) => second.amountUgx - first.amountUgx);
+    const equipmentNames = new Set((preferences?.expenseCategories ?? []).filter(name => /^(equipment|equipment purchase|equipment purchases|capital equipment)$/i.test(name.trim())));
+    const equipmentUgx = postedExpenses.filter(entry => equipmentNames.has(entry.category)).reduce((sum, entry) => addSafeInteger(sum, entry.amountUgx, "Equipment expenses"), 0);
+    const operatingUgx = addSafeInteger(expensesUgx, -equipmentUgx, "Operating expenses");
+    const expenseGroups = new Map<string, { category: string; amountUgx: number; count: number; latest: string }>();
+    for (const entry of postedExpenses) {
+      const key = `${entry.category}\u0000${entry.amountUgx}`;
+      const group = expenseGroups.get(key) ?? { category: entry.category, amountUgx: entry.amountUgx, count: 0, latest: entry.occurredOn };
+      group.count += 1;
+      if (entry.occurredOn > group.latest) group.latest = entry.occurredOn;
+      expenseGroups.set(key, group);
+    }
+    const recurringPatterns = [...expenseGroups.values()].filter(group => group.count > 1).sort((first, second) => second.count - first.count || second.amountUgx - first.amountUgx).slice(0, 3);
+    const largest = postedExpenses.reduce<typeof postedExpenses[number] | undefined>((found, entry) => !found || entry.amountUgx > found.amountUgx ? entry : found, undefined);
+    const salesComplete = sales !== undefined && sales.length < 5001;
+    const salesUgx = salesComplete ? sales.reduce((sum, entry) => entry.state === "posted" ? addSafeInteger(sum, entry.amountUgx, "Sales total") : sum, 0) : 0;
+    const monthComplete = monthExpenses.length < 1001;
+    const monthTotal = monthComplete ? monthExpenses.filter(entry => entry.state === "posted").reduce((sum, entry) => addSafeInteger(sum, entry.amountUgx, "Monthly expenses"), 0) : null;
+    const warningUgx = preferences?.monthlyExpenseWarningUgx ?? 0;
+    const monthlyStatus = !monthComplete ? "unavailable" as const : warningUgx <= 0 ? "not_set" as const : monthTotal !== null && monthTotal >= warningUgx ? "reached" as const : "within_limit" as const;
+    return {
+      access: "ready" as const,
+      expensesUgx,
+      accountFilterComplete,
+      categoryTotals,
+      expenseInsights: {
+        operatingUgx,
+        equipmentUgx,
+        operatingPercent: expensesUgx > 0 ? Math.round(operatingUgx / expensesUgx * 100) : 0,
+        equipmentPercent: expensesUgx > 0 ? Math.round(equipmentUgx / expensesUgx * 100) : 0,
+        expenseRatioPercent: salesComplete && salesUgx > 0 ? Math.round(expensesUgx / salesUgx * 100) : null,
+        averagePerDayUgx: Math.round(expensesUgx / rangeDays),
+        largest: largest ? { category: largest.category, amountUgx: largest.amountUgx, occurredOn: largest.occurredOn } : null,
+        recurringPatterns,
+      },
+      monthlyExpense: { totalUgx: monthTotal, warningUgx, status: monthlyStatus },
     };
   },
 });
