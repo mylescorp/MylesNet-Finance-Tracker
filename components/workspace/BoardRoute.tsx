@@ -166,7 +166,7 @@ const specs: Record<string, BoardSpec> = {
     ],
   },
   issues: {
-    title: "Needs attention", eyebrow: "Controls", description: "Review unresolved data quality and reconciliation items.", source: "Issues",
+    title: "Issues", eyebrow: "Controls", description: "Review data checks, assign follow-ups, and keep a clear audit trail.", source: "Issues",
     metrics: ["Open issues", "Fix first", "Review", "Warnings"],
     sections: [
       { title: "Issue inbox", detail: "Issues are generated from saved records and configured thresholds. No mock issues are shown as live.", kind: "table" },
@@ -437,7 +437,7 @@ export function BoardRoute({ route }: { route: string }) {
       })}
     </div>}
     {financeRangeError && <Card><div className="empty-state compact-empty"><strong>Choose a valid date range.</strong><span>{financeRangeError}</span></div></Card>}
-    <div hidden={Boolean(financeRangeError)}>{screen.title === "Analytics" ? <AnalyticsInsights range={range} today={today} currency={currency} scale={currencyScale} locale={locale} dateFormat={dateFormat} account={account === "all" ? undefined : account} /> : screen.title === "Needs attention" ? <AnalyticsInsights range={range} today={today} currency={currency} scale={currencyScale} locale={locale} account={account === "all" ? undefined : account} issuesOnly /> : operationalScreen ? <OperationsWorkspace key={screen.title} screen={screen.title as "Movements" | "Savings" | "Loans" | "Partners" | "Bills" | "Reconcile"} currency={currency} scale={currencyScale} locale={locale} timezone={timezone} dateFormat={dateFormat} range={range} account={account} recordFormOpen={recordFormOpen} onRecordSaved={() => setOpenRecordRoute(null)} onOpenRecord={() => setOpenRecordRoute(route)} /> : <div className={`board-grid${screen.title === "Expenses" ? ` board-grid-expenses${recordFormOpen ? " board-grid-expenses-record-open" : ""}` : ""}`}>
+    <div hidden={Boolean(financeRangeError)}>{screen.title === "Analytics" ? <AnalyticsInsights range={range} today={today} currency={currency} scale={currencyScale} locale={locale} dateFormat={dateFormat} account={account === "all" ? undefined : account} /> : screen.title === "Issues" || screen.title === "Needs attention" ? <AnalyticsInsights range={range} today={today} currency={currency} scale={currencyScale} locale={locale} account={account === "all" ? undefined : account} issuesOnly /> : operationalScreen ? <OperationsWorkspace key={screen.title} screen={screen.title as "Movements" | "Savings" | "Loans" | "Partners" | "Bills" | "Reconcile"} currency={currency} scale={currencyScale} locale={locale} timezone={timezone} dateFormat={dateFormat} range={range} account={account} recordFormOpen={recordFormOpen} onRecordSaved={() => setOpenRecordRoute(null)} onOpenRecord={() => setOpenRecordRoute(route)} /> : <div className={`board-grid${screen.title === "Expenses" ? ` board-grid-expenses${recordFormOpen ? " board-grid-expenses-record-open" : ""}` : ""}`}>
       {screen.entryKind && screen.title !== "Expenses" && <div id="record-entry-card" hidden={!recordFormOpen}><Card className="board-feature-card">
         <div className="card-heading"><div><h2 className="card-title">{screen.entryKind === "sale" ? "Add a sale" : "Add an expense"}</h2><p className="card-subtitle">Saved values update the cashbook and account balance.</p></div></div>
         <EntryForm kind={screen.entryKind} onSaved={() => setOpenRecordRoute(null)} />
