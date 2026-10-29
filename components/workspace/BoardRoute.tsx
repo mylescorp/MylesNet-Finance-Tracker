@@ -304,8 +304,8 @@ export function BoardRoute({ route }: { route: string }) {
   const correctEntry = useMutation(api.workspace.correctEntry);
   const [entryActionFeedback, setEntryActionFeedback] = useState("");
 
-  if (!screen) return <WorkspaceTitle eyebrow="MylesNet" title="Page not found" description="Choose a section from the navigation." />;
-  if (settings?.access === "ready" && settings.role === "finance_approver" && screen.title !== "Partners") return <><WorkspaceTitle eyebrow="Access limited" title="Distribution review" description="Finance approver access is scoped to independent partner distribution review." /><div className="notice-banner notice-info" role="status">Open Partners to review pending distribution requests. Business records, reports, and workspace settings are not available to this role.</div></>;
+  if (!screen) return <WorkspaceTitle title="Page not found" description="Choose a section from the navigation." />;
+  if (settings?.access === "ready" && settings.role === "finance_approver" && screen.title !== "Partners") return <><WorkspaceTitle title="Distribution review" description="Finance approver access is scoped to independent partner distribution review." /><div className="notice-banner notice-info" role="status">Open Partners to review pending distribution requests. Business records, reports, and workspace settings are not available to this role.</div></>;
 
   const summaryReady = summary?.access === "ready" ? summary : null;
   const stats = summaryReady && (screen.title !== "Analytics" || summaryReady.accountFilterComplete) ? summaryReady : null;
@@ -399,7 +399,6 @@ export function BoardRoute({ route }: { route: string }) {
 
   return <>
     <WorkspaceTitle
-      eyebrow={`${screen.eyebrow} · ${screen.source}`}
       title={screen.title}
       description={screen.description}
       action={screen.title === "Analytics" ? undefined : <div className="period-control"><span>Period</span><select value={period} onChange={(event) => setPeriod(event.target.value as (typeof periods)[number])} aria-label={`${screen.title} period`}>{periods.map((item) => <option key={item}>{item}</option>)}</select></div>}

@@ -12,7 +12,7 @@ const entryTypes = [
 
 export default function AddEntryPage() {
   return <>
-    <WorkspaceTitle eyebrow="Accountant entry" title="Add an entry" description="Choose what you are recording. Your saved entry updates the workspace and is added to its audit history." />
+    <WorkspaceTitle title="Add an entry" description="Choose what you are recording. Your saved entry updates the workspace and is added to its audit history." />
     <div className="board-grid">
       {entryTypes.map(({ title, detail, href, icon: Icon }) => <Card key={title} className="board-feature-card">
         <div className="card-heading"><span className="sidebar-link-icon"><Icon size={20} aria-hidden="true" /></span><div><h2 className="card-title">{title}</h2><p className="card-subtitle">{detail}</p></div></div>

@@ -2,6 +2,6 @@
 mylesnet-finance-tracker: patch
 ---
 
-Remove page heading labels
+Remove redundant page heading labels
 
-Hide section and board-number labels above workspace page titles, including the sign-in page, so every page keeps a clear, uncluttered heading.
+Remove section labels and board numbers above workspace page titles, including on sign-in, so page titles stay clear and uncluttered.
