@@ -32,6 +32,7 @@ export default defineSchema({
     weekStartsOn: v.optional(v.union(v.literal("monday"), v.literal("sunday"))),
     createdBy: v.id("users"),
     createdAt: v.number(),
+    dataResetting: v.optional(v.boolean()),
   }),
   memberships: defineTable({
     businessId: v.id("businesses"),
@@ -93,6 +94,16 @@ export default defineSchema({
     updatedAt: v.number(),
     updatedBy: v.id("users"),
   }).index("by_business", ["businessId"]),
+  workspaceDataResets: defineTable({
+    businessId: v.id("businesses"),
+    status: v.union(v.literal("running"), v.literal("completed")),
+    phase: v.number(),
+    cursor: v.optional(v.string()),
+    deletedRecords: v.number(),
+    startedBy: v.id("users"),
+    startedAt: v.number(),
+    completedAt: v.optional(v.number()),
+  }).index("by_business_and_created", ["businessId", "startedAt"]),
   workspaceAccessRequests: defineTable({
     businessId: v.id("businesses"),
     userId: v.id("users"),

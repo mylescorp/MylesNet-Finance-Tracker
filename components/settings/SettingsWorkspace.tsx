@@ -234,7 +234,35 @@ function DataSettings() {
     const anchor = document.createElement("a"); anchor.href = url; anchor.download = `mylesnet-cashbook-${new Date().toISOString().slice(0, 10)}.csv`; anchor.click(); URL.revokeObjectURL(url);
     setNotice(`Exported ${data.rows.length} entries${data.rows.length === 5000 ? " (maximum export size reached; contact support for a full archive)" : ""}.`);
   }
-  return <div className="settings-stack"><section className="card settings-card"><div className="card-heading"><div><h2 className="card-title">Export cashbook data</h2><p className="card-subtitle">Download up to 5,000 records as UTF-8 CSV for audit, backup, or analysis.</p></div></div><p className="muted-note">Exports include transaction date, category, account, amount, currency, note, source, state, and creation time. Voided records remain included for audit history.</p><div className="form-actions"><button className="button button-accent" type="button" onClick={download} disabled={!data || data.access !== "ready"}>Download CSV</button>{data?.access === "ready" && <span className="muted-note">{data.rows.length} records ready · {data.currency}</span>}{data?.access === "restricted" && <span className="muted-note">Your role does not have permission to export cashbook data.</span>}</div>{notice && <p className="form-feedback form-success" role="status">{notice}</p>}</section>{access?.access === "ready" && access.permissions.includes("imports.manage") && <CsvImportPanel />}{access?.access === "ready" && access.permissions.includes("integrations.manage") && <><CentipidWebhookPanel /><GoogleFormsPanel /></>}<section className="card settings-card"><div className="card-heading"><div><h2 className="card-title">Backups</h2><p className="card-subtitle">Off-platform archives and one-click restore have not been configured.</p></div></div><p className="muted-note">Imports and integrations are limited by your assigned role; exported and imported records keep their audit trail.</p></section></div>;
+  return <div className="settings-stack"><section className="card settings-card"><div className="card-heading"><div><h2 className="card-title">Export cashbook data</h2><p className="card-subtitle">Download up to 5,000 records as UTF-8 CSV for audit, backup, or analysis.</p></div></div><p className="muted-note">Exports include transaction date, category, account, amount, currency, note, source, state, and creation time. Voided records remain included for audit history.</p><div className="form-actions"><button className="button button-accent" type="button" onClick={download} disabled={!data || data.access !== "ready"}>Download CSV</button>{data?.access === "ready" && <span className="muted-note">{data.rows.length} records ready · {data.currency}</span>}{data?.access === "restricted" && <span className="muted-note">Your role does not have permission to export cashbook data.</span>}</div>{notice && <p className="form-feedback form-success" role="status">{notice}</p>}</section>{access?.access === "ready" && access.permissions.includes("imports.manage") && <CsvImportPanel />}{access?.access === "ready" && access.permissions.includes("integrations.manage") && <><CentipidWebhookPanel /><GoogleFormsPanel /></>}<WorkspaceDataReset /><section className="card settings-card"><div className="card-heading"><div><h2 className="card-title">Backups</h2><p className="card-subtitle">Off-platform archives and one-click restore have not been configured.</p></div></div><p className="muted-note">Imports and integrations are limited by your assigned role; exported and imported records keep their audit trail.</p></section></div>;
+}
+
+function WorkspaceDataReset() {
+  const state = useQuery(api.dataReset.status, {});
+  const start = useMutation(api.dataReset.start);
+  const [confirmation, setConfirmation] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  if (state?.access !== "ready") return null;
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!state || state.resetting || confirmation !== state.businessName || busy) return;
+    setBusy(true); setError("");
+    try { await start({ confirmation }); setConfirmation(""); }
+    catch (cause) { setError(cause instanceof Error ? cause.message : "The workspace could not be reset."); }
+    finally { setBusy(false); }
+  }
+  return <section className="card settings-card data-reset-card" aria-labelledby="data-reset-title">
+    <div className="card-heading"><div><h2 className="card-title" id="data-reset-title">Reset workspace data</h2><p className="card-subtitle">Clear saved finance records and start with an empty cashbook.</p></div><span className="status-chip status-danger">Permanent</span></div>
+    <p className="data-reset-warning">This removes entries, balances and adjustments, movements, savings and loans, bills and payments, reconciliations, partner distributions, import history, and review flags. It also clears opening balances. This action cannot be undone.</p>
+    <p className="muted-note">Your sign-in, workspace, memberships, roles, preferences, partner profiles, integration connections, duplicate-protection receipts, and audit history stay. Receipt links to deleted transactions are cleared, and failed webhook retries are suppressed. Connected systems can add new records after the reset completes.</p>
+    {state?.latest?.status === "completed" && <p className="form-feedback form-success" role="status">Last reset removed {state.latest.deletedRecords.toLocaleString()} records. The reset event remains in the audit log.</p>}
+    {state?.resetting ? <p className="form-feedback" role="status">Reset in progress. Finance entry is temporarily paused; this page will update when it completes.</p> : <form className="data-reset-form" onSubmit={submit}>
+      <label className="field" htmlFor="data-reset-confirm"><span>Type <strong>{state?.businessName ?? "your workspace name"}</strong> to confirm</span><input id="data-reset-confirm" autoComplete="off" value={confirmation} onChange={event => setConfirmation(event.target.value)} disabled={!state || busy} /></label>
+      <button className="button data-reset-button" type="submit" disabled={!state || busy || confirmation !== state.businessName}>{busy ? "Starting reset…" : "Reset all finance data"}</button>
+    </form>}
+    {error && <p className="form-feedback form-error" role="alert">{error}</p>}
+  </section>;
 }
 
 function RulesReview() {

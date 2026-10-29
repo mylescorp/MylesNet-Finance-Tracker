@@ -16,7 +16,7 @@ export async function getSelectedWorkspace(ctx: Ctx) {
   const membership = selectedMembership ?? (activeMemberships.length === 1 ? activeMemberships[0] : undefined);
   if (!membership) return null;
   const business = await ctx.db.get("businesses", membership.businessId);
-  return business ? { userId, membership, business } : null;
+  return business && !business.dataResetting ? { userId, membership, business } : null;
 }
 
 export async function listUserWorkspaces(ctx: Ctx, userId: Id<"users">) {

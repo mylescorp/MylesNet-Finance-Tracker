@@ -25,7 +25,10 @@ export function AnalyticsInsights({ range, today, currency, scale, locale, dateF
   const [expenseChange, setExpenseChange] = useState(0);
   const [savingIssueKey, setSavingIssueKey] = useState<string | null>(null);
   const [issueFeedback, setIssueFeedback] = useState("");
-  const money = (amount: number) => new Intl.NumberFormat(locale, { style: "currency", currency, maximumFractionDigits: Math.round(Math.log10(scale)) }).format(amount / scale);
+  const money = (amount: number) => {
+    const formatted = new Intl.NumberFormat(locale, { style: "currency", currency, maximumFractionDigits: Math.round(Math.log10(scale)) }).format(Math.abs(amount) / scale);
+    return amount < 0 ? `−${formatted}` : formatted;
+  };
   if (!data || data.access === "pending") return <Card><div className="empty-state" role="status"><strong>Loading analytics…</strong><span>Authorized workspace totals are being calculated.</span></div></Card>;
   if (data.access === "restricted" && issuesOnly && canViewIssueQueue && access?.access === "ready") return <div className="board-grid">
     <Card className="board-section-card"><div className="card-heading"><div><h2 className="card-title">Historical issue-review queue</h2><p className="card-subtitle">Saved data-health reviews you can access with your report permission. Changes are audited.</p></div><div className="form-actions"><label className="field"><span>Show</span><select value={reviewStatus} onChange={event => setReviewStatus(event.target.value as typeof reviewStatus)}><option value="open">Open</option><option value="acknowledged">Acknowledged</option><option value="resolved">Resolved</option><option value="all">All statuses</option></select></label><IssueHistoryCsvExport businessId={access.businessId} status={reviewStatus} currency={currency} scale={scale} /></div></div>

@@ -19,7 +19,7 @@ async function owner(ctx: MutationCtx | QueryCtx, businessId: Id<"businesses">) 
   const membership = await ctx.db.query("memberships").withIndex("by_business_and_user", q => q.eq("businessId", businessId).eq("userId", userId)).unique();
   const business = membership?.active ? await ctx.db.get("businesses", businessId) : null;
   const current = business && membership ? { userId, membership, business } : null;
-  if (!current || !(await hasPermission(ctx, current.membership, "integrations.manage"))) throw new ConvexError("Your role cannot manage this integration.");
+  if (!current || current.business.dataResetting || !(await hasPermission(ctx, current.membership, "integrations.manage"))) throw new ConvexError("Your role cannot manage this integration while the workspace is resetting.");
   return { userId: current.userId, business: current.business };
 }
 
@@ -108,7 +108,7 @@ export const processWebhook = internalMutation({
     const integration = await ctx.db.query("centipidIntegrations").withIndex("by_token_hash", q => q.eq("tokenHash", args.tokenHash)).unique();
     if (!integration?.active) return { status: "unauthorized" as const };
     const business = await ctx.db.get("businesses", integration.businessId);
-    if (!business) return { status: "unauthorized" as const };
+    if (!business || business.dataResetting) return { status: "unauthorized" as const };
     const prior = await ctx.db.query("webhookReceipts").withIndex("by_business_and_event", q => q.eq("businessId", business._id).eq("eventKey", args.eventKey)).unique();
     if (prior && prior.status !== "failed") return prior.status === "ignored" ? { status: "ignored" as const, event: prior.event } : { status: "duplicate" as const };
     if (args.legacyEventKey && args.legacyEventKey !== args.eventKey) {

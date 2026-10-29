@@ -44,7 +44,7 @@ async function getMembership(ctx: QueryCtx | MutationCtx, businessId?: Id<"busin
   const membership = await ctx.db.query("memberships").withIndex("by_business_and_user", q => q.eq("businessId", businessId).eq("userId", userId)).unique();
   if (!membership?.active) return null;
   const business = await ctx.db.get("businesses", businessId);
-  return business ? { userId, membership, business } : null;
+  return business && !business.dataResetting ? { userId, membership, business } : null;
 }
 
 async function applyAccountEffect(
@@ -407,34 +407,23 @@ export const dashboardSummary = query({
     const assignedRole = current.membership.roleId ? await ctx.db.get("workspaceRoles", current.membership.roleId) : null;
     const partnerScoped = Boolean(current.membership.partnerId) || current.membership.role === "partner" || assignedRole?.builtIn === "partner";
     if (partnerScoped || !(canViewDashboard || canViewReports || canViewAnalytics)) return { access: "restricted" as const };
-    const dailyRows = await ctx.db
-      .query("dailyTotals")
-      .withIndex("by_business_and_day", (q) =>
-        q
-          .eq("businessId", current.business._id)
-          .gte("day", args.from)
-          .lt("day", args.toExclusive),
-      )
-      .take(370);
-    let days = dailyRows.map(({ day, salesUgx, expensesUgx }) => ({ day, salesUgx, expensesUgx }));
-    let accountFilterComplete = true;
-    if (args.account) {
-      const [sales, expenses] = await Promise.all([
-        ctx.db.query("entries").withIndex("by_business_and_kind_and_date", q => q.eq("businessId", current.business._id).eq("kind", "sale").gte("occurredOn", args.from).lt("occurredOn", args.toExclusive)).take(5001),
-        ctx.db.query("entries").withIndex("by_business_and_kind_and_date", q => q.eq("businessId", current.business._id).eq("kind", "expense").gte("occurredOn", args.from).lt("occurredOn", args.toExclusive)).take(1001),
-      ]);
-      accountFilterComplete = sales.length < 5001 && expenses.length < 1001;
-      const byDay = new Map<string, { salesUgx: number; expensesUgx: number }>();
-      const addEntry = (day: string, kind: "sale" | "expense", amountUgx: number) => {
-        const totals = byDay.get(day) ?? { salesUgx: 0, expensesUgx: 0 };
-        if (kind === "sale") totals.salesUgx = addSafeInteger(totals.salesUgx, amountUgx, "Account-filtered sales total");
-        else totals.expensesUgx = addSafeInteger(totals.expensesUgx, amountUgx, "Account-filtered expense total");
-        byDay.set(day, totals);
-      };
-      for (const entry of sales) if (entry.state === "posted" && entry.account === args.account) addEntry(entry.occurredOn, "sale", entry.amountUgx);
-      for (const entry of expenses) if (entry.state === "posted" && entry.account === args.account) addEntry(entry.occurredOn, "expense", entry.amountUgx);
-      days = [...byDay].map(([day, totals]) => ({ day, ...totals }));
-    }
+    // Ledger entries are authoritative. dailyTotals is a write-through cache and may
+    // drift after older corrections or imports, so dashboard figures are rebuilt here.
+    const [sales, expenses] = await Promise.all([
+      ctx.db.query("entries").withIndex("by_business_and_kind_and_date", q => q.eq("businessId", current.business._id).eq("kind", "sale").gte("occurredOn", args.from).lt("occurredOn", args.toExclusive)).take(5001),
+      ctx.db.query("entries").withIndex("by_business_and_kind_and_date", q => q.eq("businessId", current.business._id).eq("kind", "expense").gte("occurredOn", args.from).lt("occurredOn", args.toExclusive)).take(1001),
+    ]);
+    const accountFilterComplete = sales.length < 5001 && expenses.length < 1001;
+    const byDay = new Map<string, { salesUgx: number; expensesUgx: number }>();
+    const addEntry = (day: string, kind: "sale" | "expense", amountUgx: number) => {
+      const totals = byDay.get(day) ?? { salesUgx: 0, expensesUgx: 0 };
+      if (kind === "sale") totals.salesUgx = addSafeInteger(totals.salesUgx, amountUgx, "Dashboard sales total");
+      else totals.expensesUgx = addSafeInteger(totals.expensesUgx, amountUgx, "Dashboard expense total");
+      byDay.set(day, totals);
+    };
+    for (const entry of sales) if (entry.state === "posted" && (!args.account || entry.account === args.account)) addEntry(entry.occurredOn, "sale", entry.amountUgx);
+    for (const entry of expenses) if (entry.state === "posted" && (!args.account || entry.account === args.account)) addEntry(entry.occurredOn, "expense", entry.amountUgx);
+    const days = [...byDay].map(([day, totals]) => ({ day, ...totals }));
     const salesUgx = days.reduce(
       (sum, day) => addSafeInteger(sum, day.salesUgx, "Sales total"),
       0,
