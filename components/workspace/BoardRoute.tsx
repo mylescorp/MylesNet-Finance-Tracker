@@ -1,6 +1,6 @@
 "use client";
 
-import { useConvex, useMutation, useQuery } from "convex/react";
+import { useConvex, useMutation, usePaginatedQuery, useQuery } from "convex/react";
 import { ConvexError } from "convex/values";
 import { ArrowDownRight, ArrowUpRight, Download, Plus, Printer, Share2, X } from "lucide-react";
 import Link from "next/link";
@@ -48,14 +48,17 @@ const specs: Record<string, BoardSpec> = {
   },
   expenses: {
     title: "Expenses", eyebrow: "Cashbook", description: "Record and review operating costs and equipment purchases.", source: "04 · Expenses", entryKind: "expense",
-    metrics: ["Expenses", "Year to date", "Expense ratio", "Average per day", "Approval queue"],
+    metrics: ["This month", "Year to date", "Expense ratio", "Average per day", "Approval queue"],
     sections: [
       { title: "Expenses by category", detail: "Category mix is calculated from saved expenses and distinguishes operating costs from equipment.", kind: "table" },
-      { title: "Add an expense", detail: "Attach the date, category, account, and business context to each cashbook entry.", kind: "workflow" },
-      { title: "Operating vs equipment", detail: "Expense classification comes from Finance settings.", kind: "chart" },
-      { title: "Alerts, budgets, and recurring costs", detail: "Configure category budgets and recurring bills before enabling alerts." },
-      { title: "Receipts and suppliers", detail: "Receipt files and supplier histories require storage and supplier records to be configured." },
-      { title: "Recurring expense review", detail: "Potential patterns are suggestions only; no bill is created without confirmation." },
+      { title: "Expenses by category · year to date", detail: "Fiscal-year totals from posted entries, using the same account filter.", kind: "table" },
+      { title: "Operating vs equipment", detail: "Equipment is identified only when an expense uses the configured Equipment category.", kind: "chart" },
+      { title: "Alerts", detail: "Highlights are calculated from the selected period and visible expense categories." },
+      { title: "Category budgets", detail: "Category-specific monthly limits are not currently stored. Review the workspace-wide expense warning in Rules." },
+      { title: "Recurring costs", detail: "Recurring schedules are managed in Bills. Reminders do not create expenses until a payment is recorded." },
+      { title: "Supplier tracking", detail: "Expense entries do not currently store a supplier field." },
+      { title: "Recurring expense detector", detail: "Repeated category and amount combinations in the selected period are suggestions only." },
+      { title: "Audit trail", detail: "Audited changes are available in Settings → Access for members with audit permission." },
     ],
   },
   analytics: {
@@ -269,12 +272,23 @@ export function BoardRoute({ route }: { route: string }) {
   const accountFilter = account !== "all" ? { account } : {};
   const needsSummary = screen?.entryKind !== undefined || ["Analytics", "Daily Report", "Monthly P&L", "Movements"].includes(screen?.title ?? "");
   const needsDailyHistory = screen?.title === "Daily Report";
-  const summary = useQuery(api.workspace.dashboardSummary, needsSummary && !financeRangeError ? { ...range, ...accountFilter } : "skip");
+  const summary = useQuery(api.workspace.dashboardSummary, needsSummary && screen?.title !== "Expenses" && !financeRangeError ? { ...range, ...accountFilter } : "skip");
+  const expensesSummary = useQuery(api.workspace.expensesSummary, screen?.title === "Expenses" && !financeRangeError ? { ...range, ...accountFilter, today } : "skip");
   const previousRange = useMemo(() => previousFinanceRange(analyticsRange), [analyticsRange]);
   const previousSummary = useQuery(api.workspace.dashboardSummary, screen?.title === "Analytics" && !financeRangeError ? { ...previousRange, ...accountFilter } : "skip");
   const entryKind = screen?.title === "Sales" ? "sale" : screen?.title === "Expenses" ? "expense" : undefined;
   const entries = useQuery(api.workspace.recentEntries, entryKind && !financeRangeError ? { limit: entryLimit, kind: entryKind, from: range.from, toExclusive: range.toExclusive, ...accountFilter } : "skip");
+  const operationalOverview = useQuery(api.operations.overview, screen?.title === "Expenses" && settings?.access === "ready" && !financeRangeError ? { businessId: settings.businessId, ...range, ...accountFilter } : "skip");
+  const yearToDateRange = useMemo(() => {
+    const [currentYear, currentMonth] = today.split("-").map(Number);
+    const startYear = currentMonth < fiscalStartMonth ? currentYear - 1 : currentYear;
+    const from = `${startYear}-${String(fiscalStartMonth).padStart(2, "0")}-01`;
+    const tomorrow = new Date(`${today}T00:00:00.000Z`);
+    tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
+    return { from, toExclusive: tomorrow.toISOString().slice(0, 10) };
+  }, [today, fiscalStartMonth]);
   const yearSummary = useQuery(api.workspace.dashboardSummary, screen?.title === "Monthly P&L" && !financeRangeError ? { ...range, ...accountFilter } : "skip");
+  const expensesYearSummary = useQuery(api.workspace.expensesSummary, screen?.title === "Expenses" && !financeRangeError ? { ...yearToDateRange, ...accountFilter, today } : "skip");
   const trailingSevenSummary = useQuery(api.workspace.dashboardSummary, needsDailyHistory && !financeRangeError ? { ...range, ...accountFilter } : "skip");
   const voidEntry = useMutation(api.workspace.voidEntry);
   const correctEntry = useMutation(api.workspace.correctEntry);
@@ -285,21 +299,28 @@ export function BoardRoute({ route }: { route: string }) {
 
   const summaryReady = summary?.access === "ready" ? summary : null;
   const stats = summaryReady?.accountFilterComplete ? summaryReady : null;
+  const expenseStats = expensesSummary?.access === "ready" && expensesSummary.accountFilterComplete ? expensesSummary : null;
+  const expenseYearStats = expensesYearSummary?.access === "ready" && expensesYearSummary.accountFilterComplete ? expensesYearSummary : null;
+  const pageAccess = screen.title === "Expenses" ? expensesSummary?.access : summary?.access;
+  const canViewBills = access?.access === "ready" && access.permissions.includes("bills.view");
+  const expenseBills = canViewBills && operationalOverview?.access === "ready" ? operationalOverview.bills : undefined;
+  const expenseBillsAccess = access?.access === "ready" && !canViewBills ? "restricted" : operationalOverview?.access;
   const weekDays = trailingSevenSummary?.access === "ready" && trailingSevenSummary.accountFilterComplete ? trailingSevenSummary.days : undefined;
   const metricValues: Record<string, string> = {
     Sales: fmt(stats?.salesUgx),
     "Best day": stats ? fmt(Math.max(0, ...stats.days.map((day) => day.salesUgx))) : "—",
     "Days recorded": stats ? `${stats.days.filter((day) => day.salesUgx + day.expensesUgx > 0).length}` : "—",
-    "Expense ratio": stats ? `${stats.salesUgx ? Math.round(stats.expensesUgx / stats.salesUgx * 100) : 0}%` : "—",
+    "Expense ratio": screen.title === "Expenses" ? expenseStats?.expenseInsights.expenseRatioPercent === null || expenseStats?.expenseInsights.expenseRatioPercent === undefined ? "—" : `${expenseStats.expenseInsights.expenseRatioPercent}%` : stats ? `${stats.salesUgx ? Math.round(stats.expensesUgx / stats.salesUgx * 100) : 0}%` : "—",
     "Average daily expenses": stats ? fmt(Math.round(stats.expensesUgx / Math.max(1, stats.days.length))) : "—",
     "Net margin": stats ? `${stats.salesUgx ? Math.round((stats.salesUgx - stats.expensesUgx) / stats.salesUgx * 100) : 0}%` : "—",
     "Cash on hand": fmt(stats?.cashBalanceUgx),
     "Mobile money": fmt(stats?.mobileMoneyBalanceUgx),
     "Sales today": stats ? fmt(stats.days.find((day) => day.day === today)?.salesUgx ?? 0) : "—",
-    "Expenses": fmt(stats?.expensesUgx),
-    "Average per day": stats ? fmt(Math.round((screen?.title === "Expenses" ? stats.expensesUgx : stats.salesUgx) / Math.max(1, stats.days.length))) : "—",
+    "This month": fmt(screen.title === "Expenses" ? expenseStats?.expensesUgx : stats?.expensesUgx),
+    "Year to date": fmt(screen.title === "Expenses" ? expenseYearStats?.expensesUgx : yearSummary?.access === "ready" && yearSummary.accountFilterComplete ? yearSummary.expensesUgx : undefined),
+    "Average per day": screen.title === "Expenses" ? fmt(expenseStats?.expenseInsights.averagePerDayUgx) : stats ? fmt(Math.round(stats.salesUgx / Math.max(1, (Date.parse(`${range.toExclusive}T00:00:00.000Z`) - Date.parse(`${range.from}T00:00:00.000Z`)) / 86_400_000))) : "—",
     "Entry basis": "Recorded",
-    "Approval queue": "—",
+    "Approval queue": "Not tracked",
     "Sales YTD": fmt(yearSummary?.access === "ready" && yearSummary.accountFilterComplete ? yearSummary.salesUgx : undefined),
     "Total expenses": fmt(stats?.expensesUgx),
     "Cashbook net": stats ? fmt(stats.salesUgx - stats.expensesUgx) : "—",
@@ -398,25 +419,47 @@ export function BoardRoute({ route }: { route: string }) {
       </div>
     </div>
     {financeRangeError && <p className="form-feedback form-error finance-range-error" role="alert">{financeRangeError}</p>}
-    {summary?.access === "restricted" && <div className="notice-banner notice-info" role="status">Partner-specific reporting is being prepared. Business-wide totals are hidden from partner accounts.</div>}
-    {summary?.access === "pending" && <div className="notice-banner notice-warning" role="status">Workspace access is pending. Ask an owner to invite this Google account.</div>}
-    {account !== "all" && summaryReady && !summaryReady.accountFilterComplete && <div className="notice-banner notice-warning" role="status">Some account-filtered totals reached the safe record limit. Affected figures are withheld; choose a shorter date range for complete results.</div>}
-    {!operationalScreen && <div className="metric-grid board-metric-grid">
-      {screen.metrics.map((label, index) => <Card className="metric-card board-metric-card" key={label}>
-        <div className="card-heading"><span className="eyebrow">{screen.title === "Monthly P&L" && label === "Sales YTD" ? "Sales in period" : label}</span><span className="entry-icon">{index % 2 === 0 ? <ArrowUpRight size={15} /> : <ArrowDownRight size={15} />}</span></div>
-        <div className="metric-value">{metricValues[label] ?? "—"}</div>
-        <div className="metric-note">{summaryReady && !summaryReady.accountFilterComplete ? "Unavailable · narrow the date range" : metricValues[label] === undefined ? "Available when this record type is configured" : "Based on saved workspace records"}</div>
-      </Card>)}
+    {pageAccess === "restricted" && <div className="notice-banner notice-info" role="status">Your role does not include access to this page’s summary data.</div>}
+    {pageAccess === "pending" && <div className="notice-banner notice-warning" role="status">Workspace access is pending. Ask an owner to invite this Google account.</div>}
+    {account !== "all" && (screen.title === "Expenses" ? expensesSummary?.access === "ready" && !expensesSummary.accountFilterComplete : summaryReady && !summaryReady.accountFilterComplete) && <div className="notice-banner notice-warning" role="status">Some account-filtered totals reached the safe record limit. Affected figures are withheld; choose a shorter date range for complete results.</div>}
+    {!operationalScreen && <div className={`metric-grid board-metric-grid${screen.title === "Expenses" ? " expenses-metric-grid" : ""}`}>
+      {screen.metrics.map((label, index) => {
+        const heading = screen.title === "Expenses" && label === "This month" && financePeriod !== "monthly" ? `Expenses · ${financePeriodLabel}` : label;
+        const note = screen.title === "Expenses"
+          ? label === "This month" ? `Posted expenses in the selected ${financePeriodLabel.toLowerCase()} period`
+            : label === "Year to date" ? "Fiscal year to date · same account filter"
+              : label === "Expense ratio" ? "Expenses ÷ sales in this period"
+                : label === "Average per day" ? "Period expenses ÷ calendar days"
+              : "Approval queue is not currently tracked"
+          : summaryReady && !summaryReady.accountFilterComplete ? "Unavailable · narrow the date range" : metricValues[label] === undefined ? "Available when this record type is configured" : "Based on saved workspace records";
+        return <Card className="metric-card board-metric-card" key={label}>
+          <div className="card-heading"><span className="eyebrow">{screen.title === "Monthly P&L" && label === "Sales YTD" ? "Sales in period" : heading}</span><span className="entry-icon">{index % 2 === 0 ? <ArrowUpRight size={15} /> : <ArrowDownRight size={15} />}</span></div>
+          <div className={`metric-value${label === "Approval queue" ? " metric-value-muted" : ""}`}>{metricValues[label] ?? "—"}</div>
+          <div className="metric-note">{note}</div>
+        </Card>;
+      })}
     </div>}
     {financeRangeError && <Card><div className="empty-state compact-empty"><strong>Choose a valid date range.</strong><span>{financeRangeError}</span></div></Card>}
-    <div hidden={Boolean(financeRangeError)}>{screen.title === "Analytics" ? <AnalyticsInsights range={range} today={today} currency={currency} scale={currencyScale} locale={locale} dateFormat={dateFormat} account={account === "all" ? undefined : account} /> : screen.title === "Issues" ? <AnalyticsInsights range={range} today={today} currency={currency} scale={currencyScale} locale={locale} account={account === "all" ? undefined : account} issuesOnly /> : operationalScreen ? <OperationsWorkspace key={screen.title} screen={screen.title as "Movements" | "Savings" | "Loans" | "Partners" | "Bills" | "Reconcile"} currency={currency} scale={currencyScale} locale={locale} timezone={timezone} dateFormat={dateFormat} range={range} account={account} recordFormOpen={recordFormOpen} onRecordSaved={() => setOpenRecordRoute(null)} onOpenRecord={() => setOpenRecordRoute(route)} /> : <div className="board-grid">
-      {screen.entryKind && <div id="record-entry-card" hidden={!recordFormOpen}><Card className="board-feature-card">
+    <div hidden={Boolean(financeRangeError)}>{screen.title === "Analytics" ? <AnalyticsInsights range={range} today={today} currency={currency} scale={currencyScale} locale={locale} dateFormat={dateFormat} account={account === "all" ? undefined : account} /> : screen.title === "Issues" || screen.title === "Needs attention" ? <AnalyticsInsights range={range} today={today} currency={currency} scale={currencyScale} locale={locale} account={account === "all" ? undefined : account} issuesOnly /> : operationalScreen ? <OperationsWorkspace key={screen.title} screen={screen.title as "Movements" | "Savings" | "Loans" | "Partners" | "Bills" | "Reconcile"} currency={currency} scale={currencyScale} locale={locale} timezone={timezone} dateFormat={dateFormat} range={range} account={account} recordFormOpen={recordFormOpen} onRecordSaved={() => setOpenRecordRoute(null)} onOpenRecord={() => setOpenRecordRoute(route)} /> : <div className={`board-grid${screen.title === "Expenses" ? ` board-grid-expenses${recordFormOpen ? " board-grid-expenses-record-open" : ""}` : ""}`}>
+      {screen.entryKind && screen.title !== "Expenses" && <div id="record-entry-card" hidden={!recordFormOpen}><Card className="board-feature-card">
         <div className="card-heading"><div><h2 className="card-title">{screen.entryKind === "sale" ? "Add a sale" : "Add an expense"}</h2><p className="card-subtitle">Saved values update the cashbook and account balance.</p></div></div>
         <EntryForm kind={screen.entryKind} onSaved={() => setOpenRecordRoute(null)} />
       </Card></div>}
-      {screen.sections.map((section) => <Card className="board-section-card" key={section.title}>
+      {screen.title === "Expenses" && <div id="record-entry-card" className="expenses-record-card-wrapper" hidden={!recordFormOpen}>{recordFormOpen && <Card className="board-section-card expenses-panel expenses-panel-record-form">
+        <div className="card-heading"><div><h2 className="card-title">Record an expense</h2><p className="card-subtitle">Saved expenses update the cashbook and account balance.</p></div></div>
+        <EntryForm kind="expense" onSaved={() => setOpenRecordRoute(null)} />
+      </Card>}</div>}
+      {screen.sections.map((section) => <Card className={`board-section-card${screen.title === "Expenses" ? ` expenses-panel expenses-panel-${expensePanelSlug(section.title)}` : ""}`} key={section.title}>
         <div className="card-heading"><div><h2 className="card-title">{section.title === "Daily sales · last 14 days" ? `Sales activity · ${financePeriodLabel}` : section.title === "Daily activity" ? `Daily entries · ${financePeriodLabel}` : section.title === "Profit and loss by month" ? `Profit and loss · ${financePeriodLabel}` : section.title}</h2><p className="card-subtitle">{section.title === "Profit and loss statement" ? `Statement · ${financePeriodLabel} · ${fmtDate(range.from)} — ${fmtDate(rangeLastDay.toISOString().slice(0, 10))}` : section.detail}</p></div>{section.kind === "table" && section.title === (entryKind === "sale" ? "Daily sales · last 14 days" : "Expenses by category") && entryKind && access?.access === "ready" && access.permissions.includes("data.export") && <EntryCsvExportControl businessId={access.businessId} kind={entryKind} from={range.from} toExclusive={range.toExclusive} account={account} currency={currency} scale={currencyScale} />}</div>
-        {section.kind === "table" && section.title === "Expenses by category" ? <CategoryBreakdown categories={stats?.categoryTotals.expenses} formatMoney={fmt} />
+        {section.title === "Expenses by category" ? <ExpenseCategoryTable categories={preferences?.access === "ready" ? preferences.expenseCategories : []} amounts={expenseStats?.categoryTotals} total={expenseStats?.expensesUgx} formatMoney={fmt} />
+        : section.title === "Expenses by category · year to date" ? <ExpenseCategoryTable categories={preferences?.access === "ready" ? preferences.expenseCategories : []} amounts={expenseYearStats?.categoryTotals} total={expenseYearStats?.expensesUgx} formatMoney={fmt} />
+        : section.title === "Operating vs equipment" ? <ExpenseMix insights={expenseStats?.expenseInsights} total={expenseStats?.expensesUgx} formatMoney={fmt} />
+        : section.title === "Alerts" ? <ExpenseSignals categories={expenseStats?.categoryTotals} largest={expenseStats?.expenseInsights.largest ?? null} bills={expenseBills} monthlyExpense={expenseStats?.monthlyExpense} complete={Boolean(expenseStats?.accountFilterComplete)} today={today} formatMoney={fmt} formatDay={fmtDate} />
+        : section.title === "Category budgets" ? <ExpenseBudgetTable categories={preferences?.access === "ready" ? preferences.expenseCategories : []} amounts={expenseStats?.categoryTotals} total={expenseStats?.expensesUgx} monthlyExpense={expenseStats?.monthlyExpense} formatMoney={fmt} />
+        : section.title === "Recurring costs" ? <RecurringCosts bills={expenseBills} access={expenseBillsAccess} today={today} formatMoney={fmt} formatDay={fmtDate} />
+        : section.title === "Supplier tracking" ? <SupplierCategoryTable categories={preferences?.access === "ready" ? preferences.expenseCategories : []} amounts={expenseYearStats?.categoryTotals} formatMoney={fmt} />
+        : section.title === "Recurring expense detector" ? <RecurringExpenseSuggestions patterns={expenseStats?.expenseInsights.recurringPatterns} complete={Boolean(expenseStats?.accountFilterComplete)} formatMoney={fmt} />
+        : section.title === "Audit trail" ? <ExpenseAuditPreview entries={selectedEntries} formatDay={fmtDate} />
         : section.kind === "table" && (screen.title === "Sales" || screen.title === "Expenses") ? (
           hasRecordData ? <div className="table-scroll"><table className="data-table"><thead><tr><th>Date</th><th>Type</th><th>Category</th><th>Account</th><th>Amount</th><th>Status</th><th>Actions</th></tr></thead><tbody>{selectedEntries.map((entry) => <tr key={entry._id}><td>{fmtDate(entry.occurredOn)}</td><td>{entry.kind}</td><td>{entry.category}</td><td>{accountLabel(entry.account)}</td><td>{fmt(entry.amountUgx)}</td><td><span className={`status-chip ${entry.state === "posted" ? "status-ok" : "status-warning"}`}>{entry.state}</span></td><td>{canCorrectEntry(entry.kind) && entry.state === "posted" && entry.canCorrect && <button className="button" type="button" onClick={() => void requestEntryCorrection(entry)}>Correct…</button>} {canVoidEntry(entry.kind) && entry.state === "posted" && entry.canVoid && <button className="button" type="button" onClick={() => void requestEntryVoid(entry._id)}>Void…</button>}</td></tr>)}</tbody></table></div> : <EmptyPanel message="No entries yet." next="Add an entry to populate this view. The design preview figures are examples, not live business data." />
         ) : section.kind === "table" && screen.title === "Daily Report" ? <DailyHistoryTable days={weekDays} totals={trailingSevenSummary?.access === "ready" && trailingSevenSummary.accountFilterComplete ? trailingSevenSummary.periodTotals : undefined} range={range} periodLabel={financePeriodLabel} loading={trailingSevenSummary === undefined} formatDay={fmtDate} formatMoney={fmt} />
@@ -435,7 +478,7 @@ export function BoardRoute({ route }: { route: string }) {
               next={section.detail}
             />}
       </Card>)}
-      {screen.title === "Sales" || screen.title === "Expenses" ? <Card className="board-section-card">
+      {screen.title === "Sales" || screen.title === "Expenses" ? <Card className={`board-section-card${screen.title === "Expenses" ? " expenses-panel expenses-panel-recent" : ""}`}>
         <div className="card-heading"><div><h2 className="card-title">Recent cashbook entries</h2><p className="card-subtitle">Latest saved records in this workspace.</p></div></div>
         {entryActionFeedback && <p className="form-feedback" role="status">{entryActionFeedback}</p>}
         {hasRecordData ? <><div className="entry-list">{selectedEntries.map((entry) => <div className="entry-row" key={entry._id}><div className="entry-main"><span className="entry-icon">{entry.kind === "sale" ? <ArrowUpRight size={15} /> : <ArrowDownRight size={15} />}</span><div><div className="entry-description">{entry.note || entry.category}</div><div className="entry-meta">{fmtDate(entry.occurredOn)} · {entry.category} · {accountLabel(entry.account)} · {entry.state}</div></div></div><span className={`entry-amount ${entry.kind === "sale" ? "amount-positive" : "amount-negative"}`}>{entry.kind === "sale" ? "+" : "−"}{fmt(entry.amountUgx)}</span>{canCorrectEntry(entry.kind) && entry.state === "posted" && entry.canCorrect && <button className="button" type="button" onClick={() => void requestEntryCorrection(entry)}>Correct…</button>}{canVoidEntry(entry.kind) && entry.state === "posted" && entry.canVoid && <button className="button" type="button" onClick={() => void requestEntryVoid(entry._id)}>Void…</button>}</div>)}</div>{entries?.length === entryLimit && entryLimit < 500 && <button className="button" type="button" onClick={() => setEntryLimit(limit => Math.min(limit + 100, 500))}>Load more entries</button>}{entries?.length === 500 && <p className="muted-note">Showing the latest 500 matching records. Narrow the date range to review older entries.</p>}</> : <EmptyPanel message="No entries have been recorded." next="Use the form to save the first entry." />}
@@ -447,6 +490,79 @@ export function BoardRoute({ route }: { route: string }) {
 
 function EmptyPanel({ message, next }: { message: string; next: string }) {
   return <div className="empty-state compact-empty"><strong>{message}</strong><span>{next}</span></div>;
+}
+
+type ExpenseCategoryAmount = { category: string; amountUgx: number; sharePercent: number };
+type ExpenseEntryLike = { _id?: string; kind?: "sale" | "expense"; category: string; amountUgx: number; occurredOn: string; state: "posted" | "void" };
+
+function expensePanelSlug(title: string) {
+  return title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+}
+
+function ExpenseCategoryTable({ categories, amounts, total, formatMoney }: { categories: string[]; amounts: ExpenseCategoryAmount[] | undefined; total: number | undefined; formatMoney: (amount: number | undefined) => string }) {
+  if (total === undefined || amounts === undefined) return <EmptyPanel message="Category totals are unavailable." next="The selected range exceeded the safe summary limit. Choose a shorter period." />;
+  const byCategory = new Map(amounts.map(row => [row.category, row]));
+  const names = [...new Set([...categories, ...amounts.map(row => row.category)])];
+  const rows = names.map(category => ({ category, amount: byCategory.get(category)?.amountUgx ?? 0, sharePercent: byCategory.get(category)?.sharePercent ?? 0 })).sort((a, b) => b.amount - a.amount || a.category.localeCompare(b.category));
+  return <div className="table-scroll"><table className="data-table expense-category-table"><thead><tr><th>Category</th><th>Amount</th><th>Share</th><th>Mix</th></tr></thead><tbody>{rows.map(row => {
+    const share = row.sharePercent;
+    return <tr key={row.category}><td>{row.category}</td><td>{row.amount ? formatMoney(row.amount) : "—"}</td><td>{row.amount ? `${Math.round(share)}%` : "0%"}</td><td><span className="expense-mini-track"><i style={{ width: `${Math.max(0, Math.min(100, share))}%` }} /></span></td></tr>;
+  })}</tbody><tfoot><tr><th>Total</th><th>{formatMoney(total)}</th><th>{total > 0 ? "100%" : "—"}</th><th /></tr></tfoot></table>{rows.length === 0 && <p className="muted-note">No expenses have been posted in this period.</p>}</div>;
+}
+
+type ExpenseInsightsLike = { operatingUgx: number; equipmentUgx: number; operatingPercent: number; equipmentPercent: number; expenseRatioPercent: number | null; averagePerDayUgx: number; largest: { category: string; amountUgx: number; occurredOn: string } | null; recurringPatterns: Array<{ category: string; amountUgx: number; count: number; latest: string }> };
+type MonthlyExpenseLike = { totalUgx: number | null; warningUgx: number; status: "not_set" | "within_limit" | "reached" | "unavailable" };
+
+function ExpenseMix({ insights, total, formatMoney }: { insights: ExpenseInsightsLike | undefined; total: number | undefined; formatMoney: (amount: number | undefined) => string }) {
+  if (total === undefined || !insights) return <EmptyPanel message="Expense mix is unavailable." next="Choose a shorter period if the record limit was reached." />;
+  if (total === 0) return <EmptyPanel message="No expenses in this period." next="The operating and equipment split will appear after an expense is recorded." />;
+  return <div className="expense-mix-content"><strong className="expense-mix-total">{formatMoney(total)}</strong><div className="expense-mix-track" aria-label={`Operating costs ${insights.operatingPercent} percent; equipment ${insights.equipmentPercent} percent`}><i className="expense-mix-operating" style={{ width: `${insights.operatingPercent}%` }} /><i className="expense-mix-equipment" style={{ width: `${insights.equipmentPercent}%` }} /></div><div className="expense-mix-legend"><span><i className="legend-sales" />Operating <b>{formatMoney(insights.operatingUgx)}</b> · {insights.operatingPercent}%</span><span><i className="legend-equipment" />Equipment <b>{formatMoney(insights.equipmentUgx)}</b> · {insights.equipmentPercent}%</span></div><p className="muted-note">Only entries in the configured Equipment category count as equipment; all other categories are grouped as operating costs.</p></div>;
+}
+
+function ExpenseSignals({ categories, largest, bills, monthlyExpense, complete, today, formatMoney, formatDay }: { categories: ExpenseCategoryAmount[] | undefined; largest: ExpenseInsightsLike["largest"]; bills: RecurringBillLike[] | undefined; monthlyExpense: MonthlyExpenseLike | undefined; complete: boolean; today: string; formatMoney: (amount: number | undefined) => string; formatDay: (day: string) => string }) {
+  const top = categories?.[0];
+  const dueSoon = bills?.filter(bill => bill.nextDueOn >= today && (Date.parse(`${bill.nextDueOn}T00:00:00.000Z`) - Date.parse(`${today}T00:00:00.000Z`)) / 86_400_000 <= 30).sort((a, b) => a.nextDueOn.localeCompare(b.nextDueOn))[0];
+  const monthlyWarningText = monthlyExpense?.status === "unavailable" || !monthlyExpense ? "Monthly total unavailable" : monthlyExpense.status === "not_set" ? "Not set" : `${formatMoney(monthlyExpense.totalUgx ?? undefined)} / ${formatMoney(monthlyExpense.warningUgx)}${monthlyExpense.status === "reached" ? " · reached" : ""}`;
+  return <div className="expense-signal-list"><div><span>Next bill due</span><strong>{dueSoon ? `${dueSoon.name} · ${formatDay(dueSoon.nextDueOn)}` : bills ? "No bill due in the next 30 days" : "Bills unavailable for your role"}</strong></div><div><span>Highest-spend category</span><strong>{top ? `${top.category} · ${top.sharePercent}%` : "No expense activity"}</strong></div><div><span>Monthly expense warning</span><strong>{monthlyWarningText}</strong></div><div><span>Summary coverage</span><strong>{complete ? "Complete for selected range" : "Unavailable or still loading"}</strong></div>{largest && <small>Largest listed entry: {formatMoney(largest.amountUgx)} · {largest.category} · {formatDay(largest.occurredOn)}</small>}</div>;
+}
+
+function ExpenseBudgetTable({ categories, amounts, total, monthlyExpense, formatMoney }: { categories: string[]; amounts: ExpenseCategoryAmount[] | undefined; total: number | undefined; monthlyExpense: MonthlyExpenseLike | undefined; formatMoney: (amount: number | undefined) => string }) {
+  const byCategory = new Map((amounts ?? []).map(row => [row.category, row.amountUgx]));
+  const names = [...new Set([...categories, ...(amounts ?? []).map(row => row.category)])];
+  return <><div className="table-scroll"><table className="data-table expense-category-table"><thead><tr><th>Category</th><th>Monthly limit</th><th>Selected period</th></tr></thead><tbody>{names.map(category => { const amount = byCategory.get(category) ?? 0; return <tr key={category}><td>{category}</td><td><span className="expense-budget-unset">Not set</span></td><td>{total === undefined ? "—" : amount ? formatMoney(amount) : "—"}</td></tr>; })}</tbody></table></div><div className="expense-budget-footer"><span>{monthlyExpense?.warningUgx ? `Workspace-wide warning: ${formatMoney(monthlyExpense.warningUgx)} per month.` : monthlyExpense ? "No workspace-wide monthly expense warning is set." : "Monthly warning unavailable."}</span><Link className="text-link" href="/settings/rules">Set limits in Settings →</Link></div></>;
+}
+
+type RecurringBillLike = { _id: string; name: string; category: string; amountUgx: number; recurrence: "weekly" | "monthly" | "quarterly" | "yearly"; nextDueOn: string };
+function RecurringCosts({ bills, access, today, formatMoney, formatDay }: { bills: RecurringBillLike[] | undefined; access: "ready" | "restricted" | "pending" | undefined; today: string; formatMoney: (amount: number | undefined) => string; formatDay: (day: string) => string }) {
+  const recurrenceLabel = { weekly: "every week", monthly: "every month", quarterly: "every 3 months", yearly: "every year" };
+  return <div className="expense-recurring-list">{access === "restricted" ? <EmptyPanel message="Bill schedule access is not included in your role." next="Ask a workspace owner to grant Bills view access." /> : access !== "ready" ? <EmptyPanel message="Loading recurring schedules…" next="Saved Bills schedules and next due dates appear here." /> : bills?.length ? bills.slice(0, 4).map(bill => {
+    const days = Math.floor((Date.parse(`${bill.nextDueOn}T00:00:00.000Z`) - Date.parse(`${today}T00:00:00.000Z`)) / 86_400_000);
+    const due = days < 0 ? `Overdue ${Math.abs(days)}d` : days === 0 ? "Due today" : `Due in ${days}d`;
+    return <div className="expense-recurring-row" key={bill._id}><span>{bill.name}<small>{bill.category} · {recurrenceLabel[bill.recurrence]}</small></span><strong>{formatMoney(bill.amountUgx)}</strong><small>{formatDay(bill.nextDueOn)} · {due}</small></div>;
+  }) : <EmptyPanel message="No active recurring bills." next="Add a schedule on Bills. It updates its next due date after each recorded payment." />}{access === "ready" && <Link className="text-link" href="/bills">Open Bills →</Link>}</div>;
+}
+
+function SupplierCategoryTable({ categories, amounts, formatMoney }: { categories: string[]; amounts: ExpenseCategoryAmount[] | undefined; formatMoney: (amount: number | undefined) => string }) {
+  const byCategory = new Map((amounts ?? []).map(row => [row.category, row.amountUgx]));
+  const names = [...new Set([...categories, ...(amounts ?? []).map(row => row.category)])];
+  return <><div className="table-scroll"><table className="data-table expense-category-table"><thead><tr><th>Supplier</th><th>Category</th><th>Recorded YTD</th></tr></thead><tbody>{names.slice(0, 5).map(category => { const amount = byCategory.get(category) ?? 0; return <tr key={category}><td className="muted-note">Not captured</td><td>{category}</td><td>{amount ? formatMoney(amount) : "—"}</td></tr>; })}</tbody></table></div><p className="muted-note">Totals use saved expense categories. Supplier names are not collected yet.</p></>;
+}
+
+function ExpenseAuditPreview({ entries, formatDay }: { entries: ExpenseEntryLike[] | undefined; formatDay: (day: string) => string }) {
+  const options = useQuery(api.audits.filterOptions, {});
+  const allExpenseIds = entries?.filter(entry => entry.kind === "expense" && entry._id).map(entry => entry._id!) ?? [];
+  const expenseIds = allExpenseIds.slice(0, 100);
+  const auditArgs = useMemo(() => ({ entityIds: expenseIds }), [entries]);
+  const audit = usePaginatedQuery(api.audits.list, options?.access === "ready" && entries ? auditArgs : "skip", { initialNumItems: 20 });
+  if (options?.access === "restricted") return <div className="expense-info-panel"><span className="status-chip status-warning">Audit access required</span><p>Your role does not include audit history access.</p><Link className="text-link" href="/audits">Open audit log →</Link></div>;
+  if (!entries) return <p className="muted-note">Loading expense entry links…</p>;
+  const expenseEvents = audit.results.filter(event => event.entityType === "entry").slice(0, 4);
+  return <><div className="expense-audit-list">{expenseEvents.length ? expenseEvents.map(event => <div key={event.id}><i /><span>{event.summary}<small>{event.action.replaceAll(".", " ")} · {event.actorName}</small></span><time>{formatDay(new Date(event.occurredAt).toISOString().slice(0, 10))}</time></div>) : <p className="muted-note">{audit.status === "LoadingFirstPage" ? "Loading audited expense activity…" : "No audited expense changes match the listed records."}</p>}</div>{allExpenseIds.length > 100 && <p className="muted-note">Preview covers the 100 most recent listed expenses. Open the audit log for older records.</p>}<Link className="text-link" href="/audits">Open audit log →</Link></>;
+}
+
+function RecurringExpenseSuggestions({ patterns, complete, formatMoney }: { patterns: ExpenseInsightsLike["recurringPatterns"] | undefined; complete: boolean; formatMoney: (amount: number | undefined) => string }) {
+  if (!patterns) return <EmptyPanel message="Loading saved expense entries…" next="Suggestions are calculated on the server from posted records." />;
+  return <div className="expense-suggestion-list">{patterns.length ? patterns.map(row => <div key={`${row.category}-${row.amountUgx}`}><span className="status-chip status-info">Pattern</span><strong>{row.category} · {formatMoney(row.amountUgx)} × {row.count}</strong><small>Most recent: {row.latest}</small></div>) : <EmptyPanel message="No repeated category and amount pattern found." next="The review uses posted entries for this period; it never creates a bill automatically." />}{patterns.length > 0 && <p className="muted-note">Suggestions use posted records only and need your review before creating a Bills schedule{complete ? "." : "; summary coverage may be incomplete."}</p>}</div>;
 }
 
 function EntryCsvExportControl({ businessId, kind, from, toExclusive, account, currency, scale }: { businessId: Id<"businesses">; kind: "sale" | "expense"; from: string; toExclusive: string; account: FinanceAccount; currency: string; scale: number }) {
