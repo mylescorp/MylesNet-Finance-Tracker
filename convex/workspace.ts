@@ -358,6 +358,8 @@ export const dashboardSummary = query({
     from: v.string(),
     toExclusive: v.string(),
     account: v.optional(v.union(v.literal("cash"), v.literal("mobile_money"), v.literal("unallocated"))),
+    setAsidePercent: v.optional(v.number()),
+    scope: v.optional(v.literal("savings")),
   },
   returns: v.union(
     v.object({ access: v.literal("setup") }),
@@ -371,6 +373,10 @@ export const dashboardSummary = query({
       cashBalanceUgx: v.number(),
       mobileMoneyBalanceUgx: v.number(),
       totalBalanceUgx: v.number(),
+      cashBufferDays: v.union(v.number(), v.null()),
+      selectedSetAsidePercent: v.number(),
+      recommendedSetAsideUgx: v.union(v.number(), v.null()),
+      setAsideScenarios: v.array(v.object({ percent: v.number(), monthlyUgx: v.number(), yearlyUgx: v.number() })),
       accountFilterComplete: v.boolean(),
       days: v.array(
         v.object({
@@ -389,6 +395,8 @@ export const dashboardSummary = query({
     ) {
       throw new Error("Choose a valid date range.");
     }
+    const selectedSetAsidePercent = args.setAsidePercent ?? 30;
+    if (!Number.isInteger(selectedSetAsidePercent) || selectedSetAsidePercent < 0 || selectedSetAsidePercent > 100) throw new Error("Set-aside percentage must be a whole number from 0 to 100.");
     const rangeDays =
       (Date.parse(`${args.toExclusive}T00:00:00.000Z`) -
         Date.parse(`${args.from}T00:00:00.000Z`)) /
@@ -399,14 +407,18 @@ export const dashboardSummary = query({
       const businesses = await ctx.db.query("businesses").take(1);
       return { access: businesses.length === 0 ? "setup" as const : "pending" as const };
     }
-    const [canViewDashboard, canViewReports, canViewAnalytics] = await Promise.all([
+    const [canViewDashboard, canViewReports, canViewAnalytics, canViewSavings] = await Promise.all([
       hasPermission(ctx, current.membership, "dashboard.view"),
       hasPermission(ctx, current.membership, "reports.view"),
       hasPermission(ctx, current.membership, "analytics.view"),
+      hasPermission(ctx, current.membership, "savings.view"),
     ]);
     const assignedRole = current.membership.roleId ? await ctx.db.get("workspaceRoles", current.membership.roleId) : null;
     const partnerScoped = Boolean(current.membership.partnerId) || current.membership.role === "partner" || assignedRole?.builtIn === "partner";
-    if (partnerScoped || !(canViewDashboard || canViewReports || canViewAnalytics)) return { access: "restricted" as const };
+    const hasRequestedAccess = args.scope === "savings"
+      ? canViewSavings && (canViewDashboard || canViewReports || canViewAnalytics)
+      : canViewDashboard || canViewReports || canViewAnalytics;
+    if (partnerScoped || !hasRequestedAccess) return { access: "restricted" as const };
     // Ledger entries are authoritative. dailyTotals is a write-through cache and may
     // drift after older corrections or imports, so dashboard figures are rebuilt here.
     let salesQuery = ctx.db.query("entries").withIndex("by_business_and_kind_and_date", q => q.eq("businessId", current.business._id).eq("kind", "sale").gte("occurredOn", args.from).lt("occurredOn", args.toExclusive));
@@ -448,14 +460,20 @@ export const dashboardSummary = query({
       ? balances.find((balance) => balance.account === "mobile_money")?.balanceUgx ?? 0
       : 0;
     const totalBalanceUgx = addSafeInteger(cashBalanceUgx, mobileMoneyBalanceUgx, "Liquid balance");
+    const netUgx = addSafeInteger(salesUgx, -expensesUgx, "Cashbook net");
+    const averageDailyExpensesUgx = expensesUgx / rangeDays;
     return {
       access: "ready" as const,
       salesUgx,
       expensesUgx,
-      netUgx: addSafeInteger(salesUgx, -expensesUgx, "Cashbook net"),
+      netUgx,
       cashBalanceUgx,
       mobileMoneyBalanceUgx,
       totalBalanceUgx,
+      cashBufferDays: averageDailyExpensesUgx > 0 ? Math.floor(cashBalanceUgx / averageDailyExpensesUgx) : null,
+      selectedSetAsidePercent,
+      recommendedSetAsideUgx: netUgx > 0 ? Math.round(netUgx * selectedSetAsidePercent / 100) : null,
+      setAsideScenarios: netUgx > 0 ? [10, 20, 30].map(percent => { const monthlyUgx = Math.round(netUgx * percent / 100); let yearlyUgx = 0; for (let month = 0; month < 12; month += 1) yearlyUgx = addSafeInteger(yearlyUgx, monthlyUgx, "Annual set-aside estimate"); return { percent, monthlyUgx, yearlyUgx }; }) : [],
       accountFilterComplete,
       days: days.map(({ day, salesUgx, expensesUgx }) => ({
         day,

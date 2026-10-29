@@ -1074,6 +1074,32 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .savings-allocation-legend i { width:8px; height:8px; border-radius:50%; }
 .savings-allocation-legend span { overflow:hidden; color:var(--mn-muted); text-overflow:ellipsis; white-space:nowrap; }
 .savings-allocation-legend b { font-variant-numeric:tabular-nums; }
+.savings-summary-grid { gap:10px; }
+.savings-stat-card { min-height:112px; padding:12px; }
+.savings-stat-card > .eyebrow { min-height:21px; font-size:8px; }
+.savings-stat-card > strong { min-height:34px; font-size:clamp(18px,1.5vw,24px); }
+.savings-stat-card > strong.savings-stat-neutral { font-size:15px; }
+.savings-stat-card > div { padding-top:5px; font-size:9px; }
+.savings-primary-grid { gap:10px; align-items:start; }
+.savings-holdings-card,.savings-add-card { min-height:166px; padding:14px; }
+.savings-holdings-card .card-heading { align-items:flex-start; }
+.savings-inline-add-trigger { flex:none; padding:7px 10px; font-size:10px; }
+.savings-add-card { display:flex; flex-direction:column; align-items:stretch; }
+.savings-add-card .card-heading { margin-bottom:5px; }
+.savings-add-card .card-title { margin:3px 0 0; }
+.savings-add-label { display:block; margin:0 0 6px; }
+.savings-add-card .card-subtitle { margin:0 0 8px; font-size:9px; line-height:1.35; }
+.savings-add-form { flex:1; display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:6px; align-content:start; }
+.savings-add-form .field { min-width:0; display:grid; gap:4px; }
+.savings-add-form .field label,.savings-add-balance > span { color:var(--mn-muted); font-size:8px; letter-spacing:.05em; text-transform:uppercase; }
+.savings-add-form .field input { min-width:0; min-height:34px; padding:7px 9px; border:1px solid color-mix(in srgb,var(--mn-accent) 10%,var(--mn-line)); border-radius:var(--mn-radius-sm); background:var(--mn-accent-bg); color:var(--mn-ink); font-size:10px; }
+.savings-add-balance { grid-column:1/-1; display:flex; align-items:center; justify-content:space-between; gap:8px; padding-top:7px; border-top:1px solid var(--mn-line); }
+.savings-add-balance strong { color:var(--mn-muted); font-size:9px; font-weight:500; text-align:right; }
+.savings-add-form .button { grid-column:1/-1; justify-self:start; min-height:30px; margin:0; padding:6px 12px; font-size:10px; }
+.savings-secondary-grid { gap:10px; align-items:start; }
+.savings-secondary-grid > .board-section-card { min-height:138px; padding:14px; }
+.savings-planner-card .muted-note { font-size:9px; }
+.savings-allocation-content { min-height:112px; }
 @media(max-width:1050px) {
   .savings-summary-grid { grid-template-columns:repeat(3,minmax(0,1fr)); }
   .savings-secondary-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
@@ -1087,3 +1113,13 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .savings-allocation-content { justify-content:flex-start; }
   .savings-plan-head,.savings-plan-row { grid-template-columns:.7fr 1fr 1fr; }
 }
+.savings-target-form { border-top:1px solid var(--mn-line); margin-top:12px; padding-top:10px; }
+.savings-target-form > label,.savings-set-aside-control > label { display:block; color:var(--mn-muted); font-size:10px; font-weight:600; margin-bottom:6px; }
+.savings-target-controls { display:grid; grid-template-columns:minmax(0,1fr) minmax(100px,.8fr) auto; gap:6px; }
+.savings-target-controls select,.savings-target-controls input { min-width:0; width:100%; min-height:34px; padding:7px 9px; border:1px solid var(--mn-line); border-radius:var(--mn-radius-sm); background:var(--mn-surface); color:var(--mn-ink); font-size:11px; }
+.savings-set-aside-control { margin:10px 0 12px; padding:10px; border-radius:var(--mn-radius-sm); background:var(--mn-inset); }
+.savings-set-aside-value { display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:center; gap:10px; }
+.savings-set-aside-value input { width:100%; accent-color:var(--mn-accent); }
+.savings-set-aside-value strong { color:var(--mn-accent); font-variant-numeric:tabular-nums; }
+.savings-set-aside-control .muted-note { margin:5px 0 0; font-size:10px; }
+@media(max-width:700px) { .savings-target-controls { grid-template-columns:1fr; } }

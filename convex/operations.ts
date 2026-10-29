@@ -3,7 +3,7 @@ import { ConvexError, v } from "convex/values";
 import { mutation, query } from "./_generated/server";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import type { Id } from "./_generated/dataModel";
-import { hasPermission } from "./accessControl";
+import { hasPermission, permissionsForMembership } from "./accessControl";
 import { getSelectedWorkspace } from "./workspaceContext";
 import { getAuthUserId } from "@convex-dev/auth/server";
 
@@ -124,9 +124,10 @@ export const overview = query({
     v.object({ access: v.literal("pending") }),
     v.object({ access: v.literal("restricted") }),
     v.object({
-      access: v.literal("ready"), businessId: v.id("businesses"), role: membershipRoleV,
+      access: v.literal("ready"), businessId: v.id("businesses"), role: membershipRoleV, permissions: v.array(v.string()),
       movements: v.array(v.object({ _id: v.id("movements"), kind: v.union(v.literal("transfer"), v.literal("withdrawal"), v.literal("deposit"), v.literal("capital_contribution")), amountUgx: v.number(), feeUgx: v.optional(v.number()), fromAccount: v.optional(accountV), toAccount: v.optional(accountV), partnerName: v.optional(v.string()), occurredOn: v.string(), note: v.string(), state: v.union(v.literal("posted"), v.literal("void")), voidReason: v.optional(v.string()) })),
-      savings: v.array(v.object({ _id: v.id("savingsHoldings"), name: v.string(), targetUgx: v.optional(v.number()), balanceUgx: v.number(), active: v.boolean() })),
+      savings: v.array(v.object({ _id: v.id("savingsHoldings"), name: v.string(), targetUgx: v.optional(v.number()), balanceUgx: v.number(), active: v.boolean(), targetProgressPercent: v.optional(v.number()), allocationPercent: v.number(), allocationStartPercent: v.number(), allocationEndPercent: v.number() })),
+      savingsSummary: v.object({ currentValueUgx: v.number(), currentValueComplete: v.boolean(), activeHoldingsCount: v.number(), allocationTotalUgx: v.number(), contributionsUgx: v.number(), contributionCount: v.number(), contributionsComplete: v.boolean() }),
       savingsFlows: v.array(v.object({ _id: v.id("savingsFlows"), holdingName: v.string(), kind: v.union(v.literal("contribution"), v.literal("withdrawal")), amountUgx: v.number(), account: accountV, occurredOn: v.string(), note: v.string(), state: v.union(v.literal("posted"), v.literal("void")), voidReason: v.optional(v.string()), canReverse: v.boolean() })),
       loans: v.array(v.object({ _id: v.id("loans"), lender: v.string(), principalUgx: v.number(), outstandingPrincipalUgx: v.number(), annualRateBps: v.number(), termMonths: v.number(), startedOn: v.string(), account: accountV, status: v.union(v.literal("active"), v.literal("paid_off")) })),
       loanRepayments: v.array(v.object({ _id: v.id("loanRepayments"), lender: v.string(), amountUgx: v.number(), principalUgx: v.number(), interestUgx: v.number(), account: accountV, paidOn: v.string(), state: v.union(v.literal("posted"), v.literal("void")), voidReason: v.optional(v.string()) })),
@@ -155,6 +156,7 @@ export const overview = query({
     const businessId = current.business._id;
     let movementsQuery = ctx.db.query("movements").withIndex("by_business_and_date", q => q.eq("businessId", businessId).gte("occurredOn", args.from).lt("occurredOn", args.toExclusive));
     let savingsFlowsQuery = ctx.db.query("savingsFlows").withIndex("by_business_and_date", q => q.eq("businessId", businessId).gte("occurredOn", args.from).lt("occurredOn", args.toExclusive));
+    let savingsSummaryFlowsQuery = ctx.db.query("savingsFlows").withIndex("by_business_and_date", q => q.eq("businessId", businessId).gte("occurredOn", args.from).lt("occurredOn", args.toExclusive));
     let loansQuery = ctx.db.query("loans").withIndex("by_business_and_status", q => q.eq("businessId", businessId).eq("status", "active"));
     let repaymentsQuery = ctx.db.query("loanRepayments").withIndex("by_business_and_date", q => q.eq("businessId", businessId).gte("paidOn", args.from).lt("paidOn", args.toExclusive));
     let billsQuery = ctx.db.query("bills").withIndex("by_business_and_active_due", q => q.eq("businessId", businessId).eq("active", true));
@@ -163,16 +165,18 @@ export const overview = query({
     if (args.account) {
       movementsQuery = movementsQuery.filter(q => q.or(q.eq(q.field("fromAccount"), args.account!), q.eq(q.field("toAccount"), args.account!)));
       savingsFlowsQuery = savingsFlowsQuery.filter(q => q.eq(q.field("account"), args.account!));
+      savingsSummaryFlowsQuery = savingsSummaryFlowsQuery.filter(q => q.eq(q.field("account"), args.account!));
       loansQuery = loansQuery.filter(q => q.eq(q.field("account"), args.account!));
       repaymentsQuery = repaymentsQuery.filter(q => q.eq(q.field("account"), args.account!));
       billsQuery = billsQuery.filter(q => q.eq(q.field("account"), args.account!));
       billPaymentsQuery = billPaymentsQuery.filter(q => q.eq(q.field("account"), args.account!));
       reconciliationsQuery = reconciliationsQuery.filter(q => q.eq(q.field("account"), args.account!));
     }
-    const [movements, savings, savingsFlows, loans, loanRepayments, bills, billPayments, reconciliations, partners] = await Promise.all([
+    const [movements, savings, savingsFlows, savingsSummaryFlows, loans, loanRepayments, bills, billPayments, reconciliations, partners] = await Promise.all([
       movementsQuery.order("desc").take(100),
       ctx.db.query("savingsHoldings").withIndex("by_business_and_active", q => q.eq("businessId", businessId).eq("active", true)).take(101),
       savingsFlowsQuery.order("desc").take(100),
+      savingsSummaryFlowsQuery.order("desc").take(5001),
       loansQuery.take(101),
       repaymentsQuery.order("desc").take(100),
       billsQuery.take(101),
@@ -197,10 +201,27 @@ export const overview = query({
     });
     const paymentBills = await Promise.all(billPayments.map(row => ctx.db.get("bills", row.billId)));
     const billById = new Map(paymentBills.flatMap(item => item?.businessId === businessId ? [[item._id, item] as const] : []));
+    const currentValueUgx = savings.reduce((sum, row) => safeAdd(sum, row.balanceUgx, "Savings current value"), 0);
+    const allocationTotalUgx = savings.reduce((sum, row) => safeAdd(sum, row.balanceUgx, "Savings allocation"), 0);
+    const contributionRows = savingsSummaryFlows.filter(row => (row.state ?? "posted") === "posted" && row.kind === "contribution");
+    const contributionsUgx = contributionRows.reduce((sum, row) => safeAdd(sum, row.amountUgx, "Savings contributions"), 0);
+    let allocationPosition = 0;
+    const savingsWithMetrics = savings.map((row, index) => {
+      const allocationPercent = allocationTotalUgx > 0 ? row.balanceUgx / allocationTotalUgx * 100 : 0;
+      const allocationStartPercent = allocationPosition;
+      allocationPosition += allocationPercent;
+      return {
+        _id: row._id, name: row.name, targetUgx: row.targetUgx, balanceUgx: row.balanceUgx, active: row.active,
+        targetProgressPercent: row.targetUgx && row.targetUgx > 0 ? Math.min(100, Math.round(row.balanceUgx / row.targetUgx * 100)) : undefined,
+        allocationPercent, allocationStartPercent, allocationEndPercent: allocationPosition,
+      };
+    });
     return {
       access: "ready" as const, businessId: current.business._id, role: current.membership.role,
+      permissions: await permissionsForMembership(ctx, current.membership),
       movements: canViewMovements ? movements.filter(row => !args.account || row.fromAccount === args.account || row.toAccount === args.account).map(row => ({ _id: row._id, kind: row.kind, amountUgx: row.amountUgx, feeUgx: row.feeUgx, fromAccount: row.fromAccount, toAccount: row.toAccount, partnerName: row.partnerId ? partnerById.get(row.partnerId) : undefined, occurredOn: row.occurredOn, note: row.note, state: row.state, voidReason: row.voidReason })) : [],
-      savings: canViewSavings ? savings.map(row => ({ _id: row._id, name: row.name, targetUgx: row.targetUgx, balanceUgx: row.balanceUgx, active: row.active })) : [],
+      savings: canViewSavings ? savingsWithMetrics : [],
+      savingsSummary: canViewSavings ? { currentValueUgx, currentValueComplete: savings.length < 101, activeHoldingsCount: savings.filter(row => row.active).length, allocationTotalUgx, contributionsUgx, contributionCount: contributionRows.length, contributionsComplete: savingsSummaryFlows.length < 5001 } : { currentValueUgx: 0, currentValueComplete: true, activeHoldingsCount: 0, allocationTotalUgx: 0, contributionsUgx: 0, contributionCount: 0, contributionsComplete: true },
       savingsFlows: canViewSavings ? savingsFlows.filter(row => !args.account || row.account === args.account).map(row => { const holding = holdingById.get(row.holdingId); return { _id: row._id, holdingName: holding?.name ?? "Inactive holding", kind: row.kind, amountUgx: row.amountUgx, account: row.account, occurredOn: row.occurredOn, note: row.note, state: row.state ?? "posted", voidReason: row.voidReason, canReverse: holding?.active === true }; }) : [],
       loans: canViewLoans ? loans.filter(row => !args.account || row.account === args.account).map(row => ({ _id: row._id, lender: row.lender, principalUgx: row.principalUgx, outstandingPrincipalUgx: row.outstandingPrincipalUgx, annualRateBps: row.annualRateBps, termMonths: row.termMonths, startedOn: row.startedOn, account: row.account, status: row.status })) : [],
       loanRepayments: canViewLoans ? loanRepayments.filter(row => !args.account || row.account === args.account).map(row => ({ _id: row._id, lender: loanById.get(row.loanId) ?? "Loan", amountUgx: row.amountUgx, principalUgx: row.principalUgx, interestUgx: row.interestUgx, account: row.account, paidOn: row.paidOn, state: row.state ?? "posted", voidReason: row.voidReason })) : [],
