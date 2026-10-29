@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useMutation, usePaginatedQuery, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
@@ -20,6 +20,7 @@ export function CsvImportPanel() {
   const reverseBatchChunk = useMutation(api.imports.reverseBatchChunk);
   const [fileName, setFileName] = useState("");
   const [fileText, setFileText] = useState("");
+  const fileReadId = useRef(0);
   const [pastedText, setPastedText] = useState("");
   const [inputMode, setInputMode] = useState<"csv" | "text">("csv");
   const [csvRows, setCsvRows] = useState<CsvRow[]>([]);
@@ -37,16 +38,18 @@ export function CsvImportPanel() {
     try { return { rows: parsePlainTextExpenses(pastedText, defaultAccount), error: "" }; }
     catch (e) { return { rows: [] as ImportRow[], error: e instanceof Error ? e.message : "Could not read the pasted expenses." }; }
   }, [pastedText, defaultAccount]);
-  const looksCentipid = csvRows[0]?.[0]?.trim() === "Centipid Analytics Report";
+  const looksCentipid = inputMode === "csv" && csvRows[0]?.[0]?.trim() === "Centipid Analytics Report";
   const headers = csvRows[0] ?? [];
   function currentBusinessId() { if (settings?.access !== "ready") throw new Error("Workspace is still loading."); return settings.businessId; }
 
   async function chooseFile(file?: File) {
+    const readId = ++fileReadId.current;
     setInputMode("csv"); setPastedText(""); setError(""); setMessage(""); setCsvRows([]); setFileText(""); setFileName("");
     if (!file) return;
     if (!file.name.toLowerCase().endsWith(".csv") || file.size > 5 * 1024 * 1024) { setError("Choose a CSV file up to 5 MB."); return; }
     try {
       const text = await file.text();
+      if (readId !== fileReadId.current) return;
       const rows = parseCsv(text.replace(/^\uFEFF/, ""));
       if (!rows.length || rows.length > 10_001) throw new Error("Use a CSV with a header and no more than 10,000 data rows.");
       setFileName(file.name); setFileText(text); setCsvRows(rows);
@@ -55,7 +58,7 @@ export function CsvImportPanel() {
         const pick = (names: string[]) => h.findIndex(x => names.includes(x));
         setMapping({ date: pick(["date", "occurred_on", "transaction date"]), amount: pick(["amount", "amount_ugx", "value"]), category: pick(["category", "expense_category", "description"]), note: pick(["note", "memo", "details"]), account: pick(["account", "payment method"]), kind: pick(["kind", "entry_type", "transaction_type"]) });
       }
-    } catch (e) { setError(e instanceof Error ? e.message : "Could not read the CSV."); }
+    } catch (e) { if (readId === fileReadId.current) setError(e instanceof Error ? e.message : "Could not read the CSV."); }
   }
 
   function flatRows(): ImportRow[] {
@@ -156,6 +159,7 @@ export function CsvImportPanel() {
   }
 
   function changeInputMode(mode: "csv" | "text") {
+    fileReadId.current++;
     setInputMode(mode); setFileName(""); setFileText(""); setPastedText(""); setCsvRows([]); setError(""); setMessage("");
   }
 

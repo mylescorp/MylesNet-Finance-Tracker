@@ -55,13 +55,15 @@ export function parsePlainTextExpenses(text: string, defaultAccount: "cash" | "m
   const records: Array<{ cells: string[]; line: number }> = [];
   let current: { cells: string[]; line: number } | undefined;
   const lines = text.replace(/^\uFEFF/, "").replace(/\r\n?/g, "\n").split("\n");
-  const isRecordStart = (line: string) => pastedDate(line.split("\t", 1)[0] ?? "") !== null;
+  const firstCell = (line: string) => line.split("\t", 1)[0]?.trim() ?? "";
+  const isDateShaped = (line: string) => /^[A-Za-z]{3,9}\s+\d{1,2},\s*\d{4},/.test(firstCell(line));
   const finish = () => { if (current) records.push(current); current = undefined; };
 
   for (let index = 0; index < lines.length; index++) {
     const line = lines[index];
     if (!line.trim()) continue;
-    if (isRecordStart(line)) {
+    if (isDateShaped(line)) {
+      if (!pastedDate(firstCell(line))) throw new Error(`Line ${index + 1}: the date and time are not recognized.`);
       finish();
       current = { cells: line.split("\t"), line: index + 1 };
       continue;
@@ -74,6 +76,12 @@ export function parsePlainTextExpenses(text: string, defaultAccount: "cash" | "m
     const isPaymentContinuation = /^(cash|other|m[\s-]?pesa|mpesa|mobile money|airtel|centipid(?: wallet)?)$/i.test(accountName)
       && /^(?:ush|ugx|shs?\.?\s*)?\s*[\d,]+(?:\.\d+)?$/i.test(amountText);
     if (isPaymentContinuation && current.cells.length < 5) current.cells.push(...continuation);
+    else if (current.cells.length < 5 && continuation.length >= 3
+      && /^(cash|other|m[\s-]?pesa|mpesa|mobile money|airtel|centipid(?: wallet)?)$/i.test(continuation[1]?.trim() ?? "")
+      && /^(?:ush|ugx|shs?\.?\s*)?\s*[\d,]+(?:\.\d+)?$/i.test(continuation[2]?.trim() ?? "")) {
+      current.cells[2] = `${current.cells[2] ?? ""}${current.cells[2] ? "\n" : ""}${continuation[0]}`;
+      current.cells.push(...continuation.slice(1));
+    }
     else {
       current.cells[2] = `${current.cells[2] ?? ""}${current.cells[2] ? "\n" : ""}${line}`;
     }
@@ -88,9 +96,10 @@ export function parsePlainTextExpenses(text: string, defaultAccount: "cash" | "m
     const category = (cells[1] ?? "").trim();
     const note = (cells[2] ?? "").trim();
     const rawAccount = (cells[3] ?? "").trim().toLowerCase();
-    const account: "cash" | "mobile_money" = !rawAccount || /^(cash|other)$/.test(rawAccount)
-      ? defaultAccount
-      : /m[\s-]?pesa|mpesa|mobile|airtel|centipid/.test(rawAccount) ? "mobile_money"
+    const account: "cash" | "mobile_money" = rawAccount === "cash"
+      ? "cash"
+      : !rawAccount || rawAccount === "other" ? defaultAccount
+        : /m[\s-]?pesa|mpesa|mobile|airtel|centipid/.test(rawAccount) ? "mobile_money"
         : (() => { throw new Error(`Line ${line}: account “${cells[3]}” is not recognized. Use Cash, M-Pesa, or Other.`); })();
     const amountText = (cells[4] ?? "").trim().replace(/^(?:ush|ugx|shs?\.?)\s*/i, "");
     let amountUgx: number;
