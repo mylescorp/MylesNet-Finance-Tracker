@@ -4,6 +4,7 @@
 @tailwind components;
 @tailwind utilities;
 
+:root { --font-geist-mono: ui-monospace, SFMono-Regular, Menlo, monospace; }
 * { box-sizing: border-box; }
 html { background: var(--mn-bg); }
 body { margin: 0; color: var(--mn-ink); background: var(--mn-bg); font-family: var(--mn-font-sans); font-size: 13px; }
