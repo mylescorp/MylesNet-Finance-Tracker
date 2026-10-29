@@ -32,13 +32,7 @@ function monthBounds(day: string) {
   return { from, toExclusive, daysInMonth, elapsedDays: date.getUTCDate() };
 }
 
-async function dailyTotals(ctx: QueryCtx, businessId: Id<"businesses">, from: string, toExclusive: string, limit: number) {
-  return await ctx.db.query("dailyTotals")
-    .withIndex("by_business_and_day", q => q.eq("businessId", businessId).gte("day", from).lt("day", toExclusive))
-    .take(limit);
-}
-
-async function accountDailyTotals(ctx: QueryCtx, businessId: Id<"businesses">, from: string, toExclusive: string, account: "cash" | "mobile_money" | "unallocated") {
+async function ledgerDailyTotals(ctx: QueryCtx, businessId: Id<"businesses">, from: string, toExclusive: string, account?: "cash" | "mobile_money" | "unallocated") {
   const [sales, expenses] = await Promise.all([
     ctx.db.query("entries").withIndex("by_business_and_kind_and_date", q => q.eq("businessId", businessId).eq("kind", "sale").gte("occurredOn", from).lt("occurredOn", toExclusive)).take(5001),
     ctx.db.query("entries").withIndex("by_business_and_kind_and_date", q => q.eq("businessId", businessId).eq("kind", "expense").gte("occurredOn", from).lt("occurredOn", toExclusive)).take(1001),
@@ -55,12 +49,12 @@ async function accountDailyTotals(ctx: QueryCtx, businessId: Id<"businesses">, f
     }
     byDay.set(day, totals);
   };
-  for (const entry of sales) if (entry.state === "posted" && entry.account === account) add(entry.occurredOn, "sale", entry.amountUgx);
-  for (const entry of expenses) if (entry.state === "posted" && entry.account === account) add(entry.occurredOn, "expense", entry.amountUgx);
+  for (const entry of sales) if (entry.state === "posted" && (!account || entry.account === account)) add(entry.occurredOn, "sale", entry.amountUgx);
+  for (const entry of expenses) if (entry.state === "posted" && (!account || entry.account === account)) add(entry.occurredOn, "expense", entry.amountUgx);
   return {
     rows: [...byDay].map(([day, totals]) => ({ day, ...totals })),
-    salesEntries: sales.filter(entry => entry.state === "posted" && entry.account === account),
-    expenseEntries: expenses.filter(entry => entry.state === "posted" && entry.account === account),
+    salesEntries: sales.filter(entry => entry.state === "posted" && (!account || entry.account === account)),
+    expenseEntries: expenses.filter(entry => entry.state === "posted" && (!account || entry.account === account)),
     salesComplete: sales.length < 5001,
     expensesComplete: expenses.length < 1001,
   };
@@ -76,7 +70,7 @@ export const overview = query({
     const callerMembership = callerId ? await ctx.db.query("memberships").withIndex("by_business_and_user", q => q.eq("businessId", args.businessId).eq("userId", callerId)).unique() : null;
     const requestedBusiness = callerMembership?.active ? await ctx.db.get("businesses", args.businessId) : null;
     const current = callerId && callerMembership && requestedBusiness ? { userId: callerId, membership: callerMembership, business: requestedBusiness } : null;
-    if (!current) return { access: "pending" as const };
+    if (!current || current.business.dataResetting) return { access: "pending" as const };
     const { membership, business } = current;
     if (!(await hasPermission(ctx, membership, "analytics.view"))) return { access: "restricted" as const };
 
@@ -92,16 +86,13 @@ export const overview = query({
       hasPermission(ctx, membership, "bills.view"),
       hasPermission(ctx, membership, "partners.view"),
     ]);
-    const [preferences, periodRows, monthRows, runwayRows, weakRows, balances, partners, salesEntries, expenseEntries, reconciliations, movements, distributions, savingsHoldings, activeLoans, upcomingBills, recentAudit] = await Promise.all([
+    const accountRecentFrom = month.from < runwayFrom ? month.from : runwayFrom;
+    const [preferences, periodData, recentData, balances, partners, reconciliations, movements, distributions, savingsHoldings, activeLoans, upcomingBills, recentAudit, latestReset] = await Promise.all([
       ctx.db.query("workspacePreferences").withIndex("by_business", q => q.eq("businessId", business._id)).unique(),
-      dailyTotals(ctx, business._id, args.from, args.toExclusive, 370),
-      dailyTotals(ctx, business._id, month.from, month.toExclusive, 31),
-      dailyTotals(ctx, business._id, runwayFrom, shiftDay(args.today, 1), 30),
-      dailyTotals(ctx, business._id, weakFrom, shiftDay(args.today, 1), 14),
+      ledgerDailyTotals(ctx, business._id, args.from, args.toExclusive, args.account),
+      ledgerDailyTotals(ctx, business._id, accountRecentFrom, shiftDay(args.today, 1), args.account),
       ctx.db.query("accountBalances").withIndex("by_business_and_account", q => q.eq("businessId", business._id)).take(2),
       ctx.db.query("partners").withIndex("by_business_and_active", q => q.eq("businessId", business._id).eq("active", true)).take(101),
-      args.account ? Promise.resolve([]) : ctx.db.query("entries").withIndex("by_business_and_kind_and_date", q => q.eq("businessId", business._id).eq("kind", "sale").gte("occurredOn", args.from).lt("occurredOn", args.toExclusive)).take(5001),
-      args.account ? Promise.resolve([]) : ctx.db.query("entries").withIndex("by_business_and_kind_and_date", q => q.eq("businessId", business._id).eq("kind", "expense").gte("occurredOn", args.from).lt("occurredOn", args.toExclusive)).take(1001),
       ctx.db.query("reconciliations").withIndex("by_business_and_date", q => q.eq("businessId", business._id).gte("asOfDate", shiftDay(args.today, -89)).lte("asOfDate", args.today)).take(101),
       canViewMovement ? ctx.db.query("movements").withIndex("by_business_and_date", q => q.eq("businessId", business._id).gte("occurredOn", month.from).lte("occurredOn", args.today)).take(501) : Promise.resolve([]),
       canViewPartners ? ctx.db.query("partnerDistributions").withIndex("by_business_and_period_start", q => q.eq("businessId", business._id)).order("desc").take(201) : Promise.resolve([]),
@@ -109,23 +100,19 @@ export const overview = query({
       canViewLoans ? ctx.db.query("loans").withIndex("by_business_and_status", q => q.eq("businessId", business._id).eq("status", "active")).take(101) : Promise.resolve([]),
       canViewBills ? ctx.db.query("bills").withIndex("by_business_and_active_due", q => q.eq("businessId", business._id).eq("active", true).lte("nextDueOn", next30)).take(101) : Promise.resolve([]),
       canViewAudit ? ctx.db.query("auditEvents").withIndex("by_business_and_time", q => q.eq("businessId", business._id)).order("desc").take(6) : Promise.resolve([]),
+      ctx.db.query("workspaceDataResets").withIndex("by_business_and_created", q => q.eq("businessId", business._id)).order("desc").first(),
     ]);
-    const accountRecentFrom = month.from < runwayFrom ? month.from : runwayFrom;
-    const scoped = args.account ? await Promise.all([
-      accountDailyTotals(ctx, business._id, args.from, args.toExclusive, args.account),
-      accountDailyTotals(ctx, business._id, accountRecentFrom, shiftDay(args.today, 1), args.account),
-    ]) : null;
-    const scopedPeriodRows = scoped?.[0].rows ?? periodRows;
-    const scopedRecentRows = scoped?.[1].rows ?? [];
-    const scopedSalesEntries = scoped?.[0].salesEntries ?? salesEntries;
-    const scopedExpenseEntries = scoped?.[0].expenseEntries ?? expenseEntries;
-    const scopedPeriodSalesComplete = scoped ? scoped[0].salesComplete : salesEntries.length < 5001;
-    const scopedPeriodExpensesComplete = scoped ? scoped[0].expensesComplete : expenseEntries.length < 1001;
+    const scopedPeriodRows = periodData.rows;
+    const scopedRecentRows = recentData.rows;
+    const scopedSalesEntries = periodData.salesEntries;
+    const scopedExpenseEntries = periodData.expenseEntries;
+    const scopedPeriodSalesComplete = periodData.salesComplete;
+    const scopedPeriodExpensesComplete = periodData.expensesComplete;
     const scopedPeriodComplete = scopedPeriodSalesComplete && scopedPeriodExpensesComplete;
-    const scopedRecentComplete = scoped ? scoped[1].salesComplete && scoped[1].expensesComplete : true;
-    const scopedMonthRows = args.account ? scopedRecentRows.filter(row => row.day >= month.from) : monthRows;
-    const scopedRunwayRows = args.account ? scopedRecentRows.filter(row => row.day >= runwayFrom) : runwayRows;
-    const scopedWeakRows = args.account ? scopedRecentRows.filter(row => row.day >= weakFrom) : weakRows;
+    const scopedRecentComplete = recentData.salesComplete && recentData.expensesComplete;
+    const scopedMonthRows = scopedRecentRows.filter(row => row.day >= month.from);
+    const scopedRunwayRows = scopedRecentRows.filter(row => row.day >= runwayFrom);
+    const scopedWeakRows = scopedRecentRows.filter(row => row.day >= weakFrom);
     if (partners.length > 100) throw new Error("This workspace has more active partner records than analytics can safely summarize.");
 
     const byDay = new Map(scopedPeriodRows.map(row => [row.day, row]));
@@ -145,7 +132,13 @@ export const overview = query({
     const monthSales = scopedMonthRows.reduce((sum, row) => safeAdd(sum, row.salesUgx, "Month sales"), 0);
     const monthExpenses = scopedMonthRows.reduce((sum, row) => safeAdd(sum, row.expensesUgx, "Month expenses"), 0);
     const runwayExpenses = scopedRunwayRows.reduce((sum, row) => safeAdd(sum, row.expensesUgx, "Recent expenses"), 0);
-    const dailyBurnUgx = Math.round(runwayExpenses / 30);
+    const observationStart = latestReset?.completedAt ?? business.createdAt;
+    const observationStartDay = new Intl.DateTimeFormat("en-CA", { timeZone: business.timezone, year: "numeric", month: "2-digit", day: "2-digit" }).format(observationStart);
+    const earliestLedgerDay = recentData.expenseEntries.reduce<string | null>((earliest, entry) => !earliest || entry.occurredOn < earliest ? entry.occurredOn : earliest, null);
+    const availableDataStartDay = earliestLedgerDay && earliestLedgerDay < observationStartDay ? earliestLedgerDay : observationStartDay;
+    const observedCalendarDays = Math.max(1, Math.floor((Date.parse(`${args.today}T00:00:00.000Z`) - Date.parse(`${availableDataStartDay}T00:00:00.000Z`)) / 86_400_000) + 1);
+    const runwayWindowDays = Math.min(30, observedCalendarDays);
+    const dailyBurnUgx = Math.round(runwayExpenses / runwayWindowDays);
     const currencyScale = 10 ** (new Intl.NumberFormat("en", { style: "currency", currency: business.currency }).resolvedOptions().maximumFractionDigits ?? 0);
     const displayMoney = (amount: number) => new Intl.NumberFormat(preferences?.locale ?? "en-UG", { style: "currency", currency: business.currency }).format(amount / currencyScale);
     const lowCashThreshold = preferences?.lowCashAlertUgx ?? 100000 * currencyScale;
@@ -263,7 +256,7 @@ export const overview = query({
       period: { from: args.from, toExclusive: args.toExclusive, salesUgx, expensesUgx, netUgx, days },
       target: { amountUgx: salesTarget, weeklyAmountUgx: Math.round(salesTarget * 7 / month.daysInMonth), monthPaceRequiredUgx: Math.ceil(salesTarget * month.elapsedDays / month.daysInMonth), monthComplete, monthSalesUgx: monthSales, monthExpensesUgx: monthExpenses, monthNetUgx: monthSales - monthExpenses, elapsedDays: month.elapsedDays, daysInMonth: month.daysInMonth, projectedSalesUgx: Math.round(monthSales / Math.max(1, month.elapsedDays) * month.daysInMonth), requiredSalesPerDayUgx: Math.ceil(Math.max(0, salesTarget - monthSales) / Math.max(1, month.daysInMonth - month.elapsedDays)) },
       balances: { cashUgx, mobileMoneyUgx: mobileUgx, totalUgx: liquidUgx, cashShareBps: liquidUgx > 0 ? Math.round(cashUgx / liquidUgx * 10000) : 0, mobileShareBps: liquidUgx > 0 ? Math.round(mobileUgx / liquidUgx * 10000) : 0, lowCashThresholdUgx: lowCashThreshold },
-      runway: { trailingDays: 30, expensesUgx: runwayExpenses, averageDailyExpenseUgx: dailyBurnUgx, days: dailyBurnUgx > 0 ? Math.max(0, Math.floor(liquidUgx / dailyBurnUgx)) : null },
+      runway: { trailingDays: runwayWindowDays, expensesUgx: runwayExpenses, averageDailyExpenseUgx: dailyBurnUgx, days: dailyBurnUgx > 0 ? Math.max(0, Math.floor(liquidUgx / dailyBurnUgx)) : null },
       dashboardCards: {
         cashRunwayDays: cashRunwayComplete && dailyBurnUgx > 0 ? Math.max(0, Math.floor(cashUgx / dailyBurnUgx)) : null,
         cashRunwayComplete,
@@ -304,8 +297,8 @@ export const overview = query({
       issues: issueRows,
       reviewers: reviewerOptions,
       recentActivityComplete: scopedRecentComplete,
-      issuesComplete: reconciliations.length < 101 && (args.account ? scopedPeriodComplete && scopedRecentComplete : expenseEntries.length < 1001 && salesEntries.length < 5001),
-      periodActivity: { salesRowsComplete: args.account ? scopedPeriodSalesComplete : true, expenseRowsComplete: args.account ? scopedPeriodExpensesComplete : true },
+      issuesComplete: reconciliations.length < 101 && scopedPeriodComplete && scopedRecentComplete,
+      periodActivity: { salesRowsComplete: scopedPeriodSalesComplete, expenseRowsComplete: scopedPeriodExpensesComplete },
     };
   },
 });
@@ -319,7 +312,8 @@ export const reviewQueue = query({
   handler: async (ctx, args) => {
     const callerId = await getAuthUserId(ctx);
     const membership = callerId ? await ctx.db.query("memberships").withIndex("by_business_and_user", q => q.eq("businessId", args.businessId).eq("userId", callerId)).unique() : null;
-    if (!membership?.active || !(await hasPermission(ctx, membership, "reports.view"))) throw new Error("Your role cannot review the workspace issue queue.");
+    const business = membership?.active ? await ctx.db.get("businesses", args.businessId) : null;
+    if (!membership?.active || !business || business.dataResetting || !(await hasPermission(ctx, membership, "reports.view"))) throw new Error("Your role cannot review the workspace issue queue while the workspace is resetting.");
     if (args.paginationOpts.numItems > 50) throw new Error("Issue queue pages are limited to 50 records.");
     const query = args.status
       ? ctx.db.query("issueReviews").withIndex("by_business_and_status_and_updated", q => q.eq("businessId", args.businessId).eq("status", args.status!))
@@ -380,7 +374,7 @@ export const updateIssueReview = mutation({
     const callerMembership = callerId ? await ctx.db.query("memberships").withIndex("by_business_and_user", q => q.eq("businessId", args.businessId).eq("userId", callerId)).unique() : null;
     const requestedBusiness = callerMembership?.active ? await ctx.db.get("businesses", args.businessId) : null;
     const current = callerId && callerMembership && requestedBusiness ? { userId: callerId, membership: callerMembership, business: requestedBusiness } : null;
-    if (!current || !(await hasPermission(ctx, current.membership, "reports.view"))) throw new Error("Your role cannot update data-health reviews.");
+    if (!current || current.business.dataResetting || !(await hasPermission(ctx, current.membership, "reports.view"))) throw new Error("Your role cannot update data-health reviews while the workspace is resetting.");
     const { userId, business } = current;
     if (!validDay(args.from) || !validDay(args.toExclusive) || args.from >= args.toExclusive || !/^[a-z0-9-]{3,80}$/.test(args.issueId) || !Number.isSafeInteger(args.amountUgx) || args.issueKey !== `${args.from}:${args.toExclusive}:${args.issueId}:${args.amountUgx}`) throw new Error("The issue reference is invalid or has expired.");
     const note = args.note.trim();

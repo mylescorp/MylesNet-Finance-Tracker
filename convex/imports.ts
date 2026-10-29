@@ -16,7 +16,7 @@ async function ownerContext(ctx: MutationCtx | QueryCtx, businessId: Id<"busines
   if (!membership?.active) throw new ConvexError("Select an active workspace membership before importing data.");
   const business = await ctx.db.get("businesses", businessId);
   const current = business ? { userId, membership, business } : null;
-  if (!current || !(await hasPermission(ctx, current.membership, "imports.manage"))) throw new ConvexError("Your role cannot import workspace data.");
+  if (!current || current.business.dataResetting || !(await hasPermission(ctx, current.membership, "imports.manage"))) throw new ConvexError("Your role cannot import workspace data while the workspace is resetting.");
   return { userId: current.userId, business: current.business };
 }
 

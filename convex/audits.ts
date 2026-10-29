@@ -26,7 +26,7 @@ async function authorizedWorkspace(ctx: QueryCtx) {
   if (memberships.length === 20 || active.length !== 1) return null;
   const membership = active[0];
   const business = await ctx.db.get("businesses", membership.businessId);
-  if (!business || !(await hasPermission(ctx, membership, "audit.view"))) return null;
+  if (!business || business.dataResetting || !(await hasPermission(ctx, membership, "audit.view"))) return null;
   return { business, membership };
 }
 

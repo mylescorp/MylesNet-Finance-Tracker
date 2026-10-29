@@ -43,7 +43,7 @@ async function workspace(ctx: Ctx, businessId?: Id<"businesses">): Promise<Activ
   const membership = await ctx.db.query("memberships").withIndex("by_business_and_user", q => q.eq("businessId", businessId).eq("userId", userId)).unique();
   if (!membership?.active) return null;
   const business = await ctx.db.get("businesses", businessId);
-  return business ? { userId, membership, business } : null;
+  return business && !business.dataResetting ? { userId, membership, business } : null;
 }
 
 async function requireOwner(ctx: Ctx, businessId: Id<"businesses">) {

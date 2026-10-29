@@ -15,7 +15,7 @@ async function owner(ctx: Ctx, businessId: Id<"businesses">) {
   const membership = await ctx.db.query("memberships").withIndex("by_business_and_user", q => q.eq("businessId", businessId).eq("userId", userId)).unique();
   const business = membership?.active ? await ctx.db.get("businesses", businessId) : null;
   const current = business && membership ? { userId, membership, business } : null;
-  if (!current || !(await hasPermission(ctx, current.membership, "integrations.manage"))) throw new ConvexError("Your role cannot manage Google Forms.");
+  if (!current || current.business.dataResetting || !(await hasPermission(ctx, current.membership, "integrations.manage"))) throw new ConvexError("Your role cannot manage Google Forms while the workspace is resetting.");
   return { userId: current.userId, business: current.business };
 }
 
@@ -115,7 +115,7 @@ export const receive = internalMutation({
     const integration = await ctx.db.query("googleFormIntegrations").withIndex("by_token_hash", q => q.eq("tokenHash", args.tokenHash)).unique();
     if (!integration?.active) return { status: "unauthorized" as const };
     const business = await ctx.db.get("businesses", integration.businessId);
-    if (!business || args.payload.length > 16_000) return { status: "needs_review" as const, message: "Workspace or payload is invalid." };
+    if (!business || business.dataResetting || args.payload.length > 16_000) return { status: "needs_review" as const, message: "Workspace is resetting or payload is invalid." };
     const input = parseInput(args.payload);
     if (!input) return { status: "needs_review" as const, message: "Submission format is invalid." };
     const existing = await ctx.db.query("googleFormReceipts").withIndex("by_business_and_source", q => q.eq("businessId", business._id).eq("sourceKey", input.sourceKey)).unique();
