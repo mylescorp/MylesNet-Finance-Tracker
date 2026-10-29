@@ -4,7 +4,7 @@ import { useConvex, useMutation, useQuery } from "convex/react";
 import { ConvexError } from "convex/values";
 import { ArrowDownRight, ArrowUpRight, Download, Plus, Printer, Share2, X } from "lucide-react";
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { accountLabel } from "@/lib/finance";
@@ -243,6 +243,7 @@ export function BoardRoute({ route }: { route: string }) {
   const [entryLimit, setEntryLimit] = useState(100);
   const [openRecordRoute, setOpenRecordRoute] = useState<string | null>(null);
   const recordFormOpen = openRecordRoute === route;
+  useEffect(() => setOpenRecordRoute(null), [route]);
   const [shareFeedback, setShareFeedback] = useState("");
   const settings = useQuery(api.workspace.businessSettings, {});
   const access = useQuery(api.workspace.currentAccess, {});
@@ -409,7 +410,7 @@ export function BoardRoute({ route }: { route: string }) {
       </Card>)}
     </div>}
     {financeRangeError && <Card><div className="empty-state compact-empty"><strong>Choose a valid date range.</strong><span>{financeRangeError}</span></div></Card>}
-    <div hidden={Boolean(financeRangeError)}>{screen.title === "Analytics" ? <AnalyticsInsights range={range} today={today} currency={currency} scale={currencyScale} locale={locale} dateFormat={dateFormat} account={account === "all" ? undefined : account} /> : screen.title === "Needs attention" ? <AnalyticsInsights range={range} today={today} currency={currency} scale={currencyScale} locale={locale} account={account === "all" ? undefined : account} issuesOnly /> : operationalScreen ? <OperationsWorkspace screen={screen.title as "Movements" | "Savings" | "Loans" | "Partners" | "Bills" | "Reconcile"} currency={currency} scale={currencyScale} locale={locale} timezone={timezone} dateFormat={dateFormat} range={range} account={account} recordFormOpen={recordFormOpen} onRecordSaved={() => setOpenRecordRoute(null)} onOpenRecord={() => setOpenRecordRoute(route)} /> : <div className="board-grid">
+    <div hidden={Boolean(financeRangeError)}>{screen.title === "Analytics" ? <AnalyticsInsights range={range} today={today} currency={currency} scale={currencyScale} locale={locale} dateFormat={dateFormat} account={account === "all" ? undefined : account} /> : screen.title === "Needs attention" ? <AnalyticsInsights range={range} today={today} currency={currency} scale={currencyScale} locale={locale} account={account === "all" ? undefined : account} issuesOnly /> : operationalScreen ? <OperationsWorkspace key={screen.title} screen={screen.title as "Movements" | "Savings" | "Loans" | "Partners" | "Bills" | "Reconcile"} currency={currency} scale={currencyScale} locale={locale} timezone={timezone} dateFormat={dateFormat} range={range} account={account} recordFormOpen={recordFormOpen} onRecordSaved={() => setOpenRecordRoute(null)} onOpenRecord={() => setOpenRecordRoute(route)} /> : <div className="board-grid">
       {screen.entryKind && <div id="record-entry-card" hidden={!recordFormOpen}><Card className="board-feature-card">
         <div className="card-heading"><div><h2 className="card-title">{screen.entryKind === "sale" ? "Add a sale" : "Add an expense"}</h2><p className="card-subtitle">Saved values update the cashbook and account balance.</p></div></div>
         <EntryForm kind={screen.entryKind} onSaved={() => setOpenRecordRoute(null)} />
