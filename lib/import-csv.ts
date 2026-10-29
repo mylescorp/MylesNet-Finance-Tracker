@@ -56,7 +56,7 @@ export function parsePlainTextExpenses(text: string, defaultAccount: "cash" | "m
   let current: { cells: string[]; line: number } | undefined;
   const lines = text.replace(/^\uFEFF/, "").replace(/\r\n?/g, "\n").split("\n");
   const firstCell = (line: string) => line.split("\t", 1)[0]?.trim() ?? "";
-  const isDateShaped = (line: string) => /^[A-Za-z]{3,9}\s+\d{1,2},\s*\d{4},/.test(firstCell(line));
+  const isDateShaped = (line: string) => /^[A-Za-z]{3,9}\s+\d{1,2},\s*\d{4},\s*\d{1,2}:\d{2}\s*(?:AM|PM)$/i.test(firstCell(line));
   const finish = () => { if (current) records.push(current); current = undefined; };
 
   for (let index = 0; index < lines.length; index++) {
