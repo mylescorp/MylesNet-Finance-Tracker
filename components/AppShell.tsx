@@ -239,7 +239,7 @@ export function AppShell({ children }: { children: ReactNode }) {
       <aside className="app-sidebar" id="workspace-sidebar" aria-label="Workspace sidebar" role={mobileOpen ? "dialog" : undefined} aria-modal={mobileOpen || undefined}>
         <div className="sidebar-brand-row">
           <Link className="sidebar-brand" href="/dashboard" aria-label="MylesNet Finance home" onClick={() => setMobileOpen(false)}>
-            <Image src="/brand/logo.png" width={174} height={52} alt="MylesNet" priority />
+            <Image src="/brand/logo.png" width={174} height={52} alt="MylesNet" preload />
           </Link>
           <button className="sidebar-collapse-button" type="button" aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"} aria-pressed={collapsed} onClick={() => setCollapsed(value => !value)} title={collapsed ? "Expand sidebar" : "Collapse sidebar"}>
             {collapsed ? <ChevronsRight size={17} /> : <ChevronsLeft size={17} />}

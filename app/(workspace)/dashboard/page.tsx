@@ -171,7 +171,7 @@ export default function DashboardPage() {
       </div>
       <div className="dashboard-welcome-mark" aria-hidden="true"><span /><span /><span /><span /><span /><span /><span /></div>
     </section>
-    <div className="dashboard-banner"><Image src="/brand/banner.png" alt="MylesNet Finance Tracker" fill priority sizes="(max-width: 760px) 100vw, 1100px" /></div>
+    <div className="dashboard-banner"><Image src="/brand/banner.png" alt="MylesNet Finance Tracker" fill preload sizes="(max-width: 760px) 100vw, 1100px" /></div>
     <div className="board-toolbar no-print has-finance-filters">
       <FinancePeriodFilters period={period} onPeriodChange={setPeriod} customFrom={customFrom} customTo={customTo} onCustomFromChange={setCustomFrom} onCustomToChange={setCustomTo} account={account} onAccountChange={setAccount} today={businessDay} ariaLabel="Dashboard period and account filters" />
       <div className="board-toolbar-actions">
