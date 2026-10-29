@@ -2,8 +2,8 @@ import { paginationOptsValidator } from "convex/server";
 import { ConvexError, v } from "convex/values";
 import { mutation, query } from "./_generated/server";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
-import type { Id } from "./_generated/dataModel";
-import { hasPermission } from "./accessControl";
+import type { Doc, Id } from "./_generated/dataModel";
+import { hasPermission, permissionsForMembership } from "./accessControl";
 import { getSelectedWorkspace } from "./workspaceContext";
 import { getAuthUserId } from "@convex-dev/auth/server";
 
@@ -119,14 +119,15 @@ const accountV = v.union(v.literal("cash"), v.literal("mobile_money"));
 const membershipRoleV = v.string();
 
 export const overview = query({
-  args: { businessId: v.id("businesses"), from: v.string(), toExclusive: v.string() },
+  args: { businessId: v.id("businesses"), from: v.string(), toExclusive: v.string(), account: v.optional(v.union(v.literal("cash"), v.literal("mobile_money"), v.literal("unallocated"))) },
   returns: v.union(
     v.object({ access: v.literal("pending") }),
     v.object({ access: v.literal("restricted") }),
     v.object({
-      access: v.literal("ready"), businessId: v.id("businesses"), role: membershipRoleV,
+      access: v.literal("ready"), businessId: v.id("businesses"), role: membershipRoleV, permissions: v.array(v.string()), savingsSetAsidePercent: v.number(),
       movements: v.array(v.object({ _id: v.id("movements"), kind: v.union(v.literal("transfer"), v.literal("withdrawal"), v.literal("deposit"), v.literal("capital_contribution")), amountUgx: v.number(), feeUgx: v.optional(v.number()), fromAccount: v.optional(accountV), toAccount: v.optional(accountV), partnerName: v.optional(v.string()), occurredOn: v.string(), note: v.string(), state: v.union(v.literal("posted"), v.literal("void")), voidReason: v.optional(v.string()) })),
-      savings: v.array(v.object({ _id: v.id("savingsHoldings"), name: v.string(), targetUgx: v.optional(v.number()), balanceUgx: v.number(), active: v.boolean() })),
+      savings: v.array(v.object({ _id: v.id("savingsHoldings"), name: v.string(), targetUgx: v.optional(v.number()), valuationCostBasisUgx: v.optional(v.number()), valuationMarketValueUgx: v.optional(v.number()), valuationOn: v.optional(v.string()), balanceUgx: v.number(), active: v.boolean(), targetProgressPercent: v.optional(v.number()), allocationPercent: v.number(), allocationStartPercent: v.number(), allocationEndPercent: v.number() })),
+      savingsSummary: v.object({ currentValueUgx: v.number(), currentValueComplete: v.boolean(), activeHoldingsCount: v.number(), allocationTotalUgx: v.number(), contributionsUgx: v.number(), contributionCount: v.number(), withdrawalsUgx: v.number(), netFlowUgx: v.number(), contributionsComplete: v.boolean(), valuationCount: v.number(), valuationComplete: v.boolean(), valuationCostBasisUgx: v.number(), valuationMarketValueUgx: v.number(), gainLossUgx: v.number(), latestValuationOn: v.union(v.string(), v.null()) }),
       savingsFlows: v.array(v.object({ _id: v.id("savingsFlows"), holdingName: v.string(), kind: v.union(v.literal("contribution"), v.literal("withdrawal")), amountUgx: v.number(), account: accountV, occurredOn: v.string(), note: v.string(), state: v.union(v.literal("posted"), v.literal("void")), voidReason: v.optional(v.string()), canReverse: v.boolean() })),
       loans: v.array(v.object({ _id: v.id("loans"), lender: v.string(), principalUgx: v.number(), outstandingPrincipalUgx: v.number(), annualRateBps: v.number(), termMonths: v.number(), startedOn: v.string(), account: accountV, status: v.union(v.literal("active"), v.literal("paid_off")) })),
       loanRepayments: v.array(v.object({ _id: v.id("loanRepayments"), lender: v.string(), amountUgx: v.number(), principalUgx: v.number(), interestUgx: v.number(), account: accountV, paidOn: v.string(), state: v.union(v.literal("posted"), v.literal("void")), voidReason: v.optional(v.string()) })),
@@ -153,15 +154,61 @@ export const overview = query({
     if (current.membership.partnerId || (canViewPartners && ![canViewMovements, canViewSavings, canViewLoans, canViewBills, canViewReconciliation].some(Boolean))) return { access: "restricted" as const };
     if (![canViewMovements, canViewSavings, canViewLoans, canViewBills, canViewReconciliation, canViewPartners].some(Boolean)) return { access: "restricted" as const };
     const businessId = current.business._id;
-    const [movements, savings, savingsFlows, loans, loanRepayments, bills, billPayments, reconciliations, partners] = await Promise.all([
-      ctx.db.query("movements").withIndex("by_business_and_date", q => q.eq("businessId", businessId).gte("occurredOn", args.from).lt("occurredOn", args.toExclusive)).order("desc").take(100),
+    const accountFilter = args.account === "cash" || args.account === "mobile_money" ? args.account : undefined;
+    const unallocatedSelected = args.account === "unallocated";
+    const movementsRead = unallocatedSelected
+      ? Promise.resolve([] as Doc<"movements">[])
+      : accountFilter
+      ? Promise.all([
+        ctx.db.query("movements").withIndex("by_business_and_from_account_and_date", q => q.eq("businessId", businessId).eq("fromAccount", accountFilter).gte("occurredOn", args.from).lt("occurredOn", args.toExclusive)).order("desc").take(100),
+        ctx.db.query("movements").withIndex("by_business_and_to_account_and_date", q => q.eq("businessId", businessId).eq("toAccount", accountFilter).gte("occurredOn", args.from).lt("occurredOn", args.toExclusive)).order("desc").take(100),
+      ]).then(([from, to]) => [...new Map([...from, ...to].map(row => [row._id, row])).values()].sort((a, b) => b.occurredOn.localeCompare(a.occurredOn)).slice(0, 100))
+      : ctx.db.query("movements").withIndex("by_business_and_date", q => q.eq("businessId", businessId).gte("occurredOn", args.from).lt("occurredOn", args.toExclusive)).order("desc").take(100);
+    const savingsFlowsRead = unallocatedSelected
+      ? Promise.resolve([] as Doc<"savingsFlows">[])
+      : accountFilter
+      ? ctx.db.query("savingsFlows").withIndex("by_business_and_account_and_date", q => q.eq("businessId", businessId).eq("account", accountFilter).gte("occurredOn", args.from).lt("occurredOn", args.toExclusive)).order("desc").take(100)
+      : ctx.db.query("savingsFlows").withIndex("by_business_and_date", q => q.eq("businessId", businessId).gte("occurredOn", args.from).lt("occurredOn", args.toExclusive)).order("desc").take(100);
+    const savingsSummaryFlowsRead = unallocatedSelected
+      ? Promise.resolve([] as Doc<"savingsFlows">[])
+      : accountFilter
+      ? ctx.db.query("savingsFlows").withIndex("by_business_and_account_and_date", q => q.eq("businessId", businessId).eq("account", accountFilter).gte("occurredOn", args.from).lt("occurredOn", args.toExclusive)).order("desc").take(5001)
+      : ctx.db.query("savingsFlows").withIndex("by_business_and_date", q => q.eq("businessId", businessId).gte("occurredOn", args.from).lt("occurredOn", args.toExclusive)).order("desc").take(5001);
+    const loansRead = unallocatedSelected
+      ? Promise.resolve([] as Doc<"loans">[])
+      : accountFilter
+      ? ctx.db.query("loans").withIndex("by_business_and_account_and_status", q => q.eq("businessId", businessId).eq("account", accountFilter).eq("status", "active")).take(101)
+      : ctx.db.query("loans").withIndex("by_business_and_status", q => q.eq("businessId", businessId).eq("status", "active")).take(101);
+    const repaymentsRead = unallocatedSelected
+      ? Promise.resolve([] as Doc<"loanRepayments">[])
+      : accountFilter
+      ? ctx.db.query("loanRepayments").withIndex("by_business_and_account_and_date", q => q.eq("businessId", businessId).eq("account", accountFilter).gte("paidOn", args.from).lt("paidOn", args.toExclusive)).order("desc").take(100)
+      : ctx.db.query("loanRepayments").withIndex("by_business_and_date", q => q.eq("businessId", businessId).gte("paidOn", args.from).lt("paidOn", args.toExclusive)).order("desc").take(100);
+    const billsRead = unallocatedSelected
+      ? Promise.resolve([] as Doc<"bills">[])
+      : accountFilter
+      ? ctx.db.query("bills").withIndex("by_business_and_account_and_active_due", q => q.eq("businessId", businessId).eq("account", accountFilter).eq("active", true)).take(101)
+      : ctx.db.query("bills").withIndex("by_business_and_active_due", q => q.eq("businessId", businessId).eq("active", true)).take(101);
+    const billPaymentsRead = unallocatedSelected
+      ? Promise.resolve([] as Doc<"billPayments">[])
+      : accountFilter
+      ? ctx.db.query("billPayments").withIndex("by_business_and_account_and_date", q => q.eq("businessId", businessId).eq("account", accountFilter).gte("paidOn", args.from).lt("paidOn", args.toExclusive)).order("desc").take(100)
+      : ctx.db.query("billPayments").withIndex("by_business_and_date", q => q.eq("businessId", businessId).gte("paidOn", args.from).lt("paidOn", args.toExclusive)).order("desc").take(100);
+    const reconciliationsRead = unallocatedSelected
+      ? Promise.resolve([] as Doc<"reconciliations">[])
+      : accountFilter
+      ? ctx.db.query("reconciliations").withIndex("by_business_and_account_and_date", q => q.eq("businessId", businessId).eq("account", accountFilter).gte("asOfDate", args.from).lt("asOfDate", args.toExclusive)).order("desc").take(100)
+      : ctx.db.query("reconciliations").withIndex("by_business_and_date", q => q.eq("businessId", businessId).gte("asOfDate", args.from).lt("asOfDate", args.toExclusive)).order("desc").take(100);
+    const [movements, savings, savingsFlows, savingsSummaryFlows, loans, loanRepayments, bills, billPayments, reconciliations, partners] = await Promise.all([
+      movementsRead,
       ctx.db.query("savingsHoldings").withIndex("by_business_and_active", q => q.eq("businessId", businessId).eq("active", true)).take(101),
-      ctx.db.query("savingsFlows").withIndex("by_business_and_date", q => q.eq("businessId", businessId).gte("occurredOn", args.from).lt("occurredOn", args.toExclusive)).order("desc").take(100),
-      ctx.db.query("loans").withIndex("by_business_and_status", q => q.eq("businessId", businessId).eq("status", "active")).take(101),
-      ctx.db.query("loanRepayments").withIndex("by_business_and_date", q => q.eq("businessId", businessId).gte("paidOn", args.from).lt("paidOn", args.toExclusive)).order("desc").take(100),
-      ctx.db.query("bills").withIndex("by_business_and_active_due", q => q.eq("businessId", businessId).eq("active", true)).take(101),
-      ctx.db.query("billPayments").withIndex("by_business_and_date", q => q.eq("businessId", businessId).gte("paidOn", args.from).lt("paidOn", args.toExclusive)).order("desc").take(100),
-      ctx.db.query("reconciliations").withIndex("by_business_and_date", q => q.eq("businessId", businessId).gte("asOfDate", args.from).lt("asOfDate", args.toExclusive)).order("desc").take(100),
+      savingsFlowsRead,
+      savingsSummaryFlowsRead,
+      loansRead,
+      repaymentsRead,
+      billsRead,
+      billPaymentsRead,
+      reconciliationsRead,
       ctx.db.query("partners").withIndex("by_business_and_active", q => q.eq("businessId", businessId).eq("active", true)).take(101),
     ]);
     const businessToday = dayInZone(Date.now(), current.business.timezone);
@@ -181,16 +228,41 @@ export const overview = query({
     });
     const paymentBills = await Promise.all(billPayments.map(row => ctx.db.get("bills", row.billId)));
     const billById = new Map(paymentBills.flatMap(item => item?.businessId === businessId ? [[item._id, item] as const] : []));
+    const currentValueUgx = savings.reduce((sum, row) => safeAdd(sum, row.balanceUgx, "Savings current value"), 0);
+    const allocationTotalUgx = savings.reduce((sum, row) => safeAdd(sum, row.balanceUgx, "Savings allocation"), 0);
+    const savingsPreferences = canViewSavings ? await ctx.db.query("workspacePreferences").withIndex("by_business", q => q.eq("businessId", businessId)).unique() : null;
+    const contributionRows = savingsSummaryFlows.filter(row => (row.state ?? "posted") === "posted" && row.kind === "contribution");
+    const withdrawalRows = savingsSummaryFlows.filter(row => (row.state ?? "posted") === "posted" && row.kind === "withdrawal");
+    const contributionsUgx = contributionRows.reduce((sum, row) => safeAdd(sum, row.amountUgx, "Savings contributions"), 0);
+    const withdrawalsUgx = withdrawalRows.reduce((sum, row) => safeAdd(sum, row.amountUgx, "Savings withdrawals"), 0);
+    const valuedHoldings = savings.filter(row => row.valuationCostBasisUgx !== undefined && row.valuationMarketValueUgx !== undefined);
+    const valuationCostBasisUgx = valuedHoldings.reduce((sum, row) => safeAdd(sum, row.valuationCostBasisUgx!, "Savings valuation basis"), 0);
+    const valuationMarketValueUgx = valuedHoldings.reduce((sum, row) => safeAdd(sum, row.valuationMarketValueUgx!, "Savings valuation"), 0);
+    const gainLossUgx = safeAdd(valuationMarketValueUgx, -valuationCostBasisUgx, "Savings valuation gain or loss");
+    const latestValuationOn = valuedHoldings.map(row => row.valuationOn).filter((date): date is string => date !== undefined).sort().at(-1) ?? null;
+    let allocationPosition = 0;
+    const savingsWithMetrics = savings.map((row, index) => {
+      const allocationPercent = allocationTotalUgx > 0 ? row.balanceUgx / allocationTotalUgx * 100 : 0;
+      const allocationStartPercent = allocationPosition;
+      allocationPosition += allocationPercent;
+      return {
+        _id: row._id, name: row.name, targetUgx: row.targetUgx, valuationCostBasisUgx: row.valuationCostBasisUgx, valuationMarketValueUgx: row.valuationMarketValueUgx, valuationOn: row.valuationOn, balanceUgx: row.balanceUgx, active: row.active,
+        targetProgressPercent: row.targetUgx && row.targetUgx > 0 ? Math.min(100, Math.round(row.balanceUgx / row.targetUgx * 100)) : undefined,
+        allocationPercent, allocationStartPercent, allocationEndPercent: allocationPosition,
+      };
+    });
     return {
-      access: "ready" as const, businessId: current.business._id, role: current.membership.role,
-      movements: canViewMovements ? movements.map(row => ({ _id: row._id, kind: row.kind, amountUgx: row.amountUgx, feeUgx: row.feeUgx, fromAccount: row.fromAccount, toAccount: row.toAccount, partnerName: row.partnerId ? partnerById.get(row.partnerId) : undefined, occurredOn: row.occurredOn, note: row.note, state: row.state, voidReason: row.voidReason })) : [],
-      savings: canViewSavings ? savings.map(row => ({ _id: row._id, name: row.name, targetUgx: row.targetUgx, balanceUgx: row.balanceUgx, active: row.active })) : [],
-      savingsFlows: canViewSavings ? savingsFlows.map(row => { const holding = holdingById.get(row.holdingId); return { _id: row._id, holdingName: holding?.name ?? "Inactive holding", kind: row.kind, amountUgx: row.amountUgx, account: row.account, occurredOn: row.occurredOn, note: row.note, state: row.state ?? "posted", voidReason: row.voidReason, canReverse: holding?.active === true }; }) : [],
-      loans: canViewLoans ? loans.map(row => ({ _id: row._id, lender: row.lender, principalUgx: row.principalUgx, outstandingPrincipalUgx: row.outstandingPrincipalUgx, annualRateBps: row.annualRateBps, termMonths: row.termMonths, startedOn: row.startedOn, account: row.account, status: row.status })) : [],
-      loanRepayments: canViewLoans ? loanRepayments.map(row => ({ _id: row._id, lender: loanById.get(row.loanId) ?? "Loan", amountUgx: row.amountUgx, principalUgx: row.principalUgx, interestUgx: row.interestUgx, account: row.account, paidOn: row.paidOn, state: row.state ?? "posted", voidReason: row.voidReason })) : [],
-      bills: canViewBills ? bills.map(row => ({ _id: row._id, name: row.name, category: row.category, amountUgx: row.amountUgx, account: row.account, recurrence: row.recurrence, nextDueOn: row.nextDueOn, active: row.active })) : [],
-      billPayments: canViewBills ? billPayments.map(row => { const bill = billById.get(row.billId); return { _id: row._id, billName: bill?.name ?? "Inactive bill", amountUgx: row.amountUgx, account: row.account, paidOn: row.paidOn, state: row.state ?? "posted", voidReason: row.voidReason, canReverse: row.state !== "void" && !!row.priorNextDueOn && !!row.nextDueOnAfter && row.priorScheduleStartDueOn !== undefined && row.priorScheduleAnchorDay !== undefined && row.priorScheduleEndOfMonth !== undefined && row.nextScheduleStartDueOn !== undefined && row.nextScheduleAnchorDay !== undefined && row.nextScheduleEndOfMonth !== undefined && bill?.nextDueOn === row.nextDueOnAfter && bill.scheduleStartDueOn === row.nextScheduleStartDueOn && bill.scheduleAnchorDay === row.nextScheduleAnchorDay && bill.scheduleEndOfMonth === row.nextScheduleEndOfMonth }; }) : [],
-      reconciliations: canViewReconciliation ? reconciliations.map(row => ({ _id: row._id, account: row.account, asOfDate: row.asOfDate, bookBalanceUgx: row.bookBalanceUgx, countedBalanceUgx: row.countedBalanceUgx, varianceUgx: row.varianceUgx, status: row.status, note: row.note, explanation: row.explanation, supersedesId: row.supersedesId })) : [],
+      access: "ready" as const, businessId: current.business._id, role: current.membership.role, savingsSetAsidePercent: savingsPreferences?.savingsSetAsidePercent ?? 30,
+      permissions: await permissionsForMembership(ctx, current.membership),
+      movements: canViewMovements ? movements.filter(row => !args.account || row.fromAccount === args.account || row.toAccount === args.account).map(row => ({ _id: row._id, kind: row.kind, amountUgx: row.amountUgx, feeUgx: row.feeUgx, fromAccount: row.fromAccount, toAccount: row.toAccount, partnerName: row.partnerId ? partnerById.get(row.partnerId) : undefined, occurredOn: row.occurredOn, note: row.note, state: row.state, voidReason: row.voidReason })) : [],
+      savings: canViewSavings ? savingsWithMetrics : [],
+      savingsSummary: canViewSavings ? { currentValueUgx, currentValueComplete: savings.length < 101, activeHoldingsCount: savings.filter(row => row.active).length, allocationTotalUgx, contributionsUgx, contributionCount: contributionRows.length, withdrawalsUgx, netFlowUgx: safeAdd(contributionsUgx, -withdrawalsUgx, "Savings net flow"), contributionsComplete: savingsSummaryFlows.length < 5001, valuationCount: valuedHoldings.length, valuationComplete: savings.length < 101 && valuedHoldings.length === savings.length, valuationCostBasisUgx, valuationMarketValueUgx, gainLossUgx, latestValuationOn } : { currentValueUgx: 0, currentValueComplete: true, activeHoldingsCount: 0, allocationTotalUgx: 0, contributionsUgx: 0, contributionCount: 0, withdrawalsUgx: 0, netFlowUgx: 0, contributionsComplete: true, valuationCount: 0, valuationComplete: true, valuationCostBasisUgx: 0, valuationMarketValueUgx: 0, gainLossUgx: 0, latestValuationOn: null },
+      savingsFlows: canViewSavings ? savingsFlows.filter(row => !args.account || row.account === args.account).map(row => { const holding = holdingById.get(row.holdingId); return { _id: row._id, holdingName: holding?.name ?? "Inactive holding", kind: row.kind, amountUgx: row.amountUgx, account: row.account, occurredOn: row.occurredOn, note: row.note, state: row.state ?? "posted", voidReason: row.voidReason, canReverse: holding?.active === true }; }) : [],
+      loans: canViewLoans ? loans.filter(row => !args.account || row.account === args.account).map(row => ({ _id: row._id, lender: row.lender, principalUgx: row.principalUgx, outstandingPrincipalUgx: row.outstandingPrincipalUgx, annualRateBps: row.annualRateBps, termMonths: row.termMonths, startedOn: row.startedOn, account: row.account, status: row.status })) : [],
+      loanRepayments: canViewLoans ? loanRepayments.filter(row => !args.account || row.account === args.account).map(row => ({ _id: row._id, lender: loanById.get(row.loanId) ?? "Loan", amountUgx: row.amountUgx, principalUgx: row.principalUgx, interestUgx: row.interestUgx, account: row.account, paidOn: row.paidOn, state: row.state ?? "posted", voidReason: row.voidReason })) : [],
+      bills: canViewBills ? bills.filter(row => !args.account || row.account === args.account).map(row => ({ _id: row._id, name: row.name, category: row.category, amountUgx: row.amountUgx, account: row.account, recurrence: row.recurrence, nextDueOn: row.nextDueOn, active: row.active })) : [],
+      billPayments: canViewBills ? billPayments.filter(row => !args.account || row.account === args.account).map(row => { const bill = billById.get(row.billId); return { _id: row._id, billName: bill?.name ?? "Inactive bill", amountUgx: row.amountUgx, account: row.account, paidOn: row.paidOn, state: row.state ?? "posted", voidReason: row.voidReason, canReverse: row.state !== "void" && !!row.priorNextDueOn && !!row.nextDueOnAfter && row.priorScheduleStartDueOn !== undefined && row.priorScheduleAnchorDay !== undefined && row.priorScheduleEndOfMonth !== undefined && row.nextScheduleStartDueOn !== undefined && row.nextScheduleAnchorDay !== undefined && row.nextScheduleEndOfMonth !== undefined && bill?.nextDueOn === row.nextDueOnAfter && bill.scheduleStartDueOn === row.nextScheduleStartDueOn && bill.scheduleAnchorDay === row.nextScheduleAnchorDay && bill.scheduleEndOfMonth === row.nextScheduleEndOfMonth }; }) : [],
+      reconciliations: canViewReconciliation ? reconciliations.filter(row => !args.account || row.account === args.account).map(row => ({ _id: row._id, account: row.account, asOfDate: row.asOfDate, bookBalanceUgx: row.bookBalanceUgx, countedBalanceUgx: row.countedBalanceUgx, varianceUgx: row.varianceUgx, status: row.status, note: row.note, explanation: row.explanation, supersedesId: row.supersedesId })) : [],
       partners: canViewPartners ? currentPartnerShares.map(row => ({ _id: row._id, name: row.name, ownershipBps: row.ownershipBps, active: row.active })) : [],
     };
   },
@@ -229,7 +301,7 @@ export const partnerArchive = query({
 // Partner accounts receive only their own identity, ownership percentage, and
 // attributed capital contributions. Business-wide ledger totals stay private.
 export const partnerStatement = query({
-  args: { businessId: v.id("businesses"), from: v.string(), toExclusive: v.string() },
+  args: { businessId: v.id("businesses"), from: v.string(), toExclusive: v.string(), account: v.optional(v.union(v.literal("cash"), v.literal("mobile_money"), v.literal("unallocated"))) },
   handler: async (ctx, args) => {
     if (!validDay(args.from) || !validDay(args.toExclusive) || args.from >= args.toExclusive) throw new Error("Choose a valid statement date range.");
     const current = await workspace(ctx, args.businessId);
@@ -284,9 +356,9 @@ export const partnerStatement = query({
       capitalTotalComplete: legacyCapital.complete,
       distributions: distributions.filter((row): row is NonNullable<typeof row> => row !== null && ["approved", "partially_paid", "paid"].includes(row.status)),
       distributionsComplete: distributionItems.length < 501,
-      payouts: payouts.filter((row): row is NonNullable<typeof row> => row !== null),
+      payouts: payouts.filter((row): row is NonNullable<typeof row> => row !== null && (!args.account || row.account === args.account)),
       payoutsComplete: payoutRows.length < 501,
-      contributions: contributions.filter(row => row.kind === "capital_contribution" && row.state === "posted").map(row => ({
+      contributions: contributions.filter(row => row.kind === "capital_contribution" && row.state === "posted" && (!args.account || (row.toAccount ?? "cash") === args.account)).map(row => ({
         _id: row._id, occurredOn: row.occurredOn, amountUgx: row.amountUgx, account: row.toAccount ?? "cash", note: row.note,
       })),
     };
@@ -434,7 +506,7 @@ export const createSavingsHolding = mutation({
 });
 
 export const updateSavingsHolding = mutation({
-  args: { businessId: v.id("businesses"), holdingId: v.id("savingsHoldings"), action: v.union(v.literal("edit"), v.literal("archive"), v.literal("restore")), expectedActive: v.boolean(), name: v.string(), targetUgx: v.optional(v.number()) },
+  args: { businessId: v.id("businesses"), holdingId: v.id("savingsHoldings"), action: v.union(v.literal("edit"), v.literal("archive"), v.literal("restore")), expectedActive: v.boolean(), name: v.string(), targetUgx: v.optional(v.number()), valuationAction: v.optional(v.union(v.literal("keep"), v.literal("set"), v.literal("clear"))), valuationCostBasisUgx: v.optional(v.number()), valuationMarketValueUgx: v.optional(v.number()), valuationOn: v.optional(v.string()) },
   returns: v.null(),
   handler: async (ctx, args) => {
     const current = await workspace(ctx, args.businessId);
@@ -461,10 +533,50 @@ export const updateSavingsHolding = mutation({
     if (name.length < 2 || name.length > 80 || (args.targetUgx !== undefined && (!Number.isSafeInteger(args.targetUgx) || args.targetUgx <= 0))) throw new Error("Savings holding details are invalid.");
     const active = await ctx.db.query("savingsHoldings").withIndex("by_business_and_active", q => q.eq("businessId", current.business._id).eq("active", true)).take(101);
     if (active.some(row => row._id !== holding._id && row.name.toLowerCase() === name.toLowerCase())) throw new Error("An active savings holding with this name already exists.");
-    const before = { name: holding.name, targetUgx: holding.targetUgx, active: holding.active };
-    const after = { name, targetUgx: args.targetUgx, active: true };
+    const valuationAction = args.valuationAction ?? "keep";
+    if (valuationAction === "set" && (!Number.isSafeInteger(args.valuationCostBasisUgx) || args.valuationCostBasisUgx! < 0 || !Number.isSafeInteger(args.valuationMarketValueUgx) || args.valuationMarketValueUgx! < 0 || !validDay(args.valuationOn ?? "") || args.valuationOn! > dayInZone(Date.now(), current.business.timezone))) throw new Error("Enter a valid valuation date no later than today and non-negative whole-unit values for cost basis and current value.");
+    const before = { name: holding.name, targetUgx: holding.targetUgx, active: holding.active, valuationCostBasisUgx: holding.valuationCostBasisUgx, valuationMarketValueUgx: holding.valuationMarketValueUgx, valuationOn: holding.valuationOn };
+    const valuationPatch = valuationAction === "clear"
+      ? { valuationCostBasisUgx: undefined, valuationMarketValueUgx: undefined, valuationOn: undefined }
+      : valuationAction === "set"
+        ? { valuationCostBasisUgx: args.valuationCostBasisUgx, valuationMarketValueUgx: args.valuationMarketValueUgx, valuationOn: args.valuationOn }
+        : {};
+    const after = { name, targetUgx: args.targetUgx, active: true, ...valuationPatch };
     await ctx.db.patch("savingsHoldings", holding._id, after);
-    await ctx.db.insert("auditEvents", { businessId: current.business._id, actorId: current.userId, action: "savings.holding_updated", entityType: "savingsHolding", entityId: holding._id, occurredAt: Date.now(), summary: `Updated savings holding: ${name}.`, details: JSON.stringify({ before, after }) });
+    await ctx.db.insert("auditEvents", { businessId: current.business._id, actorId: current.userId, action: valuationAction === "keep" ? "savings.holding_updated" : valuationAction === "set" ? "savings.valuation_updated" : "savings.valuation_cleared", entityType: "savingsHolding", entityId: holding._id, occurredAt: Date.now(), summary: valuationAction === "keep" ? `Updated savings holding: ${name}.` : valuationAction === "set" ? `Recorded a manual valuation for ${name}.` : `Cleared the manual valuation for ${name}.`, details: JSON.stringify({ before, after }) });
+    return null;
+  },
+});
+
+export const saveSavingsPlannerPercent = mutation({
+  args: { businessId: v.id("businesses"), percent: v.union(v.number(), v.null()) },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const current = await workspace(ctx, args.businessId);
+    if (!current || !(await hasPermission(ctx, current.membership, "savings.update"))) throw new Error("Your role cannot change savings planning preferences.");
+    if (args.percent !== null && (!Number.isInteger(args.percent) || args.percent < 0 || args.percent > 100)) throw new Error("Choose a whole-number set-aside share from 0% to 100%.");
+    const preferences = await ctx.db.query("workspacePreferences").withIndex("by_business", q => q.eq("businessId", current.business._id)).unique();
+    const now = Date.now();
+    if (preferences) await ctx.db.patch("workspacePreferences", preferences._id, { savingsSetAsidePercent: args.percent === null ? undefined : args.percent, updatedAt: now, updatedBy: current.userId });
+    else if (args.percent !== null) await ctx.db.insert("workspacePreferences", { businessId: current.business._id, savingsSetAsidePercent: args.percent, updatedAt: now, updatedBy: current.userId });
+    await ctx.db.insert("auditEvents", { businessId: current.business._id, actorId: current.userId, action: args.percent === null ? "savings.planner_reset" : "savings.planner_updated", entityType: "workspacePreferences", entityId: preferences?._id ?? current.business._id, occurredAt: now, summary: args.percent === null ? "Reset the savings set-aside share to the 30% default." : `Set the savings planner share to ${args.percent}%.` });
+    return null;
+  },
+});
+
+export const saveSavingsCashBufferThreshold = mutation({
+  args: { businessId: v.id("businesses"), thresholdUgx: v.number() },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const current = await workspace(ctx, args.businessId);
+    if (!current || !(await hasPermission(ctx, current.membership, "settings.update"))) throw new Error("Your role cannot change the workspace cash-buffer alert.");
+    if (!Number.isSafeInteger(args.thresholdUgx) || args.thresholdUgx < 0) throw new Error("Enter a non-negative whole-unit cash-alert threshold.");
+    const preferences = await ctx.db.query("workspacePreferences").withIndex("by_business", q => q.eq("businessId", current.business._id)).unique();
+    const now = Date.now();
+    const currencyScale = 10 ** (new Intl.NumberFormat("en", { style: "currency", currency: current.business.currency }).resolvedOptions().maximumFractionDigits ?? 0);
+    if (preferences) await ctx.db.patch("workspacePreferences", preferences._id, { lowCashAlertUgx: args.thresholdUgx, updatedAt: now, updatedBy: current.userId });
+    else await ctx.db.insert("workspacePreferences", { businessId: current.business._id, lowCashAlertUgx: args.thresholdUgx, updatedAt: now, updatedBy: current.userId });
+    await ctx.db.insert("auditEvents", { businessId: current.business._id, actorId: current.userId, action: "savings.cash_buffer_alert_updated", entityType: "workspacePreferences", entityId: preferences?._id ?? current.business._id, occurredAt: now, summary: args.thresholdUgx === 0 ? "Disabled the savings low-cash alert." : `Updated the savings low-cash alert to ${args.thresholdUgx}.`, details: JSON.stringify({ beforeUgx: preferences?.lowCashAlertUgx ?? 100_000 * currencyScale, afterUgx: args.thresholdUgx }) });
     return null;
   },
 });
@@ -492,6 +604,69 @@ export const recordSavingsFlow = mutation({
     const flowId = await ctx.db.insert("savingsFlows", { businessId: current.business._id, holdingId: holding._id, kind: args.kind, amountUgx: args.amountUgx, account: args.account, occurredOn: args.occurredOn, note: args.note.trim(), idempotencyKey: args.idempotencyKey, createdBy: current.userId, createdAt: Date.now() });
     await audit(ctx, current, `savings.${args.kind}`, "savingsFlow", flowId, `${args.kind} · ${args.amountUgx} · ${args.occurredOn}`);
     return flowId;
+  },
+});
+
+export const recordWeeklySavingsContributions = mutation({
+  args: {
+    businessId: v.id("businesses"), holdingId: v.id("savingsHoldings"), amountUgx: v.number(), account: accountV, weekday: v.number(),
+    startOn: v.string(), latestOn: v.string(), note: v.string(), idempotencyKey: v.string(), confirmNegativeBalance: v.optional(v.boolean()),
+  },
+  returns: v.array(v.id("savingsFlows")),
+  handler: async (ctx, args) => {
+    const current = await workspace(ctx, args.businessId);
+    if (!current || !(await hasPermission(ctx, current.membership, "savings.create"))) throw new Error("Your role cannot record savings activity.");
+    if (!Number.isSafeInteger(args.amountUgx) || args.amountUgx <= 0 || !Number.isInteger(args.weekday) || args.weekday < 0 || args.weekday > 6 || !validDay(args.startOn) || !validDay(args.latestOn) || args.startOn > args.latestOn || args.note.length > 300 || args.idempotencyKey.length < 16 || args.idempotencyKey.length > 80) {
+      throw new Error("Weekly savings details are invalid.");
+    }
+    const existingBatch = await ctx.db.query("savingsContributionBatches").withIndex("by_business_and_idempotency", q => q.eq("businessId", current.business._id).eq("idempotencyKey", args.idempotencyKey)).unique();
+    if (existingBatch) {
+      assertSameRequest(existingBatch.holdingId === args.holdingId && existingBatch.amountUgx === args.amountUgx && existingBatch.account === args.account && existingBatch.weekday === args.weekday && existingBatch.startOn === args.startOn && existingBatch.latestOn === args.latestOn && existingBatch.note === args.note.trim());
+      return existingBatch.flowIds;
+    }
+    if (args.latestOn > dayInZone(Date.now(), current.business.timezone)) throw new Error("Weekly savings contributions can only be backdated through today. Record future contributions after they happen.");
+    const holding = await ctx.db.get("savingsHoldings", args.holdingId);
+    if (!holding || holding.businessId !== current.business._id || !holding.active) throw new Error("Savings holding is not available.");
+
+    const start = new Date(`${args.startOn}T00:00:00.000Z`);
+    const latest = new Date(`${args.latestOn}T00:00:00.000Z`);
+    const firstSelectedDay = new Date(start);
+    firstSelectedDay.setUTCDate(firstSelectedDay.getUTCDate() + ((args.weekday - firstSelectedDay.getUTCDay() + 7) % 7));
+    const dates: string[] = [];
+    for (const date = new Date(firstSelectedDay); date <= latest; date.setUTCDate(date.getUTCDate() + 7)) {
+      dates.push(date.toISOString().slice(0, 10));
+      if (dates.length > 520) throw new Error("Choose a range of 520 weekly contributions or fewer (up to 10 years).");
+    }
+    if (dates.length === 0) throw new Error("The selected range contains no contribution day. Extend the latest date to include the selected weekday.");
+    if (!Number.isSafeInteger(args.amountUgx * dates.length)) throw new Error("The total contribution is too large to record safely.");
+
+    let holdingBalanceUgx = holding.balanceUgx;
+    const flowIds: Id<"savingsFlows">[] = [];
+    for (const occurredOn of dates) {
+      const idempotencyKey = `${args.idempotencyKey}:${occurredOn}`;
+      const existing = await ctx.db.query("savingsFlows").withIndex("by_business_and_idempotency", q => q.eq("businessId", current.business._id).eq("idempotencyKey", idempotencyKey)).unique();
+      if (existing) {
+        assertSameRequest(existing.holdingId === args.holdingId && existing.kind === "contribution" && existing.amountUgx === args.amountUgx && existing.account === args.account && existing.occurredOn === occurredOn && existing.note === args.note.trim());
+        flowIds.push(existing._id);
+        continue;
+      }
+      await checkOutflow(ctx, current.business._id, args.account, -args.amountUgx, args.confirmNegativeBalance ?? false);
+      await applyAccountDelta(ctx, current.business._id, args.account, -args.amountUgx);
+      holdingBalanceUgx = safeAdd(holdingBalanceUgx, args.amountUgx, "Savings balance");
+      const flowId = await ctx.db.insert("savingsFlows", {
+        businessId: current.business._id, holdingId: holding._id, kind: "contribution", amountUgx: args.amountUgx, account: args.account,
+        occurredOn, note: args.note.trim(), idempotencyKey, createdBy: current.userId, createdAt: Date.now(),
+      });
+      await audit(ctx, current, "savings.contribution", "savingsFlow", flowId, `contribution · ${args.amountUgx} · ${occurredOn}`);
+      flowIds.push(flowId);
+    }
+    if (holdingBalanceUgx !== holding.balanceUgx) await ctx.db.patch("savingsHoldings", holding._id, { balanceUgx: holdingBalanceUgx });
+    await ctx.db.insert("savingsContributionBatches", {
+      businessId: current.business._id, holdingId: holding._id, amountUgx: args.amountUgx, account: args.account, weekday: args.weekday,
+      startOn: args.startOn, latestOn: args.latestOn, note: args.note.trim(), idempotencyKey: args.idempotencyKey, flowIds,
+      createdBy: current.userId, createdAt: Date.now(),
+    });
+    return flowIds;
   },
 });
 

@@ -19,6 +19,7 @@ export const PERMISSIONS = [
 export type Permission = typeof PERMISSIONS[number];
 
 const OWNER = [...PERMISSIONS];
+const MEMBER: Permission[] = ["dashboard.view", "analytics.view"];
 const CASHIER: Permission[] = ["dashboard.view", "sales.view", "sales.create", "expenses.view", "expenses.create", "reports.view"];
 const PARTNER: Permission[] = ["dashboard.view", "partners.view"];
 const FINANCE_APPROVER: Permission[] = ["partners.view", "partners.distributions.approve"];
@@ -28,6 +29,9 @@ export async function permissionsForMembership(ctx: QueryCtx | MutationCtx, memb
   if (membership.roleId) {
     const role = await ctx.db.get("workspaceRoles", membership.roleId);
     if (!role || !role.active || role.businessId !== membership.businessId) return [] as string[];
+    // The default Member template is intentionally fixed. Owners can create a
+    // separate custom role when they want to grant additional access.
+    if (role.builtIn === "member") return MEMBER;
     return role.permissions;
   }
   const templates = await ctx.db.query("workspaceRoles")
@@ -35,6 +39,7 @@ export async function permissionsForMembership(ctx: QueryCtx | MutationCtx, memb
     .take(100);
   const legacyTemplate = templates.find(role => role.builtIn === membership.role || role.name.toLowerCase() === membership.role.toLowerCase());
   if (legacyTemplate?.active) return legacyTemplate.permissions;
+  if (membership.role === "member") return MEMBER;
   if (membership.role === "cashier") return CASHIER;
   if (membership.role === "partner") return PARTNER;
   if (membership.role === "finance_approver") return FINANCE_APPROVER;

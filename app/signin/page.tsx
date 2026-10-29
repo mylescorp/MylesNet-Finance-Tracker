@@ -16,18 +16,18 @@ export default function SignInPage() {
       const redirectTo = requested.startsWith("/") && !requested.startsWith("//") ? requested : "/dashboard";
       await signIn("google", { redirectTo });
     }
-    catch { setError("Sign-in could not start. Please try again."); setPending(false); }
+    catch { setError("Google sign-in could not start. This deployment may not have OAuth configured; ask the administrator to check Google sign-in settings."); setPending(false); }
   }
   return <main className="signin-frame" suppressHydrationWarning>
     <section className="card signin-card">
       <Link href="/" aria-label="MylesNet home"><Image className="signin-logo" src="/brand/logo.png" width={190} height={58} alt="MylesNet" priority /></Link>
       <h1 className="page-title" style={{ marginTop: 8 }}>Sign in to MylesNet</h1>
-      <p className="page-description" style={{ marginBottom: 22 }}>Sign in with Google. An invitation or workspace administrator approval is required before you can view finance data.</p>
+      <p className="page-description" style={{ marginBottom: 22 }}>Sign in with Google. New accounts join the single MylesNet workspace automatically as a limited Member. An owner must reactivate disabled access; accounts with multiple workspaces can choose one after signing in.</p>
       <button className="button" style={{ width: "100%", height: 44 }} type="button" onClick={() => void startGoogleSignIn()} disabled={pending}>
         <span className="google-mark" aria-hidden="true">G</span>{pending ? "Connecting to Google…" : "Continue with Google"}
       </button>
       {error && <p className="form-error" role="alert">{error}</p>}
-      <p className="muted-note" style={{ marginTop: 18, fontSize: 12 }}>Signing in does not grant finance access automatically. If you were not invited, your account will appear in the workspace owner’s pending users list for approval.</p>
+      <p className="muted-note" style={{ marginTop: 18, fontSize: 12 }}>Member access includes dashboard and analytics only. It cannot view individual records, record transactions, or change workspace settings.</p>
     </section>
   </main>;
 }

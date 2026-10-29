@@ -70,7 +70,7 @@ export default defineSchema({
     name: v.string(),
     description: v.string(),
     permissions: v.array(v.string()),
-    builtIn: v.optional(v.union(v.literal("owner"), v.literal("partner"), v.literal("cashier"), v.literal("finance_approver"))),
+    builtIn: v.optional(v.union(v.literal("owner"), v.literal("member"), v.literal("partner"), v.literal("cashier"), v.literal("finance_approver"))),
     active: v.boolean(),
     createdBy: v.id("users"),
     createdAt: v.number(),
@@ -88,6 +88,7 @@ export default defineSchema({
     monthlySalesTargetUgx: v.optional(v.number()),
     monthlyExpenseWarningUgx: v.optional(v.number()),
     lowCashAlertUgx: v.optional(v.number()),
+    savingsSetAsidePercent: v.optional(v.number()),
     duplicateWindowDays: v.optional(v.number()),
     requireEntryNote: v.optional(v.boolean()),
     negativeBalanceWarning: v.optional(v.boolean()),
@@ -213,6 +214,8 @@ export default defineSchema({
   })
     .index("by_business_and_date", ["businessId", "occurredOn"])
     .index("by_business_and_kind_and_date", ["businessId", "kind", "occurredOn"])
+    .index("by_business_and_account_and_date", ["businessId", "account", "occurredOn"])
+    .index("by_business_and_kind_and_account_and_date", ["businessId", "kind", "account", "occurredOn"])
     .index("by_business_and_idempotency", ["businessId", "idempotencyKey"])
     .searchIndex("search_note", { searchField: "note", filterFields: ["businessId"] })
     .searchIndex("search_category", { searchField: "category", filterFields: ["businessId"] }),
@@ -282,12 +285,17 @@ export default defineSchema({
     voidReason: v.optional(v.string()),
   })
     .index("by_business_and_date", ["businessId", "occurredOn"])
+    .index("by_business_and_from_account_and_date", ["businessId", "fromAccount", "occurredOn"])
+    .index("by_business_and_to_account_and_date", ["businessId", "toAccount", "occurredOn"])
     .index("by_business_and_partner_and_date", ["businessId", "partnerId", "occurredOn"])
     .index("by_business_and_idempotency", ["businessId", "idempotencyKey"]),
   savingsHoldings: defineTable({
     businessId: v.id("businesses"),
     name: v.string(),
     targetUgx: v.optional(v.number()),
+    valuationCostBasisUgx: v.optional(v.number()),
+    valuationMarketValueUgx: v.optional(v.number()),
+    valuationOn: v.optional(v.string()),
     balanceUgx: v.number(),
     active: v.boolean(),
     createdBy: v.id("users"),
@@ -311,8 +319,23 @@ export default defineSchema({
     voidReason: v.optional(v.string()),
   })
     .index("by_business_and_date", ["businessId", "occurredOn"])
+    .index("by_business_and_account_and_date", ["businessId", "account", "occurredOn"])
     .index("by_business_and_idempotency", ["businessId", "idempotencyKey"])
     .index("by_holding_and_date", ["holdingId", "occurredOn"]),
+  savingsContributionBatches: defineTable({
+    businessId: v.id("businesses"),
+    holdingId: v.id("savingsHoldings"),
+    amountUgx: v.number(),
+    account: v.union(v.literal("cash"), v.literal("mobile_money")),
+    weekday: v.number(),
+    startOn: v.string(),
+    latestOn: v.string(),
+    note: v.string(),
+    idempotencyKey: v.string(),
+    flowIds: v.array(v.id("savingsFlows")),
+    createdBy: v.id("users"),
+    createdAt: v.number(),
+  }).index("by_business_and_idempotency", ["businessId", "idempotencyKey"]),
   loans: defineTable({
     businessId: v.id("businesses"),
     lender: v.string(),
@@ -329,6 +352,7 @@ export default defineSchema({
     createdAt: v.number(),
   })
     .index("by_business_and_status", ["businessId", "status"])
+    .index("by_business_and_account_and_status", ["businessId", "account", "status"])
     .index("by_business_and_idempotency", ["businessId", "idempotencyKey"]),
   loanRepayments: defineTable({
     businessId: v.id("businesses"),
@@ -347,6 +371,7 @@ export default defineSchema({
     voidReason: v.optional(v.string()),
   })
     .index("by_business_and_date", ["businessId", "paidOn"])
+    .index("by_business_and_account_and_date", ["businessId", "account", "paidOn"])
     .index("by_business_and_idempotency", ["businessId", "idempotencyKey"])
     .index("by_loan_and_date", ["loanId", "paidOn"]),
   bills: defineTable({
@@ -364,7 +389,7 @@ export default defineSchema({
     createdBy: v.id("users"),
     createdAt: v.number(),
     idempotencyKey: v.string(),
-  }).index("by_business_and_active_due", ["businessId", "active", "nextDueOn"]).index("by_business_and_idempotency", ["businessId", "idempotencyKey"]),
+  }).index("by_business_and_active_due", ["businessId", "active", "nextDueOn"]).index("by_business_and_account_and_active_due", ["businessId", "account", "active", "nextDueOn"]).index("by_business_and_idempotency", ["businessId", "idempotencyKey"]),
   billPayments: defineTable({
     businessId: v.id("businesses"),
     billId: v.id("bills"),
@@ -389,6 +414,7 @@ export default defineSchema({
     voidReason: v.optional(v.string()),
   })
     .index("by_business_and_date", ["businessId", "paidOn"])
+    .index("by_business_and_account_and_date", ["businessId", "account", "paidOn"])
     .index("by_business_and_idempotency", ["businessId", "idempotencyKey"])
     .index("by_bill_and_date", ["billId", "paidOn"])
     .index("by_bill_and_created_at", ["billId", "createdAt"]),
@@ -408,7 +434,7 @@ export default defineSchema({
     resolvedAt: v.optional(v.number()),
     createdBy: v.id("users"),
     createdAt: v.number(),
-  }).index("by_business_and_date", ["businessId", "asOfDate"]).index("by_business_and_idempotency", ["businessId", "idempotencyKey"]).index("by_business_and_supersedes", ["businessId", "supersedesId"]),
+  }).index("by_business_and_date", ["businessId", "asOfDate"]).index("by_business_and_account_and_date", ["businessId", "account", "asOfDate"]).index("by_business_and_idempotency", ["businessId", "idempotencyKey"]).index("by_business_and_supersedes", ["businessId", "supersedesId"]),
   auditEvents: defineTable({
     businessId: v.id("businesses"),
     actorId: v.id("users"),

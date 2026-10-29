@@ -21,6 +21,7 @@ export function FinancePeriodFilters({
   account,
   onAccountChange,
   today,
+  ariaLabel = "Finance filters",
 }: {
   period: FinancePeriod;
   onPeriodChange: (period: FinancePeriod) => void;
@@ -31,8 +32,9 @@ export function FinancePeriodFilters({
   account: FinanceAccount;
   onAccountChange: (account: FinanceAccount) => void;
   today: string;
+  ariaLabel?: string;
 }) {
-  return <section className="finance-filter-bar no-print" aria-label="Analytics filters">
+  return <section className="finance-filter-bar no-print" aria-label={ariaLabel}>
     <div className="finance-period-tabs" role="group" aria-label="Reporting period">
       {options.map(option => <button key={option.value} type="button" className={`finance-period-tab${period === option.value ? " is-active" : ""}`} aria-pressed={period === option.value} onClick={() => onPeriodChange(option.value)}>{option.label}</button>)}
     </div>

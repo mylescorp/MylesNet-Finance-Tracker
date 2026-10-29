@@ -358,6 +358,8 @@ export const dashboardSummary = query({
     from: v.string(),
     toExclusive: v.string(),
     account: v.optional(v.union(v.literal("cash"), v.literal("mobile_money"), v.literal("unallocated"))),
+    setAsidePercent: v.optional(v.number()),
+    scope: v.optional(v.literal("savings")),
   },
   returns: v.union(
     v.object({ access: v.literal("setup") }),
@@ -371,12 +373,20 @@ export const dashboardSummary = query({
       cashBalanceUgx: v.number(),
       mobileMoneyBalanceUgx: v.number(),
       totalBalanceUgx: v.number(),
+      periodTotals: v.object({ salesUgx: v.number(), expensesUgx: v.number(), netUgx: v.number() }),
+      monthTotals: v.array(v.object({ month: v.string(), salesUgx: v.number(), expensesUgx: v.number(), netUgx: v.number() })),
+      categoryTotals: v.object({ sales: v.array(v.object({ category: v.string(), amountUgx: v.number(), sharePercent: v.number() })), expenses: v.array(v.object({ category: v.string(), amountUgx: v.number(), sharePercent: v.number() })) }),
+      cashBufferDays: v.union(v.number(), v.null()),
+      selectedSetAsidePercent: v.number(),
+      recommendedSetAsideUgx: v.union(v.number(), v.null()),
+      setAsideScenarios: v.array(v.object({ percent: v.number(), monthlyUgx: v.number(), yearlyUgx: v.number() })),
       accountFilterComplete: v.boolean(),
       days: v.array(
         v.object({
           day: v.string(),
           salesUgx: v.number(),
           expensesUgx: v.number(),
+          netUgx: v.number(),
         }),
       ),
     }),
@@ -389,6 +399,8 @@ export const dashboardSummary = query({
     ) {
       throw new Error("Choose a valid date range.");
     }
+    const selectedSetAsidePercent = args.setAsidePercent ?? 30;
+    if (!Number.isInteger(selectedSetAsidePercent) || selectedSetAsidePercent < 0 || selectedSetAsidePercent > 100) throw new Error("Set-aside percentage must be a whole number from 0 to 100.");
     const rangeDays =
       (Date.parse(`${args.toExclusive}T00:00:00.000Z`) -
         Date.parse(`${args.from}T00:00:00.000Z`)) /
@@ -399,20 +411,27 @@ export const dashboardSummary = query({
       const businesses = await ctx.db.query("businesses").take(1);
       return { access: businesses.length === 0 ? "setup" as const : "pending" as const };
     }
-    const [canViewDashboard, canViewReports, canViewAnalytics] = await Promise.all([
+    const [canViewDashboard, canViewReports, canViewAnalytics, canViewSavings] = await Promise.all([
       hasPermission(ctx, current.membership, "dashboard.view"),
       hasPermission(ctx, current.membership, "reports.view"),
       hasPermission(ctx, current.membership, "analytics.view"),
+      hasPermission(ctx, current.membership, "savings.view"),
     ]);
     const assignedRole = current.membership.roleId ? await ctx.db.get("workspaceRoles", current.membership.roleId) : null;
     const partnerScoped = Boolean(current.membership.partnerId) || current.membership.role === "partner" || assignedRole?.builtIn === "partner";
-    if (partnerScoped || !(canViewDashboard || canViewReports || canViewAnalytics)) return { access: "restricted" as const };
+    const hasRequestedAccess = args.scope === "savings"
+      ? canViewSavings && (canViewDashboard || canViewReports || canViewAnalytics)
+      : canViewDashboard || canViewReports || canViewAnalytics;
+    if (partnerScoped || !hasRequestedAccess) return { access: "restricted" as const };
     // Ledger entries are authoritative. dailyTotals is a write-through cache and may
     // drift after older corrections or imports, so dashboard figures are rebuilt here.
-    const [sales, expenses] = await Promise.all([
-      ctx.db.query("entries").withIndex("by_business_and_kind_and_date", q => q.eq("businessId", current.business._id).eq("kind", "sale").gte("occurredOn", args.from).lt("occurredOn", args.toExclusive)).take(5001),
-      ctx.db.query("entries").withIndex("by_business_and_kind_and_date", q => q.eq("businessId", current.business._id).eq("kind", "expense").gte("occurredOn", args.from).lt("occurredOn", args.toExclusive)).take(1001),
-    ]);
+    let salesQuery = args.account
+      ? ctx.db.query("entries").withIndex("by_business_and_kind_and_account_and_date", q => q.eq("businessId", current.business._id).eq("kind", "sale").eq("account", args.account!).gte("occurredOn", args.from).lt("occurredOn", args.toExclusive))
+      : ctx.db.query("entries").withIndex("by_business_and_kind_and_date", q => q.eq("businessId", current.business._id).eq("kind", "sale").gte("occurredOn", args.from).lt("occurredOn", args.toExclusive));
+    let expensesQuery = args.account
+      ? ctx.db.query("entries").withIndex("by_business_and_kind_and_account_and_date", q => q.eq("businessId", current.business._id).eq("kind", "expense").eq("account", args.account!).gte("occurredOn", args.from).lt("occurredOn", args.toExclusive))
+      : ctx.db.query("entries").withIndex("by_business_and_kind_and_date", q => q.eq("businessId", current.business._id).eq("kind", "expense").gte("occurredOn", args.from).lt("occurredOn", args.toExclusive));
+    const [sales, expenses] = await Promise.all([salesQuery.take(5001), expensesQuery.take(1001)]);
     const accountFilterComplete = sales.length < 5001 && expenses.length < 1001;
     const byDay = new Map<string, { salesUgx: number; expensesUgx: number }>();
     const addEntry = (day: string, kind: "sale" | "expense", amountUgx: number) => {
@@ -445,19 +464,48 @@ export const dashboardSummary = query({
       ? balances.find((balance) => balance.account === "mobile_money")?.balanceUgx ?? 0
       : 0;
     const totalBalanceUgx = addSafeInteger(cashBalanceUgx, mobileMoneyBalanceUgx, "Liquid balance");
+    const netUgx = addSafeInteger(salesUgx, -expensesUgx, "Cashbook net");
+    const monthTotalsMap = new Map<string, { salesUgx: number; expensesUgx: number }>();
+    for (const day of days) {
+      const month = day.day.slice(0, 7);
+      const totals = monthTotalsMap.get(month) ?? { salesUgx: 0, expensesUgx: 0 };
+      totals.salesUgx = addSafeInteger(totals.salesUgx, day.salesUgx, "Monthly sales");
+      totals.expensesUgx = addSafeInteger(totals.expensesUgx, day.expensesUgx, "Monthly expenses");
+      monthTotalsMap.set(month, totals);
+    }
+    const monthTotals = [...monthTotalsMap].sort(([first], [second]) => first.localeCompare(second)).map(([month, totals]) => ({ month, ...totals, netUgx: addSafeInteger(totals.salesUgx, -totals.expensesUgx, "Monthly net") }));
+    const categoryAmounts = (categoryEntries: typeof sales, kind: "sale" | "expense") => {
+      const totals = new Map<string, number>();
+      for (const entry of categoryEntries) {
+        if (entry.state !== "posted" || entry.kind !== kind || args.account && entry.account !== args.account) continue;
+        totals.set(entry.category, addSafeInteger(totals.get(entry.category) ?? 0, entry.amountUgx, `${kind} category total`));
+      }
+      const rows = [...totals].map(([category, amountUgx]) => ({ category, amountUgx })).sort((first, second) => second.amountUgx - first.amountUgx);
+      const total = rows.reduce((sum, row) => addSafeInteger(sum, row.amountUgx, `${kind} categories total`), 0);
+      return rows.map(row => ({ ...row, sharePercent: total > 0 ? Math.round(row.amountUgx / total * 100) : 0 }));
+    };
+    const averageDailyExpensesUgx = expensesUgx / rangeDays;
     return {
       access: "ready" as const,
       salesUgx,
       expensesUgx,
-      netUgx: addSafeInteger(salesUgx, -expensesUgx, "Cashbook net"),
+      netUgx,
       cashBalanceUgx,
       mobileMoneyBalanceUgx,
       totalBalanceUgx,
+      periodTotals: { salesUgx, expensesUgx, netUgx },
+      monthTotals,
+      categoryTotals: { sales: categoryAmounts(sales, "sale"), expenses: categoryAmounts(expenses, "expense") },
+      cashBufferDays: averageDailyExpensesUgx > 0 ? Math.floor(cashBalanceUgx / averageDailyExpensesUgx) : null,
+      selectedSetAsidePercent,
+      recommendedSetAsideUgx: netUgx > 0 ? Math.round(netUgx * selectedSetAsidePercent / 100) : null,
+      setAsideScenarios: netUgx > 0 ? [10, 20, 30].map(percent => { const monthlyUgx = Math.round(netUgx * percent / 100); let yearlyUgx = 0; for (let month = 0; month < 12; month += 1) yearlyUgx = addSafeInteger(yearlyUgx, monthlyUgx, "Annual set-aside estimate"); return { percent, monthlyUgx, yearlyUgx }; }) : [],
       accountFilterComplete,
       days: days.map(({ day, salesUgx, expensesUgx }) => ({
         day,
         salesUgx,
         expensesUgx,
+        netUgx: addSafeInteger(salesUgx, -expensesUgx, "Daily net"),
       })),
     };
   },
@@ -524,7 +572,7 @@ export const balanceOverview = query({
 });
 
 export const recentEntries = query({
-  args: { limit: v.optional(v.number()), kind: v.optional(v.union(v.literal("sale"), v.literal("expense"))), from: v.optional(v.string()), toExclusive: v.optional(v.string()) },
+  args: { limit: v.optional(v.number()), kind: v.optional(v.union(v.literal("sale"), v.literal("expense"))), from: v.optional(v.string()), toExclusive: v.optional(v.string()), account: v.optional(v.union(v.literal("cash"), v.literal("mobile_money"), v.literal("unallocated"))) },
   returns: v.array(
     v.object({
       _id: v.id("entries"),
@@ -548,18 +596,27 @@ export const recentEntries = query({
     if (args.kind === "sale" && !canViewSales || args.kind === "expense" && !canViewExpenses) return [];
     const limit = Math.max(1, Math.min(Math.floor(args.limit ?? 10), 500));
     if ((args.from && !isIsoDay(args.from)) || (args.toExclusive && !isIsoDay(args.toExclusive)) || (args.from && args.toExclusive && args.from >= args.toExclusive)) throw new Error("Choose a valid entry date range.");
-    const rows = args.kind
-      ? await ctx.db.query("entries").withIndex("by_business_and_kind_and_date", q =>
-        args.from && args.toExclusive ? q.eq("businessId", current.business._id).eq("kind", args.kind!).gte("occurredOn", args.from).lt("occurredOn", args.toExclusive)
-          : args.from ? q.eq("businessId", current.business._id).eq("kind", args.kind!).gte("occurredOn", args.from)
-          : args.toExclusive ? q.eq("businessId", current.business._id).eq("kind", args.kind!).lt("occurredOn", args.toExclusive)
-          : q.eq("businessId", current.business._id).eq("kind", args.kind!)).order("desc").take(limit)
-      : await ctx.db.query("entries").withIndex("by_business_and_date", q =>
-        args.from && args.toExclusive ? q.eq("businessId", current.business._id).gte("occurredOn", args.from).lt("occurredOn", args.toExclusive)
-          : args.from ? q.eq("businessId", current.business._id).gte("occurredOn", args.from)
-          : args.toExclusive ? q.eq("businessId", current.business._id).lt("occurredOn", args.toExclusive)
-          : q.eq("businessId", current.business._id)).order("desc").take(limit);
-    const visibleRows = rows.filter(row => row.kind === "sale" ? canViewSales : canViewExpenses);
+    let entriesQuery = args.kind && args.account
+      ? ctx.db.query("entries").withIndex("by_business_and_kind_and_account_and_date", q => {
+        const base = q.eq("businessId", current.business._id).eq("kind", args.kind!).eq("account", args.account!);
+        return args.from && args.toExclusive ? base.gte("occurredOn", args.from).lt("occurredOn", args.toExclusive) : args.from ? base.gte("occurredOn", args.from) : args.toExclusive ? base.lt("occurredOn", args.toExclusive) : base;
+      })
+      : args.kind
+        ? ctx.db.query("entries").withIndex("by_business_and_kind_and_date", q => {
+          const base = q.eq("businessId", current.business._id).eq("kind", args.kind!);
+          return args.from && args.toExclusive ? base.gte("occurredOn", args.from).lt("occurredOn", args.toExclusive) : args.from ? base.gte("occurredOn", args.from) : args.toExclusive ? base.lt("occurredOn", args.toExclusive) : base;
+        })
+        : args.account
+          ? ctx.db.query("entries").withIndex("by_business_and_account_and_date", q => {
+            const base = q.eq("businessId", current.business._id).eq("account", args.account!);
+            return args.from && args.toExclusive ? base.gte("occurredOn", args.from).lt("occurredOn", args.toExclusive) : args.from ? base.gte("occurredOn", args.from) : args.toExclusive ? base.lt("occurredOn", args.toExclusive) : base;
+          })
+          : ctx.db.query("entries").withIndex("by_business_and_date", q => {
+            const base = q.eq("businessId", current.business._id);
+            return args.from && args.toExclusive ? base.gte("occurredOn", args.from).lt("occurredOn", args.toExclusive) : args.from ? base.gte("occurredOn", args.from) : args.toExclusive ? base.lt("occurredOn", args.toExclusive) : base;
+          });
+    const rows = await entriesQuery.order("desc").take(args.account ? 5000 : limit);
+    const visibleRows = rows.filter(row => (row.kind === "sale" ? canViewSales : canViewExpenses) && (!args.account || row.account === args.account)).slice(0, limit);
     return await Promise.all(visibleRows.map(async ({ _id, kind, amountUgx, occurredOn, account, category, note, state, operationSource, source, correctionOf, correctedBy, idempotencyKey, businessId }) => {
       let importedBatchReady = false;
       if (source === "import" && !correctionOf) {
@@ -591,6 +648,7 @@ export const entriesForExport = query({
     kind: v.optional(v.union(v.literal("sale"), v.literal("expense"))),
     from: v.string(),
     toExclusive: v.string(),
+    account: v.optional(v.union(v.literal("cash"), v.literal("mobile_money"), v.literal("unallocated"))),
     paginationOpts: paginationOptsValidator,
   },
   returns: paginationResultValidator(v.object({
@@ -617,10 +675,14 @@ export const entriesForExport = query({
     if (!isIsoDay(args.from) || !isIsoDay(args.toExclusive) || args.from >= args.toExclusive) throw new Error("Choose a valid export date range.");
     const rangeDays = (Date.parse(`${args.toExclusive}T00:00:00.000Z`) - Date.parse(`${args.from}T00:00:00.000Z`)) / 86_400_000;
     if (rangeDays > 370 || args.paginationOpts.numItems > 100) throw new Error("Cashbook exports are limited to 370 days and 100 rows per page. Narrow the date range if needed.");
-    const rows = args.kind
-      ? ctx.db.query("entries").withIndex("by_business_and_kind_and_date", q => q.eq("businessId", current.business._id).eq("kind", args.kind!).gte("occurredOn", args.from).lt("occurredOn", args.toExclusive))
-      : ctx.db.query("entries").withIndex("by_business_and_date", q => q.eq("businessId", current.business._id).gte("occurredOn", args.from).lt("occurredOn", args.toExclusive));
-    const page = await rows.order("desc").paginate(args.paginationOpts);
+    const rowsQuery = args.kind && args.account
+      ? ctx.db.query("entries").withIndex("by_business_and_kind_and_account_and_date", q => q.eq("businessId", current.business._id).eq("kind", args.kind!).eq("account", args.account!).gte("occurredOn", args.from).lt("occurredOn", args.toExclusive))
+      : args.kind
+        ? ctx.db.query("entries").withIndex("by_business_and_kind_and_date", q => q.eq("businessId", current.business._id).eq("kind", args.kind!).gte("occurredOn", args.from).lt("occurredOn", args.toExclusive))
+        : args.account
+          ? ctx.db.query("entries").withIndex("by_business_and_account_and_date", q => q.eq("businessId", current.business._id).eq("account", args.account!).gte("occurredOn", args.from).lt("occurredOn", args.toExclusive))
+          : ctx.db.query("entries").withIndex("by_business_and_date", q => q.eq("businessId", current.business._id).gte("occurredOn", args.from).lt("occurredOn", args.toExclusive));
+    const page = await rowsQuery.order("desc").paginate(args.paginationOpts);
     return { ...page, page: page.page.map(({ _id, kind, amountUgx, occurredOn, account, category, note, state, source, createdAt, createdBy }) => ({ entryId: _id, kind, amountUgx, occurredOn, account, category, note, state, source, createdAt, createdBy })) };
   },
 });

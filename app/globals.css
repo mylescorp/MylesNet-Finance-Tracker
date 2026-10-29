@@ -96,6 +96,10 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .board-metric-card { min-height:132px; padding:16px; }
 .board-metric-card .metric-value { font-size:23px; }
 .board-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:14px; align-items:start; }
+.board-grid-operations { grid-template-columns:minmax(0,1fr); gap:16px; }
+.board-grid-operations > .muted-note { margin:0; padding:12px 14px; border:1px solid var(--mn-line); border-radius:var(--mn-radius-md); color:var(--mn-muted); background:var(--mn-inset); line-height:1.5; }
+.board-grid-operations > .board-section-card { grid-column:1; min-height:0; }
+.board-grid [hidden] { display:none !important; }
 .board-section-card { min-height:198px; padding:18px; }
 .board-feature-card { grid-column:1/-1; }
 .compact-empty { min-height:94px; padding:20px 12px; display:flex; flex-direction:column; justify-content:center; align-items:flex-start; text-align:left; border:1px dashed var(--mn-line-strong); border-radius:var(--mn-radius-md); }
@@ -463,6 +467,10 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .board-metric-card { min-height:132px; padding:16px; }
 .board-metric-card .metric-value { font-size:23px; }
 .board-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:14px; align-items:start; }
+.board-grid-operations { grid-template-columns:minmax(0,1fr); gap:16px; }
+.board-grid-operations > .muted-note { margin:0; padding:12px 14px; border:1px solid var(--mn-line); border-radius:var(--mn-radius-md); color:var(--mn-muted); background:var(--mn-inset); line-height:1.5; }
+.board-grid-operations > .board-section-card { grid-column:1 / -1; min-height:0; }
+.board-grid [hidden] { display:none !important; }
 .board-grid-cashbook { grid-template-columns:minmax(0,1.25fr) minmax(300px,.85fr); }
 .board-grid-sales { grid-template-columns:repeat(2,minmax(0,1fr)); }
 .board-grid-sales > .record-form-disclosure,.board-grid-sales .board-sales-daily-table,.board-grid-sales .board-sales-entry-list { grid-column:1/-1; }
@@ -1014,3 +1022,123 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 @media(prefers-reduced-motion:reduce) {
   .finance-period-tab,.chart-sales-bar,.chart-previous-point { transition:none; }
 }
+.board-toolbar.has-finance-filters { position:sticky; top:84px; z-index:calc(var(--mn-z-topbar) - 1); display:grid; gap:8px; margin:0 0 16px; padding:10px 12px; border:1px solid var(--mn-line); border-radius:var(--mn-radius-xl); background:color-mix(in srgb,var(--mn-card) 95%,transparent); box-shadow:var(--mn-shadow-popover); backdrop-filter:blur(14px); }
+.board-toolbar.has-finance-filters .finance-filter-bar { position:static; z-index:auto; min-height:0; margin:0; padding:0; border:0; border-radius:0; background:transparent; box-shadow:none; backdrop-filter:none; }
+.board-toolbar-actions { display:flex; align-items:center; gap:8px; flex-wrap:wrap; min-width:0; }
+.board-toolbar-actions .toolbar-range { margin-right:auto; }
+@media(max-width:760px) {
+  .board-toolbar.has-finance-filters { top:76px; gap:6px; padding:9px; }
+  .board-toolbar.has-finance-filters .finance-period-tabs { width:auto; flex:1 1 100%; overflow-x:auto; }
+  .board-toolbar.has-finance-filters .finance-account-filter { margin-left:auto; }
+  .board-toolbar-actions { gap:6px; }
+  .board-toolbar-actions .toolbar-range { width:100%; margin:0; }
+}
+.savings-dashboard-grid { grid-template-columns:minmax(0,1fr); gap:14px; }
+.savings-summary-grid,.savings-primary-grid,.savings-secondary-grid { grid-column:1/-1; min-width:0; display:grid; gap:12px; align-items:stretch; }
+.savings-summary-grid { grid-template-columns:repeat(5,minmax(0,1fr)); }
+.savings-primary-grid { grid-template-columns:minmax(0,1.55fr) minmax(250px,.95fr); }
+.savings-secondary-grid { grid-template-columns:minmax(0,1.05fr) minmax(0,.95fr) minmax(0,.9fr); }
+.savings-stat-card { min-width:0; min-height:132px; padding:14px; }
+.savings-stat-card > .eyebrow { display:block; min-height:25px; color:var(--mn-muted); font-size:9px; font-weight:600; letter-spacing:.09em; text-transform:uppercase; }
+.savings-stat-card > strong { display:block; min-height:39px; overflow:hidden; color:var(--mn-ink); font-size:clamp(18px,1.7vw,26px); font-weight:500; letter-spacing:-.04em; text-overflow:ellipsis; white-space:nowrap; font-variant-numeric:tabular-nums; }
+.savings-stat-card > strong.savings-stat-neutral { font-size:17px; letter-spacing:0; }
+.savings-stat-card > strong.savings-stat-warning { color:var(--mn-warn-fg); }
+.savings-stat-card > div { display:flex; justify-content:space-between; gap:8px; padding-top:6px; color:var(--mn-muted); font-size:10px; }
+.savings-stat-card > div:first-of-type { margin-top:5px; border-top:1px solid var(--mn-line); }
+.savings-stat-card > div b { color:var(--mn-ink); font-weight:550; text-align:right; font-variant-numeric:tabular-nums; }
+.savings-holdings-card,.savings-add-card,.savings-secondary-grid > .board-section-card { min-height:190px; padding:16px; }
+.savings-holdings-card .data-table { min-width:480px; }
+.savings-add-card { display:flex; flex-direction:column; align-items:flex-start; }
+.savings-add-card .card-title { margin:12px 0 4px; }
+.savings-add-card .card-subtitle { line-height:1.5; }
+.savings-add-points { margin:8px 0 14px; padding-left:17px; color:var(--mn-muted); font-size:11px; line-height:1.65; }
+.savings-add-card .button { margin-top:auto; }
+.savings-activity-card { grid-column:1/-1; min-width:0; }
+.savings-goal-row { display:grid; gap:7px; padding:10px 0; border-bottom:1px solid var(--mn-line); }
+.savings-goal-row > div:first-child { display:flex; align-items:center; justify-content:space-between; gap:10px; font-size:11px; }
+.savings-goal-row > div:first-child b { font-variant-numeric:tabular-nums; }
+.savings-goal-row small { color:var(--mn-muted); font-size:10px; }
+.savings-progress-track { height:7px; overflow:hidden; border-radius:var(--mn-radius-full); background:var(--mn-inset); }
+.savings-progress-track span { display:block; height:100%; border-radius:inherit; background:var(--mn-chart-2); }
+.savings-plan-head,.savings-plan-row { display:grid; grid-template-columns:1fr 1fr 1fr; gap:8px; align-items:center; }
+.savings-plan-head { margin:0 0 4px; padding:8px; border-radius:var(--mn-radius-sm); background:var(--mn-inset); color:var(--mn-muted); font-size:9px; letter-spacing:.05em; text-transform:uppercase; }
+.savings-plan-row { padding:10px 8px; border-bottom:1px solid var(--mn-line); font-size:11px; }
+.savings-plan-row > :not(:first-child),.savings-plan-head > :not(:first-child) { text-align:right; }
+.savings-planner-card .muted-note { margin:10px 0 0; font-size:10px; line-height:1.5; }
+.savings-pill { padding:4px 8px; border-radius:var(--mn-radius-full); background:var(--mn-inset); color:var(--mn-muted); font-size:9px; }
+.savings-allocation-content { display:flex; align-items:center; justify-content:center; gap:16px; min-height:135px; }
+.savings-donut { flex:none; width:118px; aspect-ratio:1; display:grid; place-items:center; border-radius:50%; background:var(--mn-inset); }
+.savings-donut > span { width:66%; aspect-ratio:1; display:grid; place-items:center; padding:5px; border-radius:50%; background:var(--mn-card); color:var(--mn-ink); font-size:11px; font-weight:650; text-align:center; font-variant-numeric:tabular-nums; }
+.savings-allocation-legend { flex:1; min-width:0; display:grid; gap:8px; margin:0; padding:0; list-style:none; }
+.savings-allocation-legend li { display:grid; grid-template-columns:9px minmax(0,1fr) auto; gap:7px; align-items:center; font-size:10px; }
+.savings-allocation-legend i { width:8px; height:8px; border-radius:50%; }
+.savings-allocation-legend span { overflow:hidden; color:var(--mn-muted); text-overflow:ellipsis; white-space:nowrap; }
+.savings-allocation-legend b { font-variant-numeric:tabular-nums; }
+.savings-summary-grid { gap:10px; }
+.savings-stat-card { min-height:112px; padding:12px; }
+.savings-stat-card > .eyebrow { min-height:21px; font-size:8px; }
+.savings-stat-card > strong { min-height:34px; font-size:clamp(18px,1.5vw,24px); }
+.savings-stat-card > strong.savings-stat-neutral { font-size:15px; }
+.savings-stat-card > div { padding-top:5px; font-size:9px; }
+.savings-primary-grid { gap:10px; align-items:start; }
+.savings-holdings-card,.savings-add-card { min-height:166px; padding:14px; }
+.savings-holdings-card .card-heading { align-items:flex-start; }
+.savings-inline-add-trigger { flex:none; padding:7px 10px; font-size:10px; }
+.savings-add-card { display:flex; flex-direction:column; align-items:stretch; }
+.savings-add-card .card-heading { margin-bottom:5px; }
+.savings-add-card .card-title { margin:3px 0 0; }
+.savings-add-label { display:block; margin:0 0 6px; }
+.savings-add-card .card-subtitle { margin:0 0 8px; font-size:9px; line-height:1.35; }
+.savings-add-form { flex:1; display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:6px; align-content:start; }
+.savings-add-form .field { min-width:0; display:grid; gap:4px; }
+.savings-add-form .field label,.savings-add-balance > span { color:var(--mn-muted); font-size:8px; letter-spacing:.05em; text-transform:uppercase; }
+.savings-add-form .field input { min-width:0; min-height:34px; padding:7px 9px; border:1px solid color-mix(in srgb,var(--mn-accent) 10%,var(--mn-line)); border-radius:var(--mn-radius-sm); background:var(--mn-accent-bg); color:var(--mn-ink); font-size:10px; }
+.savings-add-balance { grid-column:1/-1; display:flex; align-items:center; justify-content:space-between; gap:8px; padding-top:7px; border-top:1px solid var(--mn-line); }
+.savings-add-balance strong { color:var(--mn-muted); font-size:9px; font-weight:500; text-align:right; }
+.savings-add-form .button { grid-column:1/-1; justify-self:start; min-height:30px; margin:0; padding:6px 12px; font-size:10px; }
+.savings-secondary-grid { gap:10px; align-items:start; }
+.savings-secondary-grid > .board-section-card { min-height:138px; padding:14px; }
+.savings-planner-card .muted-note { font-size:9px; }
+.savings-allocation-content { min-height:112px; }
+@media(max-width:1050px) {
+  .savings-summary-grid { grid-template-columns:repeat(3,minmax(0,1fr)); }
+  .savings-secondary-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
+  .savings-allocation-card { grid-column:1/-1; }
+}
+@media(max-width:700px) {
+  .savings-summary-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
+  .savings-primary-grid,.savings-secondary-grid { grid-template-columns:minmax(0,1fr); }
+  .savings-allocation-card { grid-column:auto; }
+  .savings-stat-card { min-height:124px; }
+  .savings-allocation-content { justify-content:flex-start; }
+  .savings-plan-head,.savings-plan-row { grid-template-columns:.7fr 1fr 1fr; }
+}
+.savings-target-form { border-top:1px solid var(--mn-line); margin-top:12px; padding-top:10px; }
+.savings-target-form > label,.savings-set-aside-control > label { display:block; color:var(--mn-muted); font-size:10px; font-weight:600; margin-bottom:6px; }
+.savings-target-controls { display:grid; grid-template-columns:minmax(0,1fr) minmax(100px,.8fr) auto; gap:6px; }
+.savings-target-controls select,.savings-target-controls input { min-width:0; width:100%; min-height:34px; padding:7px 9px; border:1px solid var(--mn-line); border-radius:var(--mn-radius-sm); background:var(--mn-surface); color:var(--mn-ink); font-size:11px; }
+.savings-set-aside-control { margin:10px 0 12px; padding:10px; border-radius:var(--mn-radius-sm); background:var(--mn-inset); }
+.savings-set-aside-value { display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:center; gap:10px; }
+.savings-set-aside-value input { width:100%; accent-color:var(--mn-accent); }
+.savings-set-aside-value strong { color:var(--mn-accent); font-variant-numeric:tabular-nums; }
+.savings-set-aside-control .muted-note { margin:5px 0 0; font-size:10px; }
+@media(max-width:700px) { .savings-target-controls { grid-template-columns:1fr; } }
+
+/* Savings explanations and editors */
+.savings-stat-card .savings-metric-help { margin:8px 0 0; color:var(--mn-muted); font-size:9px; line-height:1.45; }
+.savings-stat-card .savings-metric-help a { color:var(--mn-accent); text-decoration:underline; text-underline-offset:2px; }
+.savings-stat-card:has(.savings-metric-help) { min-height:180px; }
+.savings-goal-row > button { justify-self:start; }
+.savings-target-controls { display:grid; grid-template-columns:1fr 1fr; gap:8px; align-items:center; }
+.savings-target-controls .muted-note { grid-column:1/-1; margin:0; }
+.savings-valuation-editor { display:grid; gap:12px; margin-top:16px; padding:14px; border:1px solid var(--mn-line); border-radius:var(--mn-radius-md); background:var(--mn-inset); }
+.savings-valuation-editor .card-title { margin:0 0 4px; }
+.savings-valuation-editor .muted-note { margin:0; }
+.savings-card-edit { justify-self:start; min-height:28px; margin-top:8px; padding:5px 9px; font-size:10px; }
+.savings-inline-editor { display:grid; gap:7px; margin-top:8px; padding-top:8px; border-top:1px solid var(--mn-line); }
+.savings-inline-editor label { color:var(--mn-muted); font-size:9px; line-height:1.4; }
+.savings-inline-editor input { width:100%; min-height:32px; padding:6px 8px; border:1px solid var(--mn-line); border-radius:var(--mn-radius-sm); background:var(--mn-surface); color:var(--mn-ink); font-size:11px; }
+.savings-planner-card .form-actions { display:flex; flex-wrap:wrap; gap:6px; align-items:center; margin-top:8px; }
+.savings-planner-card .form-actions .muted-note { flex-basis:100%; }
+.savings-target-controls .button { min-height:34px; }
+@media (max-width:700px) { .savings-target-controls { grid-template-columns:1fr; } .savings-target-controls .muted-note { grid-column:auto; } }

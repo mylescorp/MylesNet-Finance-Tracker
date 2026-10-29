@@ -363,35 +363,52 @@ export const accessOverview = query({
       return user ? { id: user._id, email: user.email ?? "Signed-in account", createdAt: request.createdAt } : null;
     }));
     const canViewAudit = await hasPermission(ctx, current.membership, "audit.view");
-    return { access: "ready" as const, canViewMembers, canManage: canManageAccess, canManageRoles, canInitializeRoleTemplates: isOwnerMembership(current.membership), canViewAudit, members: canViewMembers ? members : [], pendingUsers: canManageAccess ? pendingUsers.filter((user): user is NonNullable<typeof user> => user !== null) : [], pendingUsersContinueCursor: requestsPage.continueCursor, pendingUsersIsDone: requestsPage.isDone, roles: canManageRoles || canManageAccess || canViewMembers ? roles.map(r => ({ id: r._id, name: r.name, description: r.description, permissions: r.permissions, builtIn: r.builtIn ?? null, active: r.active, memberCount: memberships.filter(m => m.roleId === r._id || !m.roleId && (m.role === r.builtIn || m.role.toLowerCase() === r.name.toLowerCase())).length })) : [], partners: canManageAccess || canViewMembers ? partners.map(partner => ({ id: partner._id, name: partner.name })) : [], invitations: canManageAccess ? invitations.map(i => ({ id: i._id, email: i.email, role: i.role, roleId: i.roleId ?? null, partnerId: i.partnerId ?? null, partnerName: i.partnerId ? partnerNames.get(i.partnerId) : undefined, expiresAt: i.expiresAt })) : [], audit: canViewAudit ? audit.map(a => ({ id: a._id, action: a.action, summary: a.summary, occurredAt: a.occurredAt })) : [] };
+    return { access: "ready" as const, canViewMembers, canManage: canManageAccess, canManageRoles, canInitializeRoleTemplates: isOwnerMembership(current.membership), canViewAudit, members: canViewMembers ? members : [], pendingUsers: canManageAccess ? pendingUsers.filter((user): user is NonNullable<typeof user> => user !== null) : [], pendingUsersContinueCursor: requestsPage.continueCursor, pendingUsersIsDone: requestsPage.isDone, roles: canManageRoles || canManageAccess || canViewMembers ? roles.map(r => ({ id: r._id, name: r.name, description: r.description, permissions: r.builtIn === "member" ? ["dashboard.view", "analytics.view"] : r.permissions, builtIn: r.builtIn ?? null, active: r.active, memberCount: memberships.filter(m => m.roleId === r._id || !m.roleId && (m.role === r.builtIn || m.role.toLowerCase() === r.name.toLowerCase())).length })) : [], partners: canManageAccess || canViewMembers ? partners.map(partner => ({ id: partner._id, name: partner.name })) : [], invitations: canManageAccess ? invitations.map(i => ({ id: i._id, email: i.email, role: i.role, roleId: i.roleId ?? null, partnerId: i.partnerId ?? null, partnerName: i.partnerId ? partnerNames.get(i.partnerId) : undefined, expiresAt: i.expiresAt })) : [], audit: canViewAudit ? audit.map(a => ({ id: a._id, action: a.action, summary: a.summary, occurredAt: a.occurredAt })) : [] };
   },
 });
 
 // Called after sign-in by accounts that do not have active workspace access.
-// Identity and the target workspace are derived server-side; the request never
-// grants membership or exposes data to the requesting account.
+// A single-workspace account is joined as a read-only Member. Existing inactive
+// memberships are never reactivated here; only a workspace owner can restore them.
 export const requestWorkspaceAccess = mutation({
   args: {},
   returns: v.null(),
   handler: async ctx => {
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Sign in before requesting workspace access.");
+    const authUser = await ctx.db.get("users", userId);
     const businesses = await ctx.db.query("businesses").take(2);
     if (businesses.length !== 1) return null;
     const business = businesses[0];
     const membership = await ctx.db.query("memberships")
       .withIndex("by_business_and_user", q => q.eq("businessId", business._id).eq("userId", userId))
       .unique();
-    if (membership?.active) return null;
+    if (membership) return null;
+    const now = Date.now();
+    const roles = await ctx.db.query("workspaceRoles").withIndex("by_business", q => q.eq("businessId", business._id)).take(100);
+    let memberRole = roles.find(role => role.builtIn === "member" && role.active);
+    if (!memberRole) {
+      const roleId = await ctx.db.insert("workspaceRoles", {
+        businessId: business._id,
+        name: "Member",
+        builtIn: "member",
+        permissions: ["dashboard.view", "analytics.view"],
+        description: "Read-only access to dashboard and analytics summaries; no access to individual records or workspace settings.",
+        active: true,
+        createdBy: userId,
+        createdAt: now,
+        updatedAt: now,
+      });
+      memberRole = await ctx.db.get("workspaceRoles", roleId) ?? undefined;
+    }
+    if (!memberRole) throw new Error("The default Member role could not be created.");
+    await ctx.db.insert("memberships", { businessId: business._id, userId, role: memberRole.name, roleId: memberRole._id, active: true, createdAt: now });
     const existing = await ctx.db.query("workspaceAccessRequests")
       .withIndex("by_business_and_user", q => q.eq("businessId", business._id).eq("userId", userId))
       .unique();
-    const now = Date.now();
-    if (existing) {
-      if (existing.status !== "pending") await ctx.db.patch("workspaceAccessRequests", existing._id, { status: "pending", updatedAt: now });
-      return null;
-    }
-    await ctx.db.insert("workspaceAccessRequests", { businessId: business._id, userId, status: "pending", createdAt: now, updatedAt: now });
+    if (existing && existing.status !== "granted") await ctx.db.patch("workspaceAccessRequests", existing._id, { status: "granted", updatedAt: now });
+    else if (!existing) await ctx.db.insert("workspaceAccessRequests", { businessId: business._id, userId, status: "granted", createdAt: now, updatedAt: now });
+    await ctx.db.insert("auditEvents", { businessId: business._id, actorId: userId, action: "member.auto_joined", entityType: "membership", entityId: userId, occurredAt: now, summary: `Granted limited Member access to ${authUser?.email ?? "a signed-in account"}.` });
     return null;
   },
 });
@@ -424,6 +441,7 @@ export const initializeRoleTemplates = mutation({
     const now = Date.now();
     const templates = [
       { name: "Owner", builtIn: "owner" as const, permissions: [...PERMISSIONS], description: "Full workspace control." },
+      { name: "Member", builtIn: "member" as const, permissions: ["dashboard.view", "analytics.view"], description: "Read-only access to dashboard and analytics summaries; no access to individual records or workspace settings." },
       { name: "Cashier", builtIn: "cashier" as const, permissions: ["dashboard.view", "sales.view", "sales.create", "expenses.view", "expenses.create", "reports.view"], description: "Record sales and expenses and view standard reports." },
       { name: "Partner", builtIn: "partner" as const, permissions: ["dashboard.view", "partners.view"], description: "View partner area only; financial totals are not exposed." },
       { name: "Finance Approver", builtIn: "finance_approver" as const, permissions: ["partners.view", "partners.distributions.approve"], description: "Review partner distributions without workspace-wide finance access." },
@@ -452,6 +470,7 @@ export const updateRole = mutation({
     if (role.builtIn === "owner") throw new Error("The protected Owner role cannot be changed.");
     const name = args.name.trim(); const permissions = [...new Set(args.permissions)];
     if (name.length < 2 || name.length > 50 || permissions.some(p => !(PERMISSIONS as readonly string[]).includes(p))) throw new Error("Enter a valid role name and permission set.");
+    if (role.builtIn === "member" && (permissions.length !== 2 || !permissions.includes("dashboard.view") || !permissions.includes("analytics.view"))) throw new Error("The protected Member role is read-only and limited to dashboard and analytics summaries. Create a separate custom role to grant more access.");
     if (!isOwnerMembership(current.membership) && permissions.some(p => p === "access.manage" || p === "roles.manage" || p === "data.export" || p === "imports.manage" || p === "integrations.manage" || p === "balanceAdjustments.manage" || p === "partners.distributions.manage" || p === "partners.distributions.approve")) throw new Error("Only the workspace owner can grant privileged role permissions.");
     const duplicate = await ctx.db.query("workspaceRoles").withIndex("by_business", q => q.eq("businessId", current.business._id)).take(100);
     if (duplicate.some(r => r._id !== role._id && r.name.toLowerCase() === name.toLowerCase())) throw new Error("A role with that name already exists.");
@@ -579,7 +598,11 @@ export const acceptInvite = mutation({
     const legacyRole = invite.role.toLowerCase();
     let role = invite.roleId ? await ctx.db.get("workspaceRoles", invite.roleId) : templates.find(r => r.builtIn === legacyRole || r.name.toLowerCase() === legacyRole) ?? null;
     if (!invite.roleId && !role) {
-      const legacyTemplate = legacyRole === "cashier" ? {
+      const legacyTemplate = legacyRole === "member" ? {
+        name: "Member", builtIn: "member" as const,
+        permissions: ["dashboard.view", "analytics.view"],
+        description: "Read-only access to dashboard and analytics summaries; no access to individual records or workspace settings.",
+      } : legacyRole === "cashier" ? {
         name: "Cashier", builtIn: "cashier" as const,
         permissions: ["dashboard.view", "sales.view", "sales.create", "expenses.view", "expenses.create", "reports.view"],
         description: "Record sales and expenses and view standard reports.",
@@ -602,7 +625,9 @@ export const acceptInvite = mutation({
       if (!partner || partner.businessId !== invite.businessId || !partner.active) throw new Error("This partner account is no longer active. Ask the workspace owner for a new invitation.");
     }
     const existing = await ctx.db.query("memberships").withIndex("by_business_and_user", q => q.eq("businessId", invite.businessId).eq("userId", userId)).unique();
-    if (existing?.active) throw new Error("You already have access to this workspace.");
+    const existingRole = existing?.roleId ? await ctx.db.get("workspaceRoles", existing.roleId) : null;
+    const isAutoMember = Boolean(existing?.active && !existing.partnerId && (existingRole?.builtIn === "member" || (!existing.roleId && existing.role.toLowerCase() === "member")));
+    if (existing?.active && !isAutoMember) throw new Error("You already have access to this workspace.");
     const currentMemberships = await ctx.db.query("memberships").withIndex("by_user", q => q.eq("userId", userId)).take(1001);
     if (currentMemberships.length > 1000) throw new Error("This account has reached the workspace membership limit. Contact support for help.");
     if (invite.partnerId) {

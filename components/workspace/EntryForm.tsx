@@ -11,7 +11,7 @@ function businessDate(timezone: string) {
   return new Intl.DateTimeFormat("en-CA", { timeZone: timezone, year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
 }
 
-export function EntryForm({ kind }: { kind: EntryKind }) {
+export function EntryForm({ kind, onSaved }: { kind: EntryKind; onSaved?: () => void }) {
   const recordSaved = useRecordEntrySaved();
   const setDrawerBusy = useRecordEntryBusy();
   const createEntry = useMutation(api.workspace.createEntry);
@@ -66,6 +66,7 @@ export function EntryForm({ kind }: { kind: EntryKind }) {
       setOccurredOn(null);
       setFeedback({ message: `${title.replace("Record a ", "")} saved to the cashbook.`, error: false });
       recordSaved(`${kind === "sale" ? "Sale" : "Expense"} saved to the cashbook.`);
+      onSaved?.();
     } catch (error) {
       if (error instanceof ConvexError) {
         const warning = error.data as { code?: string; message?: string };
