@@ -2,6 +2,13 @@
 
 Changes are grouped under the semantic version of the production release that ships them. Each feature or fix remains its own card. Add a Changeset file for every user-visible change; the release workflow updates this file when it prepares the version PR. Preview deployments do not count as releases.
 
+## v0.3.6 — 2026-10-29
+
+<!-- change-id: calm-lions-flow -->
+### Fixes — Improve mobile navigation and image loading
+
+- Use larger touch targets and safe-area-aware menu scrolling on small screens. Remove an unused font download while preserving the monospace token fallback, and use the supported Next.js 16 image preload API.
+
 ## v0.3.5 — 2026-10-29
 
 <!-- change-id: remove-duplicate-dashboard-cards -->
