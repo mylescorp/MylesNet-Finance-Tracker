@@ -2,6 +2,18 @@
 
 Changes are grouped under the semantic version of the production release that ships them. Each feature or fix remains its own card. Add a Changeset file for every user-visible change; the release workflow updates this file when it prepares the version PR. Preview deployments do not count as releases.
 
+## v0.3.4 — 2026-10-29
+
+<!-- change-id: issues-sidebar-review-ux -->
+### Fixes — Add Issues to workspace navigation
+
+- Add a dedicated Issues destination in the sidebar and improve the data-health review layout with summary counts, search, priority filtering, and expandable review controls.
+
+<!-- change-id: neat-expenses-page -->
+### Fixes — Expenses page cleanup
+
+- The Expenses page now follows the supplied reference layout, removes duplicate expense and receipt panels, and keeps the entry form available from the page Record action.
+
 ## v0.3.3 — 2026-10-29
 
 <!-- change-id: plain-text-expense-import -->
