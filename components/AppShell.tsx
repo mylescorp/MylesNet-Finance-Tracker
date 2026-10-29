@@ -97,6 +97,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   const permissions = access?.access === "ready" && Array.isArray(access.permissions)
     ? access.permissions
     : [];
+  const canSearchEntries = permissions.includes("sales.view") || permissions.includes("expenses.view");
   const searchScope = access?.access === "ready" && profile?.email
     ? `${profile.email.trim().toLowerCase()}::${access.businessId}`
     : null;
@@ -277,7 +278,7 @@ export function AppShell({ children }: { children: ReactNode }) {
         </button>
         <div className="topbar-page-context"><strong>{routePageLabel}</strong></div>
         <div className="topbar-center">
-          {!financeApproverOnly && <GlobalSearch searchScope={searchScope} />}
+          {!financeApproverOnly && canSearchEntries && <GlobalSearch searchScope={searchScope} />}
         </div>
         <div className="header-actions">
           {!financeApproverOnly && permissions.includes("audit.view") && <Link className="utility-link" href="/issues" aria-label="Needs attention"><Bell size={17} /><span>Needs attention</span></Link>}
@@ -289,7 +290,7 @@ export function AppShell({ children }: { children: ReactNode }) {
           </button>
         </div>
       </header>
-      {access?.access === "pending" && <div className="access-pending" role="status"><strong>Access awaiting invitation</strong><span>Your account is not yet linked to a MylesNet workspace.</span></div>}
+      {access?.access === "pending" && <div className="access-pending" role="status"><strong>Workspace access needs review</strong><span>Automatic access is unavailable. Accept an invitation or contact the workspace owner for access.</span></div>}
       {access?.access === "choose_workspace" && <section className="access-pending workspace-choice" role="status"><strong>Choose a workspace</strong><span>Your account has access to more than one workspace. Select which workspace to open.</span>{workspaceError && <span role="alert">{workspaceError}</span>}{selectableWorkspaces.map(workspace => <button key={workspace.businessId} className="button" type="button" disabled={switchingWorkspace} onClick={() => { setSwitchingWorkspace(true); setWorkspaceError(""); void selectWorkspace({ businessId: workspace.businessId }).catch(error => setWorkspaceError(error instanceof Error ? error.message : "Could not open this workspace.")).finally(() => setSwitchingWorkspace(false)); }}><strong>{workspace.businessName}</strong><span>{workspace.role.replaceAll("_", " ")}</span></button>)}</section>}
       <main key={access?.access === "ready" ? access.businessId : access?.access ?? "loading"} className="page-content">{access?.access === "choose_workspace" ? null : children}</main>
       <footer className="app-footer"><span>Powered by <a href="https://mylescorptech.com" target="_blank" rel="noopener noreferrer">MylesCorp Technologies</a></span></footer>

@@ -70,7 +70,7 @@ export default defineSchema({
     name: v.string(),
     description: v.string(),
     permissions: v.array(v.string()),
-    builtIn: v.optional(v.union(v.literal("owner"), v.literal("partner"), v.literal("cashier"), v.literal("finance_approver"))),
+    builtIn: v.optional(v.union(v.literal("owner"), v.literal("partner"), v.literal("cashier"), v.literal("finance_approver"), v.literal("member"))),
     active: v.boolean(),
     createdBy: v.id("users"),
     createdAt: v.number(),

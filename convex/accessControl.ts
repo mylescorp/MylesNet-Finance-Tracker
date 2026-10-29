@@ -22,9 +22,13 @@ const OWNER = [...PERMISSIONS];
 const CASHIER: Permission[] = ["dashboard.view", "sales.view", "sales.create", "expenses.view", "expenses.create", "reports.view"];
 const PARTNER: Permission[] = ["dashboard.view", "partners.view"];
 const FINANCE_APPROVER: Permission[] = ["partners.view", "partners.distributions.approve"];
+const MEMBER: Permission[] = ["dashboard.view"];
 
 export async function permissionsForMembership(ctx: QueryCtx | MutationCtx, membership: Doc<"memberships">) {
   if (membership.role === "owner" && !membership.roleId) return OWNER;
+  // Keep the built-in default role read-only even if legacy or malformed data
+  // points it at a broader custom role. Promotion changes the assigned role.
+  if (membership.role.trim().toLowerCase() === "member") return MEMBER;
   if (membership.roleId) {
     const role = await ctx.db.get("workspaceRoles", membership.roleId);
     if (!role || !role.active || role.businessId !== membership.businessId) return [] as string[];

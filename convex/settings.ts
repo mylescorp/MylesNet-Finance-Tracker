@@ -368,8 +368,9 @@ export const accessOverview = query({
 });
 
 // Called after sign-in by accounts that do not have active workspace access.
-// Identity and the target workspace are derived server-side; the request never
-// grants membership or exposes data to the requesting account.
+// A single-workspace account without an outstanding invitation is enrolled as
+// a read-only Member. Ambiguous, invited, inactive, and resetting workspaces
+// retain the manual/invitation access flow.
 export const requestWorkspaceAccess = mutation({
   args: {},
   returns: v.null(),
@@ -379,14 +380,52 @@ export const requestWorkspaceAccess = mutation({
     const businesses = await ctx.db.query("businesses").take(2);
     if (businesses.length !== 1) return null;
     const business = businesses[0];
+    if (business.dataResetting) return null;
     const membership = await ctx.db.query("memberships")
       .withIndex("by_business_and_user", q => q.eq("businessId", business._id).eq("userId", userId))
       .unique();
     if (membership?.active) return null;
+
+    const user = await ctx.db.get("users", userId);
+    const email = user?.email?.trim().toLowerCase();
+    const invitations = email
+      ? await ctx.db.query("invitations").withIndex("by_email", q => q.eq("email", email)).take(101)
+      : [];
+    const now = Date.now();
+    const hasWorkspaceInvite = invitations.length > 100 || invitations.some(invite =>
+      invite.businessId === business._id && invite.active && !invite.acceptedAt && !invite.revokedAt && invite.expiresAt > now,
+    );
+    if (hasWorkspaceInvite) return null;
+
+    // Do not reactivate an existing inactive account or bypass a pending
+    // invitation. Those cases need explicit owner action or invite acceptance.
+    if (!membership && email && !hasWorkspaceInvite) {
+      const memberId = await ctx.db.insert("memberships", {
+        businessId: business._id,
+        userId,
+        role: "member",
+        active: true,
+        createdAt: now,
+      });
+      const existingRequest = await ctx.db.query("workspaceAccessRequests")
+        .withIndex("by_business_and_user", q => q.eq("businessId", business._id).eq("userId", userId))
+        .unique();
+      if (existingRequest?.status === "pending") await ctx.db.patch("workspaceAccessRequests", existingRequest._id, { status: "granted", updatedAt: now });
+      await ctx.db.insert("auditEvents", {
+        businessId: business._id,
+        actorId: userId,
+        action: "member.access.auto_joined",
+        entityType: "membership",
+        entityId: memberId,
+        occurredAt: now,
+        summary: `Automatically enrolled ${email} as a read-only Member.`,
+      });
+      return null;
+    }
+
     const existing = await ctx.db.query("workspaceAccessRequests")
       .withIndex("by_business_and_user", q => q.eq("businessId", business._id).eq("userId", userId))
       .unique();
-    const now = Date.now();
     if (existing) {
       if (existing.status !== "pending") await ctx.db.patch("workspaceAccessRequests", existing._id, { status: "pending", updatedAt: now });
       return null;
@@ -404,6 +443,7 @@ export const createRole = mutation({
     const name = args.name.trim();
     const permissions = [...new Set(args.permissions)];
     if (name.length < 2 || name.length > 50) throw new Error("Role names must be 2 to 50 characters.");
+    if (name.toLowerCase() === "member") throw new Error("Member is a protected built-in role name.");
     if (permissions.some(p => !(PERMISSIONS as readonly string[]).includes(p))) throw new Error("Choose permissions from the supported list.");
     if (!isOwnerMembership(current.membership) && permissions.some(p => p === "access.manage" || p === "roles.manage" || p === "data.export" || p === "imports.manage" || p === "integrations.manage" || p === "balanceAdjustments.manage" || p === "partners.distributions.manage" || p === "partners.distributions.approve")) throw new Error("Only the workspace owner can grant privileged role permissions.");
     const existing = await ctx.db.query("workspaceRoles").withIndex("by_business", q => q.eq("businessId", current.business._id)).take(100);
@@ -427,6 +467,7 @@ export const initializeRoleTemplates = mutation({
       { name: "Cashier", builtIn: "cashier" as const, permissions: ["dashboard.view", "sales.view", "sales.create", "expenses.view", "expenses.create", "reports.view"], description: "Record sales and expenses and view standard reports." },
       { name: "Partner", builtIn: "partner" as const, permissions: ["dashboard.view", "partners.view"], description: "View partner area only; financial totals are not exposed." },
       { name: "Finance Approver", builtIn: "finance_approver" as const, permissions: ["partners.view", "partners.distributions.approve"], description: "Review partner distributions without workspace-wide finance access." },
+      { name: "Member", builtIn: "member" as const, permissions: ["dashboard.view"], description: "Read-only access to dashboard totals; no transaction details, reports, or workspace changes." },
     ];
     for (const template of templates) if (!roles.some(r => r.builtIn === template.builtIn)) await ctx.db.insert("workspaceRoles", { businessId: current.business._id, ...template, active: true, createdBy: current.userId, createdAt: now, updatedAt: now });
     const seeded = await ctx.db.query("workspaceRoles").withIndex("by_business", q => q.eq("businessId", current.business._id)).take(100);
@@ -449,7 +490,7 @@ export const updateRole = mutation({
   handler: async (ctx, args) => {
     const current = await activeWorkspace(ctx); const role = await ctx.db.get("workspaceRoles", args.roleId);
     if (!current || !(await hasPermission(ctx, current.membership, "roles.manage")) || !role || role.businessId !== current.business._id) throw new Error("Role not found or access denied.");
-    if (role.builtIn === "owner") throw new Error("The protected Owner role cannot be changed.");
+    if (role.builtIn === "owner" || role.builtIn === "member") throw new Error(`The protected ${role.name} role cannot be changed.`);
     const name = args.name.trim(); const permissions = [...new Set(args.permissions)];
     if (name.length < 2 || name.length > 50 || permissions.some(p => !(PERMISSIONS as readonly string[]).includes(p))) throw new Error("Enter a valid role name and permission set.");
     if (!isOwnerMembership(current.membership) && permissions.some(p => p === "access.manage" || p === "roles.manage" || p === "data.export" || p === "imports.manage" || p === "integrations.manage" || p === "balanceAdjustments.manage" || p === "partners.distributions.manage" || p === "partners.distributions.approve")) throw new Error("Only the workspace owner can grant privileged role permissions.");
