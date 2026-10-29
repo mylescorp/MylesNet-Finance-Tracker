@@ -495,6 +495,59 @@ export const recordSavingsFlow = mutation({
   },
 });
 
+export const recordWeeklySavingsContributions = mutation({
+  args: {
+    businessId: v.id("businesses"), holdingId: v.id("savingsHoldings"), amountUgx: v.number(), account: accountV,
+    startOn: v.string(), latestOn: v.string(), note: v.string(), idempotencyKey: v.string(), confirmNegativeBalance: v.optional(v.boolean()),
+  },
+  returns: v.array(v.id("savingsFlows")),
+  handler: async (ctx, args) => {
+    const current = await workspace(ctx, args.businessId);
+    if (!current || !(await hasPermission(ctx, current.membership, "savings.create"))) throw new Error("Your role cannot record savings activity.");
+    if (!Number.isSafeInteger(args.amountUgx) || args.amountUgx <= 0 || !validDay(args.startOn) || !validDay(args.latestOn) || args.startOn > args.latestOn || args.note.length > 300 || args.idempotencyKey.length < 16 || args.idempotencyKey.length > 80) {
+      throw new Error("Weekly savings details are invalid.");
+    }
+    if (args.latestOn > dayInZone(Date.now(), current.business.timezone)) throw new Error("Weekly savings contributions can only be backdated through today. Record future contributions after they happen.");
+    const holding = await ctx.db.get("savingsHoldings", args.holdingId);
+    if (!holding || holding.businessId !== current.business._id || !holding.active) throw new Error("Savings holding is not available.");
+
+    const start = new Date(`${args.startOn}T00:00:00.000Z`);
+    const latest = new Date(`${args.latestOn}T00:00:00.000Z`);
+    const firstThursday = new Date(start);
+    firstThursday.setUTCDate(firstThursday.getUTCDate() + ((4 - firstThursday.getUTCDay() + 7) % 7));
+    const dates: string[] = [];
+    for (const date = new Date(firstThursday); date <= latest; date.setUTCDate(date.getUTCDate() + 7)) {
+      dates.push(date.toISOString().slice(0, 10));
+      if (dates.length > 520) throw new Error("Choose a range of 520 Thursday contributions or fewer (up to 10 years).");
+    }
+    if (dates.length === 0) throw new Error("The selected range contains no Thursday. Extend the latest date to include the first Thursday.");
+    if (!Number.isSafeInteger(args.amountUgx * dates.length)) throw new Error("The total contribution is too large to record safely.");
+
+    let holdingBalanceUgx = holding.balanceUgx;
+    const flowIds: Id<"savingsFlows">[] = [];
+    for (const occurredOn of dates) {
+      const idempotencyKey = `${args.idempotencyKey}:${occurredOn}`;
+      const existing = await ctx.db.query("savingsFlows").withIndex("by_business_and_idempotency", q => q.eq("businessId", current.business._id).eq("idempotencyKey", idempotencyKey)).unique();
+      if (existing) {
+        assertSameRequest(existing.holdingId === args.holdingId && existing.kind === "contribution" && existing.amountUgx === args.amountUgx && existing.account === args.account && existing.occurredOn === occurredOn && existing.note === args.note.trim());
+        flowIds.push(existing._id);
+        continue;
+      }
+      await checkOutflow(ctx, current.business._id, args.account, -args.amountUgx, args.confirmNegativeBalance ?? false);
+      await applyAccountDelta(ctx, current.business._id, args.account, -args.amountUgx);
+      holdingBalanceUgx = safeAdd(holdingBalanceUgx, args.amountUgx, "Savings balance");
+      const flowId = await ctx.db.insert("savingsFlows", {
+        businessId: current.business._id, holdingId: holding._id, kind: "contribution", amountUgx: args.amountUgx, account: args.account,
+        occurredOn, note: args.note.trim(), idempotencyKey, createdBy: current.userId, createdAt: Date.now(),
+      });
+      await audit(ctx, current, "savings.contribution", "savingsFlow", flowId, `contribution · ${args.amountUgx} · ${occurredOn}`);
+      flowIds.push(flowId);
+    }
+    if (holdingBalanceUgx !== holding.balanceUgx) await ctx.db.patch("savingsHoldings", holding._id, { balanceUgx: holdingBalanceUgx });
+    return flowIds;
+  },
+});
+
 export const reverseSavingsFlow = mutation({
   args: { businessId: v.id("businesses"), flowId: v.id("savingsFlows"), reason: v.string(), confirmNegativeBalance: v.optional(v.boolean()) },
   returns: v.null(),
