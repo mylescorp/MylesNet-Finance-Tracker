@@ -1033,3 +1033,57 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .board-toolbar-actions { gap:6px; }
   .board-toolbar-actions .toolbar-range { width:100%; margin:0; }
 }
+.savings-dashboard-grid { grid-template-columns:minmax(0,1fr); gap:14px; }
+.savings-summary-grid,.savings-primary-grid,.savings-secondary-grid { grid-column:1/-1; min-width:0; display:grid; gap:12px; align-items:stretch; }
+.savings-summary-grid { grid-template-columns:repeat(5,minmax(0,1fr)); }
+.savings-primary-grid { grid-template-columns:minmax(0,1.55fr) minmax(250px,.95fr); }
+.savings-secondary-grid { grid-template-columns:minmax(0,1.05fr) minmax(0,.95fr) minmax(0,.9fr); }
+.savings-stat-card { min-width:0; min-height:132px; padding:14px; }
+.savings-stat-card > .eyebrow { display:block; min-height:25px; color:var(--mn-muted); font-size:9px; font-weight:600; letter-spacing:.09em; text-transform:uppercase; }
+.savings-stat-card > strong { display:block; min-height:39px; overflow:hidden; color:var(--mn-ink); font-size:clamp(18px,1.7vw,26px); font-weight:500; letter-spacing:-.04em; text-overflow:ellipsis; white-space:nowrap; font-variant-numeric:tabular-nums; }
+.savings-stat-card > strong.savings-stat-neutral { font-size:17px; letter-spacing:0; }
+.savings-stat-card > strong.savings-stat-warning { color:var(--mn-warn-fg); }
+.savings-stat-card > div { display:flex; justify-content:space-between; gap:8px; padding-top:6px; color:var(--mn-muted); font-size:10px; }
+.savings-stat-card > div:first-of-type { margin-top:5px; border-top:1px solid var(--mn-line); }
+.savings-stat-card > div b { color:var(--mn-ink); font-weight:550; text-align:right; font-variant-numeric:tabular-nums; }
+.savings-holdings-card,.savings-add-card,.savings-secondary-grid > .board-section-card { min-height:190px; padding:16px; }
+.savings-holdings-card .data-table { min-width:480px; }
+.savings-add-card { display:flex; flex-direction:column; align-items:flex-start; }
+.savings-add-card .card-title { margin:12px 0 4px; }
+.savings-add-card .card-subtitle { line-height:1.5; }
+.savings-add-points { margin:8px 0 14px; padding-left:17px; color:var(--mn-muted); font-size:11px; line-height:1.65; }
+.savings-add-card .button { margin-top:auto; }
+.savings-activity-card { grid-column:1/-1; min-width:0; }
+.savings-goal-row { display:grid; gap:7px; padding:10px 0; border-bottom:1px solid var(--mn-line); }
+.savings-goal-row > div:first-child { display:flex; align-items:center; justify-content:space-between; gap:10px; font-size:11px; }
+.savings-goal-row > div:first-child b { font-variant-numeric:tabular-nums; }
+.savings-goal-row small { color:var(--mn-muted); font-size:10px; }
+.savings-progress-track { height:7px; overflow:hidden; border-radius:var(--mn-radius-full); background:var(--mn-inset); }
+.savings-progress-track span { display:block; height:100%; border-radius:inherit; background:var(--mn-chart-2); }
+.savings-plan-head,.savings-plan-row { display:grid; grid-template-columns:1fr 1fr 1fr; gap:8px; align-items:center; }
+.savings-plan-head { margin:0 0 4px; padding:8px; border-radius:var(--mn-radius-sm); background:var(--mn-inset); color:var(--mn-muted); font-size:9px; letter-spacing:.05em; text-transform:uppercase; }
+.savings-plan-row { padding:10px 8px; border-bottom:1px solid var(--mn-line); font-size:11px; }
+.savings-plan-row > :not(:first-child),.savings-plan-head > :not(:first-child) { text-align:right; }
+.savings-planner-card .muted-note { margin:10px 0 0; font-size:10px; line-height:1.5; }
+.savings-pill { padding:4px 8px; border-radius:var(--mn-radius-full); background:var(--mn-inset); color:var(--mn-muted); font-size:9px; }
+.savings-allocation-content { display:flex; align-items:center; justify-content:center; gap:16px; min-height:135px; }
+.savings-donut { flex:none; width:118px; aspect-ratio:1; display:grid; place-items:center; border-radius:50%; background:var(--mn-inset); }
+.savings-donut > span { width:66%; aspect-ratio:1; display:grid; place-items:center; padding:5px; border-radius:50%; background:var(--mn-card); color:var(--mn-ink); font-size:11px; font-weight:650; text-align:center; font-variant-numeric:tabular-nums; }
+.savings-allocation-legend { flex:1; min-width:0; display:grid; gap:8px; margin:0; padding:0; list-style:none; }
+.savings-allocation-legend li { display:grid; grid-template-columns:9px minmax(0,1fr) auto; gap:7px; align-items:center; font-size:10px; }
+.savings-allocation-legend i { width:8px; height:8px; border-radius:50%; }
+.savings-allocation-legend span { overflow:hidden; color:var(--mn-muted); text-overflow:ellipsis; white-space:nowrap; }
+.savings-allocation-legend b { font-variant-numeric:tabular-nums; }
+@media(max-width:1050px) {
+  .savings-summary-grid { grid-template-columns:repeat(3,minmax(0,1fr)); }
+  .savings-secondary-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
+  .savings-allocation-card { grid-column:1/-1; }
+}
+@media(max-width:700px) {
+  .savings-summary-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
+  .savings-primary-grid,.savings-secondary-grid { grid-template-columns:minmax(0,1fr); }
+  .savings-allocation-card { grid-column:auto; }
+  .savings-stat-card { min-height:124px; }
+  .savings-allocation-content { justify-content:flex-start; }
+  .savings-plan-head,.savings-plan-row { grid-template-columns:.7fr 1fr 1fr; }
+}
