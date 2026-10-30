@@ -68,7 +68,10 @@ export const webhook = httpAction(async (ctx, request) => {
   if (Array.isArray(payload)) payload = payload[0] ?? {};
   if (!isRecord(payload)) return json({ status: "error", message: "No payload found" });
   const body = isRecord(payload.data) ? payload.data : isRecord(payload.payload) ? payload.payload : payload;
-  const event = String(payload.event || payload.event_type || payload.topic || body.event || body.event_type || "payment.received").toLowerCase().trim().slice(0, 120);
+  const receivedEvent = String(payload.event || payload.event_type || payload.topic || body.event || body.event_type || "payment.received").toLowerCase().trim().slice(0, 120);
+  // Some callers have emitted the common "voutcher" typo. Normalize only
+  // the event-name token so those redemptions follow the normal voucher path.
+  const event = receivedEvent.replace(/\bvoutcher(?=[._\s-]|$)/g, "voucher");
   const ignored = isIgnoredCentipidEvent(event);
   let kind: "payment" | "voucher" | "expense" | "ignored" = "ignored";
   if (!ignored && event.includes("expense")) kind = "expense";

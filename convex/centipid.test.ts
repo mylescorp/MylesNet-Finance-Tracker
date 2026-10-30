@@ -49,7 +49,7 @@ describe("Centipid webhook event idempotency", () => {
 
     expect(await deliver(t, "payment.received", { amount: 1000, transaction_id: "shared-ref" }))
       .toMatchObject({ status: "success", routed: "payment" });
-    expect(await deliver(t, "voucher.redeemed", { amount: 2000, transaction_id: "shared-ref", voucher_code: "V-1" }))
+    expect(await deliver(t, "voutcher.redeemed", { amount: 2000, transaction_id: "shared-ref", voucher_code: "V-1" }))
       .toMatchObject({ status: "success", routed: "voucher" });
     expect(await deliver(t, "voucher.redeemed", { amount: 2000, transaction_id: "shared-ref", voucher_code: "V-1" }))
       .toMatchObject({ status: "duplicate" });
