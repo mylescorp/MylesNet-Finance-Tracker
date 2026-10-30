@@ -2,4 +2,6 @@
 "mylesnet-finance-tracker": patch
 ---
 
-Keep supported large CSV imports within bounded preview chunks and refresh bill forecasts when the business day changes.
+Keep large import previews and bill forecasts current
+
+Supported CSV imports now calculate account impact across bounded preview chunks, and bill forecasts refresh when the business day changes.
