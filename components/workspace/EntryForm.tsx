@@ -22,6 +22,7 @@ export function EntryForm({ kind, onSaved }: { kind: EntryKind; onSaved?: () => 
   const access = useQuery(api.workspace.currentAccess, {});
   const context = useQuery(api.settings.runtimeContext, {});
   const supplierOptions = useQuery(api.suppliers.activeOptions, kind === "expense" ? {} : "skip");
+  const expenseTemplates = useQuery(api.expenseTemplates.list, kind === "expense" ? {} : "skip");
   const timezone = context?.access === "ready" ? context.timezone : "Africa/Kampala";
   const currency = context?.access === "ready" ? context.currency : "UGX";
   const currencyScale = 10 ** (context?.access === "ready" ? context.currencyMinorDigits : 0);
@@ -119,11 +120,27 @@ export function EntryForm({ kind, onSaved }: { kind: EntryKind; onSaved?: () => 
       setFeedback({ message: `Receipt is still not attached: ${error instanceof Error ? error.message : "upload failed"}`, error: true });
     } finally { setBusy(false); setDrawerBusy(false); }
   }
+  function applyExpenseTemplate(templateId: string) {
+    if (!formRef.current || expenseTemplates?.access !== "ready") return;
+    const row = expenseTemplates.templates.find(item => item._id === templateId);
+    if (!row) return;
+    const form = formRef.current;
+    const amount = form.elements.namedItem("amount");
+    const category = form.elements.namedItem("category");
+    const supplier = form.elements.namedItem("supplierId");
+    if (amount instanceof HTMLInputElement && row.amountUgx !== null) amount.value = String(row.amountUgx / currencyScale);
+    if (category instanceof HTMLSelectElement && [...category.options].some(option => option.value === row.category)) category.value = row.category;
+    if (supplier instanceof HTMLSelectElement && row.supplierId && [...supplier.options].some(option => option.value === row.supplierId)) supplier.value = row.supplierId;
+    setAccount(row.account);
+    setOccurredOn(row.nextDueOn);
+    setFeedback({ message: `Applied ${row.name} defaults. Review the amount, date and account before saving; this does not create a scheduled or automatic payment.`, error: false });
+  }
   const createPermission = kind === "sale" ? "sales.create" : "expenses.create";
   if (access?.access === "ready" && !access.permissions.includes(createPermission)) {
     return <div className="empty-state" role="status"><strong>Your role cannot create {kind === "sale" ? "sales" : "expenses"}.</strong><span>Ask a workspace administrator to update your role permissions.</span></div>;
   }
   return <form ref={formRef} className="form-layout" onSubmit={submit}>
+    {kind === "expense" && expenseTemplates?.access === "ready" && expenseTemplates.templates.some(row => row.active && !row.paused) && <div className="field field-full"><label htmlFor="expense-template">Use recurring expense defaults <span className="muted-note">(review before saving)</span></label><select id="expense-template" defaultValue="" onChange={event => applyExpenseTemplate(event.target.value)}><option value="">Choose a reminder</option>{expenseTemplates.templates.filter(row => row.active && !row.paused).map(row => <option value={row._id} key={row._id}>{row.name} · {row.category} · due {row.nextDueOn}</option>)}</select></div>}
     <div className="field"><label htmlFor="entry-amount">Amount ({currency})</label><input id="entry-amount" name="amount" inputMode="decimal" type="number" min={1 / currencyScale} step={1 / currencyScale} placeholder={currencyScale === 1 ? "e.g. 25,000" : "e.g. 25.00"} required /></div>
     <div className="field"><label htmlFor="entry-date">Date</label><input id="entry-date" name="occurredOn" type="date" value={occurredOn ?? businessDate(timezone)} onChange={(event) => setOccurredOn(event.target.value)} required /></div>
     <div className="field"><label htmlFor="entry-category">Category</label><select id="entry-category" name="category" required>{categories.map(category => <option key={category} value={category}>{category}</option>)}</select></div>

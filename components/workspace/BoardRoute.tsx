@@ -24,6 +24,7 @@ import { AttachExpenseReceipt } from "@/components/workspace/AttachExpenseReceip
 import { FinancePeriodFilters } from "@/components/workspace/FinancePeriodFilters";
 import { InteractiveFinanceChart } from "@/components/workspace/InteractiveFinanceChart";
 import { MonthEndClosePanel } from "@/components/workspace/MonthEndClosePanel";
+import { ExpenseTemplateManager } from "@/components/workspace/ExpenseTemplateManager";
 import { financePeriodRange, previousFinanceRange, validateFinanceCustomRange, type FinanceAccount, type FinancePeriod } from "@/lib/finance-period";
 
 type BoardSpec = {
@@ -61,7 +62,7 @@ const specs: Record<string, BoardSpec> = {
       { title: "Alerts", detail: "Highlights are calculated from the selected period and visible expense categories." },
       { title: "Category budgets", detail: "Set a monthly limit and review threshold for each saved expense category. Actuals are calculated from posted entries in the selected month." },
       { title: "Receipts and evidence", detail: "Attach private receipt files when recording an expense, then review or remove them here. Supplier links and spend history are available in Supplier tracking." },
-      { title: "Recurring costs", detail: "Recurring schedules are managed in Bills. Reminders do not create expenses until a payment is recorded." },
+      { title: "Recurring costs", detail: "Create expense reminders with cadence, due date, supplier, category, and account defaults. Reminders never post expenses automatically." },
       { title: "Supplier tracking", detail: "Maintain workspace-scoped suppliers, link an expense and invoice reference, and review posted spend history. Line-item unit prices are not captured." },
       { title: "Recurring expense detector", detail: "Repeated category and amount combinations in the selected period are suggestions only." },
       { title: "Audit trail", detail: "Audited changes are available in Settings → Access for members with audit permission." },
@@ -475,7 +476,7 @@ export function BoardRoute({ route }: { route: string }) {
         : section.title === "Alerts" ? <ExpenseSignals categories={expenseStats?.categoryTotals} largest={expenseStats?.expenseInsights.largest ?? null} bills={expenseBills} monthlyExpense={expenseStats?.monthlyExpense} complete={Boolean(expenseStats?.accountFilterComplete)} today={today} formatMoney={fmt} formatDay={fmtDate} />
         : section.title === "Category budgets" ? <CategoryBudgetsPanel from={range.from} toExclusive={range.toExclusive} account={account} currency={currency} scale={currencyScale} locale={locale} />
         : section.title === "Receipts and evidence" ? <ExpenseReceiptsPanel currency={currency} scale={currencyScale} locale={locale} />
-        : section.title === "Recurring costs" ? <RecurringCosts bills={expenseBills} access={expenseBillsAccess} today={today} formatMoney={fmt} formatDay={fmtDate} />
+        : section.title === "Recurring costs" ? <><ExpenseTemplateManager currency={currency} scale={currencyScale} locale={locale} /><RecurringCosts bills={expenseBills} access={expenseBillsAccess} today={today} formatMoney={fmt} formatDay={fmtDate} /></>
         : section.title === "Supplier tracking" ? <SupplierManager currency={currency} scale={currencyScale} locale={locale} />
         : section.title === "Recurring expense detector" ? <RecurringExpenseSuggestions patterns={expenseStats?.expenseInsights.recurringPatterns} complete={Boolean(expenseStats?.accountFilterComplete)} formatMoney={fmt} />
         : section.title === "Audit trail" ? <ExpenseAuditPreview entries={selectedEntries} formatDay={fmtDate} />

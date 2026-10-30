@@ -20,6 +20,7 @@ import type * as dataReset from "../dataReset.js";
 import type * as distributions from "../distributions.js";
 import type * as expenseReceiptHttp from "../expenseReceiptHttp.js";
 import type * as expenseReceipts from "../expenseReceipts.js";
+import type * as expenseTemplates from "../expenseTemplates.js";
 import type * as googleFormHttp from "../googleFormHttp.js";
 import type * as googleForms from "../googleForms.js";
 import type * as http from "../http.js";
@@ -53,6 +54,7 @@ declare const fullApi: ApiFromModules<{
   distributions: typeof distributions;
   expenseReceiptHttp: typeof expenseReceiptHttp;
   expenseReceipts: typeof expenseReceipts;
+  expenseTemplates: typeof expenseTemplates;
   googleFormHttp: typeof googleFormHttp;
   googleForms: typeof googleForms;
   http: typeof http;

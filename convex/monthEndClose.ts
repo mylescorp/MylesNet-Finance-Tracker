@@ -20,6 +20,12 @@ function nextMonthStart(from: string) {
   return date.toISOString().slice(0, 10);
 }
 
+async function sourceFingerprint(rows: Array<{ _id: string; kind: string; amountUgx: number; occurredOn: string; account: string; category: string; note: string; source: string; state: string; supplierName?: string; supplierReference?: string; idempotencyKey: string }>) {
+  const source = JSON.stringify(rows.map(row => [row._id, row.kind, row.amountUgx, row.occurredOn, row.account, row.category, row.note, row.source, row.state, row.supplierName ?? "", row.supplierReference ?? "", row.idempotencyKey]).sort((a, b) => String(a[0]).localeCompare(String(b[0]))));
+  const bytes = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(source));
+  return `${rows.length}:${Array.from(new Uint8Array(bytes), byte => byte.toString(16).padStart(2, "0")).join("")}`;
+}
+
 function assertPeriod(periodFrom: string, periodToExclusive: string, timezone: string) {
   if (!validDay(periodFrom) || !validDay(periodToExclusive) || !periodFrom.endsWith("-01") || nextMonthStart(periodFrom) !== periodToExclusive) {
     throw new ConvexError("Choose one complete calendar month for close review.");
@@ -43,18 +49,20 @@ async function snapshotForPeriod(ctx: Ctx, businessId: Id<"businesses">, period:
   const lastDay = new Date(`${period.periodToExclusive}T00:00:00.000Z`);
   lastDay.setUTCDate(lastDay.getUTCDate() - 1);
   const lastDayIso = lastDay.toISOString().slice(0, 10);
-  const [entries, reconciliations, reviews, batches, cash, mobileMoney, budgets, activityReviews] = await Promise.all([
+  const [entries, reconciliations, openReviews, acknowledgedReviews, activeImports, reversingImports, cash, mobileMoney, budgets, activityReviews] = await Promise.all([
     ctx.db.query("entries").withIndex("by_business_and_date", q => q.eq("businessId", businessId).gte("occurredOn", period.periodFrom).lt("occurredOn", period.periodToExclusive)).take(10_001),
     ctx.db.query("reconciliations").withIndex("by_business_and_date", q => q.eq("businessId", businessId).gte("asOfDate", period.periodFrom).lt("asOfDate", period.periodToExclusive)).take(501),
-    ctx.db.query("issueReviews").withIndex("by_business_and_issue", q => q.eq("businessId", businessId)).take(1001),
-    ctx.db.query("importBatches").withIndex("by_business_and_created", q => q.eq("businessId", businessId)).order("desc").take(501),
+    ctx.db.query("issueReviews").withIndex("by_business_and_status_and_updated", q => q.eq("businessId", businessId).eq("status", "open")).take(1001),
+    ctx.db.query("issueReviews").withIndex("by_business_and_status_and_updated", q => q.eq("businessId", businessId).eq("status", "acknowledged")).take(1001),
+    ctx.db.query("importBatches").withIndex("by_business_and_status_and_created", q => q.eq("businessId", businessId).eq("status", "in_progress")).take(101),
+    ctx.db.query("importBatches").withIndex("by_business_and_status_and_created", q => q.eq("businessId", businessId).eq("status", "reversing")).take(101),
     ctx.db.query("accountBalances").withIndex("by_business_and_account", q => q.eq("businessId", businessId).eq("account", "cash")).unique(),
     ctx.db.query("accountBalances").withIndex("by_business_and_account", q => q.eq("businessId", businessId).eq("account", "mobile_money")).unique(),
     ctx.db.query("categoryBudgets").withIndex("by_business", q => q.eq("businessId", businessId)).take(1001),
     ctx.db.query("dailyActivityReviews").withIndex("by_business_and_day", q => q.eq("businessId", businessId).gte("day", period.periodFrom).lt("day", period.periodToExclusive)).take(32),
   ]);
 
-  const complete = entries.length <= 10_000 && reconciliations.length <= 500 && reviews.length <= 1000 && batches.length <= 500 && budgets.length <= 1000 && activityReviews.length <= 31;
+  const complete = entries.length <= 10_000 && reconciliations.length <= 500 && openReviews.length <= 1000 && acknowledgedReviews.length <= 1000 && activeImports.length <= 100 && reversingImports.length <= 100 && budgets.length <= 1000 && activityReviews.length <= 31;
   const posted = entries.filter(entry => entry.state === "posted");
   const salesUgx = posted.filter(entry => entry.kind === "sale").reduce((sum, entry) => {
     const total = sum + entry.amountUgx;
@@ -77,12 +85,11 @@ async function snapshotForPeriod(ctx: Ctx, businessId: Id<"businesses">, period:
   const lastDayCashClosed = lastDayReconciliations.some(row => row.account === "cash" && row.status === "closed");
   const lastDayMobileClosed = lastDayReconciliations.some(row => row.account === "mobile_money" && row.status === "closed");
   const unresolvedReconciliations = currentCounts.filter(row => row.status !== "closed");
-  const openPeriodIssues = reviews.filter(row => {
-    if (row.status === "resolved") return false;
+  const openPeriodIssues = [...openReviews, ...acknowledgedReviews].filter(row => {
     const [from, toExclusive] = row.issueKey.split(":", 2);
     return validDay(from) && validDay(toExclusive) && from < period.periodToExclusive && toExclusive > period.periodFrom;
   });
-  const pendingImports = batches.filter(batch => batch.status === "in_progress" || batch.status === "reversing");
+  const pendingImports = [...activeImports, ...reversingImports];
   const categoryBudgets = budgets.filter(row => row.active).map(row => ({
     category: row.category,
     limitUgx: row.monthlyBudgetUgx,
@@ -94,15 +101,18 @@ async function snapshotForPeriod(ctx: Ctx, businessId: Id<"businesses">, period:
   const cashbookNetUgx = salesUgx - expensesUgx;
   if (!Number.isSafeInteger(cashbookNetUgx)) throw new ConvexError("Cashbook net exceeds the supported safe amount range.");
   const postedDays = new Set(posted.map(entry => entry.occurredOn));
+  const entriesByDay = new Map<string, typeof entries>();
+  for (const entry of entries) entriesByDay.set(entry.occurredOn, [...(entriesByDay.get(entry.occurredOn) ?? []), entry]);
   const reviewByDay = new Map(activityReviews.map(row => [row.day, row]));
   const activityDays: Array<{ day: string; status: "confirmed_no_activity" | "source_reviewed"; note: string }> = [];
   const unreviewedSourceDays: Array<{ day: string; activityExists: boolean; priorStatus: "confirmed_no_activity" | "source_reviewed" | null; note: string | null; updatedAt: number | null }> = [];
   for (let date = new Date(`${period.periodFrom}T00:00:00.000Z`); date.toISOString().slice(0, 10) < period.periodToExclusive; date.setUTCDate(date.getUTCDate() + 1)) {
     const day = date.toISOString().slice(0, 10);
     const activityExists = postedDays.has(day);
+    const fingerprint = await sourceFingerprint(entriesByDay.get(day) ?? []);
     const saved = reviewByDay.get(day);
     const expectedStatus = activityExists ? "source_reviewed" : "confirmed_no_activity";
-    if (!saved || saved.status !== expectedStatus) unreviewedSourceDays.push({ day, activityExists, priorStatus: saved?.status ?? null, note: saved?.note ?? null, updatedAt: saved?.updatedAt ?? null });
+    if (!saved || saved.status !== expectedStatus || saved.sourceFingerprint !== fingerprint) unreviewedSourceDays.push({ day, activityExists, priorStatus: saved?.status ?? null, note: saved?.note ?? null, updatedAt: saved?.updatedAt ?? null });
     else activityDays.push({ day, status: saved.status, note: saved.note });
   }
   const checklist = [
@@ -114,7 +124,7 @@ async function snapshotForPeriod(ctx: Ctx, businessId: Id<"businesses">, period:
     { key: "issues", label: "Period data-quality reviews are resolved", ready: openPeriodIssues.length === 0, detail: openPeriodIssues.length ? `${openPeriodIssues.length} open or acknowledged issue review${openPeriodIssues.length === 1 ? "" : "s"} overlap this period.` : "No unresolved saved issue reviews overlap this period." },
     { key: "imports", label: "No imports are in progress", ready: pendingImports.length === 0, detail: pendingImports.length ? `${pendingImports.length} import batch${pendingImports.length === 1 ? " is" : "es are"} still in progress or reversing.` : "No import batches are awaiting completion or reversal." },
     { key: "source-days", label: "Every calendar day has a source-coverage review", ready: unreviewedSourceDays.length === 0, detail: unreviewedSourceDays.length ? `${unreviewedSourceDays.length} day${unreviewedSourceDays.length === 1 ? " needs" : "s need"} review to confirm saved activity or no activity.` : "Every day is attested as source-reviewed or no-activity." },
-    { key: "limits", label: "All close review sections are within their safe limits", ready: complete, detail: complete ? "Ledger, issue, reconciliation, import and budget reads are complete." : "A source exceeded a safe review limit; the close is blocked rather than calculated from partial rows." },
+    { key: "limits", label: "All close review sections are within their safe limits", ready: complete, detail: complete ? "Ledger, unresolved issue, active import, reconciliation and budget reads are complete." : "A source exceeded a safe review limit; the close is blocked rather than calculated from partial rows." },
   ];
   return {
     complete,
@@ -181,7 +191,7 @@ export const reviewSourceDay = mutation({
   returns: v.null(),
   handler: async (ctx, args) => {
     const current = await currentWorkspace(ctx, args.businessId);
-    if (!current || !(await hasPermission(ctx, current.membership, "monthlyPnl.view"))) throw new ConvexError("Your role cannot review month-end source coverage.");
+    if (!current || !(await hasPermission(ctx, current.membership, "reconcile.resolve"))) throw new ConvexError("Your role cannot review month-end source coverage.");
     const today = new Intl.DateTimeFormat("en-CA", { timeZone: current.business.timezone, year: "numeric", month: "2-digit", day: "2-digit" }).format(Date.now());
     const note = args.note.trim();
     if (!validDay(args.day) || args.day >= today || note.length < 5 || note.length > 300) throw new ConvexError("Choose a past business day and enter a source review note of 5 to 300 characters.");
@@ -193,8 +203,9 @@ export const reviewSourceDay = mutation({
     const prior = await ctx.db.query("dailyActivityReviews").withIndex("by_business_and_day", q => q.eq("businessId", current.business._id).eq("day", args.day)).unique();
     if ((prior?.updatedAt ?? null) !== args.expectedUpdatedAt) throw new ConvexError("This day was reviewed in another session. Refresh the close checklist before saving again.");
     const now = Date.now();
-    if (prior) await ctx.db.patch(prior._id, { status: args.status, note, updatedBy: current.userId, updatedAt: now });
-    else await ctx.db.insert("dailyActivityReviews", { businessId: current.business._id, day: args.day, status: args.status, note, createdBy: current.userId, createdAt: now, updatedBy: current.userId, updatedAt: now });
+    const fingerprint = await sourceFingerprint(dayEntries);
+    if (prior) await ctx.db.patch(prior._id, { status: args.status, note, sourceFingerprint: fingerprint, updatedBy: current.userId, updatedAt: now });
+    else await ctx.db.insert("dailyActivityReviews", { businessId: current.business._id, day: args.day, status: args.status, note, sourceFingerprint: fingerprint, createdBy: current.userId, createdAt: now, updatedBy: current.userId, updatedAt: now });
     await ctx.db.insert("auditEvents", { businessId: current.business._id, actorId: current.userId, action: "sales.day_source_reviewed", entityType: "dailyActivityReview", entityId: `${current.business._id}:${args.day}`, occurredAt: now, summary: `Reviewed ${args.day} source coverage as ${args.status === "source_reviewed" ? "complete" : "no activity"}.`, details: JSON.stringify({ before: prior ? { status: prior.status, note: prior.note } : null, after: { status: args.status, note } }) });
     return null;
   },

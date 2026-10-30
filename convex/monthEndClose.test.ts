@@ -38,25 +38,17 @@ async function setup({ complete = true }: { complete?: boolean } = {}) {
       const bookBalanceUgx = account === "cash" ? 100_000 : 50_000;
       await ctx.db.insert("reconciliations", { businessId, account, asOfDate: period.lastDay, bookBalanceUgx, countedBalanceUgx: bookBalanceUgx, varianceUgx: 0, status: "closed", reviewedBy: reviewerId, reviewedByName: "Close reviewer", reviewedAt: createdAt, reviewNote: "Final account count approved.", note: "Final-day count", idempotencyKey: `close-count-${account}-idempotency`, createdBy: preparerId, createdAt });
     }
-    if (complete) {
-      for (let date = new Date(`${period.periodFrom}T00:00:00.000Z`); date.toISOString().slice(0, 10) < period.periodToExclusive; date.setUTCDate(date.getUTCDate() + 1)) {
-        const day = date.toISOString().slice(0, 10);
-        const hasActivity = day.endsWith("15") || day.endsWith("18");
-        await ctx.db.insert("dailyActivityReviews", {
-          businessId,
-          day,
-          status: hasActivity ? "source_reviewed" : "confirmed_no_activity",
-          note: hasActivity ? "Checked the day's source records." : "Confirmed the business had no posted activity.",
-          createdBy: preparerId,
-          createdAt,
-          updatedBy: preparerId,
-          updatedAt: createdAt,
-        });
-      }
-    }
     return { businessId, preparerId, reviewerId, memberId };
   });
-  return { t, period, ...users, preparer: t.withIdentity({ subject: users.preparerId }), reviewer: t.withIdentity({ subject: users.reviewerId }), member: t.withIdentity({ subject: users.memberId }) };
+  const preparer = t.withIdentity({ subject: users.preparerId });
+  if (complete) {
+    for (let date = new Date(`${period.periodFrom}T00:00:00.000Z`); date.toISOString().slice(0, 10) < period.periodToExclusive; date.setUTCDate(date.getUTCDate() + 1)) {
+      const day = date.toISOString().slice(0, 10);
+      const hasActivity = day.endsWith("15") || day.endsWith("18");
+      await preparer.mutation(api.monthEndClose.reviewSourceDay, { businessId: users.businessId, day, status: hasActivity ? "source_reviewed" : "confirmed_no_activity", note: hasActivity ? "Checked the day's source records." : "Confirmed the business had no posted activity.", expectedUpdatedAt: null });
+    }
+  }
+  return { t, period, ...users, preparer, reviewer: t.withIdentity({ subject: users.reviewerId }), member: t.withIdentity({ subject: users.memberId }) };
 }
 
 describe("month-end close controls", () => {
@@ -114,17 +106,40 @@ describe("month-end close controls", () => {
     expect(overview.snapshot.activityDays).toContainEqual({ day: activeDay, status: "source_reviewed", note: "Checked the source receipts." });
   });
 
+  it("does not let a monthly-report viewer attest source coverage", async () => {
+    const { t, businessId, period } = await setup({ complete: false });
+    const viewerId = await t.run(async ctx => {
+      const userId = await ctx.db.insert("users", { name: "Report viewer" });
+      const roleId = await ctx.db.insert("workspaceRoles", { businessId, name: "Report viewer", description: "View monthly reports", permissions: ["monthlyPnl.view"], active: true, createdBy: userId, createdAt: Date.now(), updatedAt: Date.now() });
+      await ctx.db.insert("memberships", { businessId, userId, role: "member", roleId, active: true, createdAt: Date.now() });
+      return userId;
+    });
+    await expect(t.withIdentity({ subject: viewerId }).mutation(api.monthEndClose.reviewSourceDay, { businessId, day: `${period.periodFrom.slice(0, 8)}01`, status: "confirmed_no_activity", note: "Reviewed source coverage.", expectedUpdatedAt: null })).rejects.toThrow("cannot review month-end source coverage");
+  });
+
+  it("keeps completed imports and resolved historical issue reviews out of current close limits", async () => {
+    const { t, preparer, businessId, period, preparerId } = await setup();
+    await t.run(async ctx => {
+      const now = Date.now();
+      for (let index = 0; index < 501; index += 1) await ctx.db.insert("importBatches", { businessId, fileName: `closed-${index}.csv`, importType: "cashbook", sourceHash: `hash-${index}`, totalRows: 0, importedCount: 0, skippedCount: 0, progressRows: 0, status: "completed", createdBy: preparerId, createdAt: now });
+      for (let index = 0; index < 1001; index += 1) await ctx.db.insert("issueReviews", { businessId, issueKey: `${period.periodFrom}:2026-12-01:old-${index}:0`, issueId: `old-${index}`, status: "resolved", updatedBy: preparerId, updatedAt: now, createdAt: now });
+    });
+    const overview = await preparer.query(api.monthEndClose.overview, { businessId, periodFrom: period.periodFrom, periodToExclusive: period.periodToExclusive });
+    expect(overview.access === "ready" && overview.snapshot.checklist.every(item => item.ready)).toBe(true);
+  });
+
   it("rejects approval when source data changes after preparation", async () => {
     const { t, preparerId, reviewerId, preparer, reviewer, businessId, period } = await setup();
     const closureId = await preparer.mutation(api.monthEndClose.prepare, { businessId, periodFrom: period.periodFrom, periodToExclusive: period.periodToExclusive });
     const prepared = await preparer.query(api.monthEndClose.overview, { businessId, periodFrom: period.periodFrom, periodToExclusive: period.periodToExclusive });
     if (prepared.access !== "ready" || !prepared.closure) throw new Error("Expected prepared close.");
     await t.run(async ctx => {
-      await ctx.db.insert("entries", { businessId, kind: "expense", amountUgx: 10_000, occurredOn: `${period.periodFrom.slice(0, 8)}20`, account: "cash", category: "Repairs", note: "Late correction", source: "manual", idempotencyKey: "close-late-entry-idempotency", state: "posted", createdBy: preparerId, createdAt: Date.now() });
+      await ctx.db.insert("entries", { businessId, kind: "expense", amountUgx: 10_000, occurredOn: `${period.periodFrom.slice(0, 8)}15`, account: "cash", category: "Repairs", note: "Late correction", source: "manual", idempotencyKey: "close-late-entry-idempotency", state: "posted", createdBy: preparerId, createdAt: Date.now() });
       expect(await ctx.db.get("users", reviewerId)).toBeTruthy();
     });
     await expect(reviewer.mutation(api.monthEndClose.approve, { businessId, closureId, expectedSnapshotJson: prepared.closure.snapshotJson })).rejects.toThrow("Source records changed");
     const after = await preparer.query(api.monthEndClose.overview, { businessId, periodFrom: period.periodFrom, periodToExclusive: period.periodToExclusive });
     expect(after.access === "ready" ? after.closure?.status : null).toBe("awaiting_review");
+    expect(after.access === "ready" && after.snapshot.unreviewedSourceDays.some(row => row.day === `${period.periodFrom.slice(0, 8)}15`)).toBe(true);
   });
 });
