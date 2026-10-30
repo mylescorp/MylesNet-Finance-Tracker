@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { useMutation, usePaginatedQuery, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
@@ -33,11 +33,6 @@ export function CsvImportPanel() {
   const [reportBatchId, setReportBatchId] = useState<Id<"importBatches"> | null>(null);
   const reportDetails = useQuery(api.imports.reportDetails, reportBatchId && settings?.access === "ready" ? { businessId: settings.businessId, batchId: reportBatchId } : "skip");
   const report = useMemo(() => { try { return csvRows.length ? parseCentipid(csvRows) : null; } catch { return null; } }, [csvRows]);
-  const textPreview = useMemo(() => {
-    if (!pastedText.trim()) return { rows: [] as ImportRow[], error: "" };
-    try { return { rows: parsePlainTextExpenses(pastedText, defaultAccount), error: "" }; }
-    catch (e) { return { rows: [] as ImportRow[], error: e instanceof Error ? e.message : "Could not read the pasted expenses." }; }
-  }, [pastedText, defaultAccount]);
   const looksCentipid = inputMode === "csv" && csvRows[0]?.[0]?.trim() === "Centipid Analytics Report";
   const headers = csvRows[0] ?? [];
   function currentBusinessId() { if (settings?.access !== "ready") throw new Error("Workspace is still loading."); return settings.businessId; }
@@ -61,7 +56,7 @@ export function CsvImportPanel() {
     } catch (e) { if (readId === fileReadId.current) setError(e instanceof Error ? e.message : "Could not read the CSV."); }
   }
 
-  function flatRows(): ImportRow[] {
+  const flatRows = useCallback((): ImportRow[] => {
     if (!settings || settings.access !== "ready") throw new Error("Workspace settings are not ready.");
     if (inputMode === "text") {
       if (settings.currency !== "UGX") throw new Error("These pasted amounts are in UGX. Change the workspace currency to UGX before importing; currency conversion is not supported.");
@@ -88,7 +83,41 @@ export function CsvImportPanel() {
       if (note.length > 300) throw new Error(`Row ${index + 2}: note must be 300 characters or fewer.`);
       return { rowNumber: index + 2, kind: rowKind, amountUgx, occurredOn: toIsoDay(value(mapping.date)), account: rowAccount, category, note };
     });
-  }
+  }, [settings, inputMode, pastedText, defaultAccount, csvRows, mapping, kind]);
+
+  const preview = useMemo(() => {
+    if (!fileName) return { rows: [] as ImportRow[], error: "" };
+    if (looksCentipid) {
+      if (!report) return { rows: [] as ImportRow[], error: "The Centipid report is malformed or its revenue totals do not reconcile." };
+      return { rows: report.rows, error: "" };
+    }
+    try { return { rows: flatRows(), error: "" }; }
+    catch (e) { return { rows: [] as ImportRow[], error: e instanceof Error ? e.message : "Could not validate the import rows." }; }
+  }, [fileName, looksCentipid, report, flatRows]);
+  const previewTotals = useMemo(() => {
+    const totals = { cash: 0, mobile_money: 0, unallocated: 0 };
+    const seen = new Set<string>();
+    let potentialDuplicateRows = 0;
+    for (const row of preview.rows) {
+      const signature = [row.occurredOn, row.kind, row.account, row.category, row.amountUgx, row.note].join("\u0000");
+      if (seen.has(signature)) potentialDuplicateRows++;
+      seen.add(signature);
+      const signed = row.kind === "sale" ? row.amountUgx : -row.amountUgx;
+      const next = totals[row.account] + signed;
+      if (!Number.isSafeInteger(next)) return { error: "The account impact exceeds the supported safe amount range.", totals, potentialDuplicateRows };
+      totals[row.account] = next;
+    }
+    return { error: "", totals, potentialDuplicateRows };
+  }, [preview.rows]);
+  const previewDateRange = useMemo(() => {
+    const dates = preview.rows.map(row => row.occurredOn).sort();
+    return dates.length ? { from: dates[0], to: dates[dates.length - 1] } : null;
+  }, [preview.rows]);
+  const previewCurrency = settings?.access === "ready" ? settings.currency : "UGX";
+  const previewScale = settings?.access === "ready" ? 10 ** settings.currencyMinorDigits : 1;
+  const formatPreviewAmount = (amountUgx: number) => new Intl.NumberFormat(settings?.access === "ready" ? settings.locale : "en-UG", { style: "currency", currency: previewCurrency, maximumFractionDigits: Math.round(Math.log10(previewScale)) }).format(amountUgx / previewScale);
+  const potentialDuplicateRows = previewTotals.potentialDuplicateRows;
+  const previewError = preview.error || previewTotals.error;
 
   async function runImport() {
     setBusy(true); setError(""); setMessage("");
@@ -98,7 +127,8 @@ export function CsvImportPanel() {
       const isReport = looksCentipid;
       const parsedReport = isReport ? parseCentipid(csvRows) : null;
       if (parsedReport && settings.currency !== "UGX") throw new Error("This Centipid report contains UGX totals. Change the workspace currency to UGX before importing; currency conversion is not supported.");
-      const entries = parsedReport?.rows ?? flatRows();
+      if (preview.error || previewTotals.error) throw new Error(preview.error || previewTotals.error);
+      const entries = parsedReport?.rows ?? preview.rows;
       if (!entries.length && !parsedReport) throw new Error("There are no importable rows in this file.");
       let reportSummary: string | undefined;
       if (parsedReport) {
@@ -115,12 +145,16 @@ export function CsvImportPanel() {
         setMessage(`This file was already imported: ${batch.importedCount} entries recorded, ${batch.skippedCount} duplicates skipped.`);
         return;
       }
+      let importedCount = batch.importedCount;
+      let skippedCount = batch.skippedCount;
       for (let i = batch.progressRows; i < entries.length; i += 25) {
         const result = await importRows({ businessId: settings.businessId, batchId: batch.batchId, startRow: i, rows: entries.slice(i, i + 25) });
+        importedCount += result.imported;
+        skippedCount += result.skipped;
         setMessage(`Importing ${Math.min(i + 25, entries.length)} of ${entries.length} rows… (${result.imported} new, ${result.skipped} duplicates in this chunk)`);
       }
       await completeBatch({ businessId: settings.businessId, batchId: batch.batchId });
-      setMessage(`Import complete. ${entries.length} ledger rows processed. ${parsedReport ? `Full Centipid report retained: ${parsedReport.paymentMethods.length} payment methods, ${parsedReport.routers.length} routers and ${parsedReport.dailyUsage.length} daily usage values.` : ""}`);
+      setMessage(`Import complete. ${importedCount} new rows recorded; ${skippedCount} duplicate rows skipped.${previewDateRange ? ` Coverage: ${previewDateRange.from} through ${previewDateRange.to}.` : ""}${parsedReport ? ` Full Centipid report retained: ${parsedReport.paymentMethods.length} payment methods, ${parsedReport.routers.length} routers and ${parsedReport.dailyUsage.length} daily usage values.` : ""}`);
     } catch (e) { setError(e instanceof Error ? e.message : "The import failed."); }
     finally { setBusy(false); }
   }
@@ -174,18 +208,18 @@ export function CsvImportPanel() {
   return <section className="card settings-card">
     <div className="card-heading"><div><h2 className="card-title">Import expenses and cashbook data</h2><p className="card-subtitle">Preview, reconcile, then import entries with duplicate protection and an audit record.</p></div></div>
     <div className="segment-control" role="group" aria-label="Import format"><button type="button" aria-pressed={inputMode === "csv"} onClick={() => changeInputMode("csv")}>CSV file</button><button type="button" aria-pressed={inputMode === "text"} onClick={() => changeInputMode("text")}>Paste expenses</button></div>
-    {inputMode === "csv" ? <div className="form-actions"><label className="field"><span>CSV file · up to 5 MB and 10,000 rows</span><input type="file" accept=".csv,text/csv" onChange={e => void chooseFile(e.target.files?.[0])} /></label><button type="button" className="button" onClick={downloadTemplate}>Download cashbook CSV template</button></div> : <div className="form-layout" style={{ marginTop: 12 }}><label className="field field-full"><span>Paste copied expense rows</span><textarea rows={10} value={pastedText} onChange={e => { const value = e.target.value; setError(""); setMessage(""); if (value.length > 5 * 1024 * 1024) { setError("Pasted text must be 5 MB or smaller."); return; } setPastedText(value); setFileText(value); setFileName(value.trim() ? "Pasted expense text" : ""); }} placeholder={"Oct 27, 2026, 11:42 PM\tElectricity\ttest\tCash\tUSh 6,000\nOct 23, 2026, 11:29 AM\tSalaries\ttom test\tCash\tUSh 2,000"} /></label><label className="field"><span>Default account for Other</span><select value={defaultAccount} onChange={e => setDefaultAccount(e.target.value as typeof defaultAccount)}><option value="cash">Cash</option><option value="mobile_money">Mobile money</option></select></label><p className="muted-note field-full">Paste tab-separated rows with date, category, description, account, and amount. Wrapped description and Receipt lines are kept together. M-Pesa and Centipid accounts go to Mobile money; Other uses your selected default account.</p>{textPreview.error && <p className="form-feedback form-error field-full" role="alert">{textPreview.error}</p>}{textPreview.rows.length > 0 && <p className="muted-note field-full">Preview: {textPreview.rows.length} expenses · {textPreview.rows[0].occurredOn} through {textPreview.rows[textPreview.rows.length - 1].occurredOn}. All pasted amounts are treated as UGX.</p>}</div>}
+    {inputMode === "csv" ? <div className="form-actions"><label className="field"><span>CSV file · up to 5 MB and 10,000 rows</span><input type="file" accept=".csv,text/csv" onChange={e => void chooseFile(e.target.files?.[0])} /></label><button type="button" className="button" onClick={downloadTemplate}>Download cashbook CSV template</button></div> : <div className="form-layout" style={{ marginTop: 12 }}><label className="field field-full"><span>Paste copied expense rows</span><textarea rows={10} value={pastedText} onChange={e => { const value = e.target.value; setError(""); setMessage(""); if (value.length > 5 * 1024 * 1024) { setError("Pasted text must be 5 MB or smaller."); return; } setPastedText(value); setFileText(value); setFileName(value.trim() ? "Pasted expense text" : ""); }} placeholder={"Oct 27, 2026, 11:42 PM\tElectricity\ttest\tCash\tUSh 6,000\nOct 23, 2026, 11:29 AM\tSalaries\ttom test\tCash\tUSh 2,000"} /></label><label className="field"><span>Default account for Other</span><select value={defaultAccount} onChange={e => setDefaultAccount(e.target.value as typeof defaultAccount)}><option value="cash">Cash</option><option value="mobile_money">Mobile money</option></select></label><p className="muted-note field-full">Paste tab-separated rows with date, category, description, account, and amount. Wrapped description and Receipt lines are kept together. M-Pesa and Centipid accounts go to Mobile money; Other uses your selected default account.</p></div>}
     {fileName && <p className="muted-note">Selected: {fileName}</p>}
-    {looksCentipid && report && <div className="notice-banner notice-info"><strong>Centipid analytics report detected.</strong> {report.dailyRevenue.length} dated revenue rows totaling {report.revenueTotal.toLocaleString()} UGX; payment-method total {report.paymentMethods.reduce((sum, item) => sum + item.amount, 0).toLocaleString()} UGX; {report.usageBytes.toLocaleString()} bytes across {report.dailyUsage.length} days; {report.routers.length} router rows. Full revenue, payment, usage, router and summary sections are retained as report metadata. Revenue is imported as unallocated, so it does not increase cash or mobile-money balances.</div>}
+    {looksCentipid && report && <div className="notice-banner notice-info"><strong>Centipid analytics report detected.</strong> {report.dailyRevenue.length} dated revenue rows totaling {report.revenueTotal.toLocaleString()} UGX; payment-method total {report.paymentMethods.reduce((sum, item) => sum + item.amount, 0).toLocaleString()} UGX; {report.usageBytes.toLocaleString()} bytes across {report.dailyUsage.length} days; {report.routers.length} router rows. {previewDateRange ? `Revenue coverage: ${previewDateRange.from} through ${previewDateRange.to}.` : "No dated revenue rows."} Estimated account changes: Cash 0 · Mobile money 0 · Unallocated {formatPreviewAmount(previewTotals.totals.unallocated)}. Full revenue, payment, usage, router and summary sections are retained as report metadata. Revenue remains unallocated because the report does not include a verified account split.{previewTotals.error && <p role="alert">{previewTotals.error} Import is disabled.</p>}</div>}
     {looksCentipid && csvRows.length > 0 && !report && <p className="form-feedback form-error" role="alert">The Centipid report is malformed or its revenue totals do not reconcile. No entries were imported.</p>}
     {fileName && !looksCentipid && inputMode === "csv" && <>
       <p className="muted-note">Map the CSV columns. Rows must contain a date, amount and category. Amounts use the workspace currency ({settings?.access === "ready" ? settings.currency : "…"}).</p>
       <div className="form-layout">{select("Date column", "date")}{select("Amount column", "amount")}{select("Category column", "category")}{select("Note column", "note", true)}{select("Account column", "account", true)}{select("Entry kind column", "kind", true)}</div>
       <div className="form-layout">{mapping.kind < 0 && <label className="field"><span>Entry type for all rows</span><select value={kind} onChange={e => setKind(e.target.value as typeof kind)}><option value="expense">Expenses</option><option value="sale">Sales</option></select></label>}<label className="field"><span>Default account for blank or unmapped values</span><select value={defaultAccount} onChange={e => setDefaultAccount(e.target.value as typeof defaultAccount)}><option value="cash">Cash</option><option value="mobile_money">Mobile money</option></select></label></div>
-      <p className="muted-note">Preview: {csvRows.slice(1, 4).map((row, i) => `row ${i + 2}: ${row.slice(0, 4).join(" · ")}`).join(" | ")}</p>
     </>}
+    {fileName && !looksCentipid && <div className="notice-banner notice-info"><strong>Import preview · {preview.rows.length} validated rows</strong>{previewError ? <p role="alert">{previewError} No rows can be imported until the preview is valid.</p> : preview.rows.length > 0 ? <><p>{previewDateRange ? `Coverage: ${previewDateRange.from} through ${previewDateRange.to}.` : "No dated rows."} Default account for blank or unmapped values: {defaultAccount === "cash" ? "Cash" : "Mobile money"}.</p><p>Estimated account balance changes: Cash {formatPreviewAmount(previewTotals.totals.cash)} · Mobile money {formatPreviewAmount(previewTotals.totals.mobile_money)}{previewTotals.totals.unallocated ? ` · Unallocated ${formatPreviewAmount(previewTotals.totals.unallocated)}` : ""}. These are expected ledger changes, not live balances.</p>{potentialDuplicateRows > 0 && <p className="muted-note" role="status">{potentialDuplicateRows} potential duplicate row{potentialDuplicateRows === 1 ? "" : "s"} have identical date, type, account, category, amount, and note values. They are not removed automatically; check the source before importing.</p>}<div className="table-scroll"><table className="data-table"><thead><tr><th>Source row</th><th>Date</th><th>Type</th><th>Category</th><th>Account</th><th>Amount</th></tr></thead><tbody>{preview.rows.slice(0, 5).map(row => <tr key={`${row.rowNumber}:${row.kind}`}><td>{row.rowNumber}</td><td>{row.occurredOn}</td><td>{row.kind}</td><td>{row.category}</td><td>{row.account === "cash" ? "Cash" : row.account === "mobile_money" ? "Mobile money" : "Unallocated"}</td><td>{formatPreviewAmount(row.amountUgx)}</td></tr>)}</tbody></table></div>{preview.rows.length > 5 && <p className="muted-note">Showing the first 5 of {preview.rows.length} validated rows.</p>}</> : <p>No importable rows are available in this source.</p>}</div>}
     {error && <p className="form-feedback form-error" role="alert">{error}</p>}{message && <p className="form-feedback form-success" role="status">{message}</p>}
-    <div className="form-actions"><button type="button" className="button button-accent" disabled={busy || !fileName || !settings || settings.access !== "ready" || (looksCentipid && !report)} onClick={() => void runImport()}>{busy ? "Importing…" : inputMode === "text" ? "Import expenses" : "Import rows"}</button>{settings?.access === "ready" && <span className="muted-note">All amounts are stored as safe integers in {settings.currency}.</span>}</div>
+    <div className="form-actions"><button type="button" className="button button-accent" disabled={busy || !fileName || !settings || settings.access !== "ready" || Boolean(previewError) || (looksCentipid && !report)} onClick={() => void runImport()}>{busy ? "Importing…" : inputMode === "text" ? "Import expenses" : "Import rows"}</button>{settings?.access === "ready" && <span className="muted-note">All amounts are stored as safe integers in {settings.currency}.</span>}</div>
     <div className="card-heading" style={{ marginTop: 18 }}><div><h3 className="card-title">Import history</h3><p className="card-subtitle">Owner-visible import batches, loaded 20 at a time.</p></div></div>
     {!history.results.length ? <p className="muted-note">No imports yet.</p> : <div className="table-scroll"><table className="data-table"><thead><tr><th>File</th><th>Type</th><th>Progress</th><th>Imported</th><th>Skipped</th><th>When</th><th>Report data</th><th>Action</th></tr></thead><tbody>{history.results.map(item => <tr key={item._id}><td>{item.fileName}</td><td>{item.importType === "centipid_analytics" ? "Centipid analytics" : "Cashbook"}</td><td>{item.status === "completed" ? "Completed" : item.status === "cancelled" ? "Cancelled" : item.status === "reversing" ? `Reversing · ${item.rollbackProgressRows} entries` : item.status === "reversed" ? `Reversed · ${item.rollbackProgressRows} entries` : `${item.progressRows} / ${item.totalRows}`}</td><td>{item.importedCount}</td><td>{item.skippedCount}</td><td>{new Date(item.createdAt).toLocaleString()}</td><td>{item.importType === "centipid_analytics" ? <button type="button" className="button" onClick={() => setReportBatchId(current => current === item._id ? null : item._id)}>{reportBatchId === item._id ? "Hide report" : "View report"}</button> : "—"}</td><td>{item.status === "in_progress" ? <button type="button" className="button" onClick={() => { if (window.confirm("Cancel this import? Rows already imported remain saved.")) void cancelBatch({ businessId: currentBusinessId(), batchId: item._id }); }}>Cancel import</button> : item.importedCount > 0 && (item.status === "completed" || item.status === "cancelled" || item.status === "reversing") ? <button type="button" className="button" disabled={busy} onClick={() => void runBatchReversal(item._id, item.status)}>{item.status === "reversing" ? "Continue reversal" : "Reverse import"}</button> : "—"}</td></tr>)}</tbody></table></div>}{history.status === "CanLoadMore" && <button type="button" className="button" onClick={() => history.loadMore(20)}>Load older imports</button>}
     {reportBatchId && <div className="notice-banner notice-info"><strong>Retained Centipid report</strong>{reportDetails === undefined ? <p>Loading report data…</p> : reportDetails ? <><button type="button" className="button" onClick={downloadReport}>Download report JSON</button><pre style={{ maxHeight: 360, overflow: "auto", whiteSpace: "pre-wrap" }}>{JSON.stringify(JSON.parse(reportDetails), null, 2)}</pre></> : <p>Report details are not available.</p>}</div>}

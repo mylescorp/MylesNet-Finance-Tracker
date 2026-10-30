@@ -287,7 +287,7 @@ export const overview = query({
         loansComplete: canViewLoans && activeLoans.length < 101,
         salesCategories,
         expenseCategories,
-        upcomingBills: canViewBills ? upcomingBills.slice(0, 6).map(row => ({ name: row.name, amountUgx: row.amountUgx, nextDueOn: row.nextDueOn, category: row.category, overdue: row.nextDueOn < args.today })) : [],
+        upcomingBills: canViewBills ? upcomingBills.filter(row => !(row.paused ?? false)).slice(0, 6).map(row => ({ name: row.name, amountUgx: row.amountUgx, nextDueOn: row.nextDueOn, category: row.category, overdue: row.nextDueOn < args.today, reminderLeadDays: row.reminderLeadDays ?? 3, reminderDue: row.nextDueOn >= args.today && row.nextDueOn <= shiftDay(args.today, row.reminderLeadDays ?? 3) })) : [],
         upcomingBillsComplete: canViewBills && upcomingBills.length < 101,
         recentAudit: await Promise.all(recentAudit.map(async row => {
           const [user, profile] = await Promise.all([ctx.db.get("users", row.actorId), ctx.db.query("userProfiles").withIndex("by_user", q => q.eq("userId", row.actorId)).unique()]);

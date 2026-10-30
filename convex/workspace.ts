@@ -425,10 +425,10 @@ export const dashboardSummary = query({
     if (partnerScoped || !hasRequestedAccess) return { access: "restricted" as const };
     // Ledger entries are authoritative. dailyTotals is a write-through cache and may
     // drift after older corrections or imports, so dashboard figures are rebuilt here.
-    let salesQuery = args.account
+    const salesQuery = args.account
       ? ctx.db.query("entries").withIndex("by_business_and_kind_and_account_and_date", q => q.eq("businessId", current.business._id).eq("kind", "sale").eq("account", args.account!).gte("occurredOn", args.from).lt("occurredOn", args.toExclusive))
       : ctx.db.query("entries").withIndex("by_business_and_kind_and_date", q => q.eq("businessId", current.business._id).eq("kind", "sale").gte("occurredOn", args.from).lt("occurredOn", args.toExclusive));
-    let expensesQuery = args.account
+    const expensesQuery = args.account
       ? ctx.db.query("entries").withIndex("by_business_and_kind_and_account_and_date", q => q.eq("businessId", current.business._id).eq("kind", "expense").eq("account", args.account!).gte("occurredOn", args.from).lt("occurredOn", args.toExclusive))
       : ctx.db.query("entries").withIndex("by_business_and_kind_and_date", q => q.eq("businessId", current.business._id).eq("kind", "expense").gte("occurredOn", args.from).lt("occurredOn", args.toExclusive));
     const [sales, expenses] = await Promise.all([salesQuery.take(5001), expensesQuery.take(1001)]);
@@ -676,9 +676,12 @@ export const recentEntries = query({
       account: v.union(v.literal("cash"), v.literal("mobile_money"), v.literal("unallocated")),
       category: v.string(),
       note: v.string(),
+      supplierName: v.union(v.string(), v.null()),
+      supplierReference: v.union(v.string(), v.null()),
       state: v.union(v.literal("posted"), v.literal("void")),
       canVoid: v.boolean(),
       canCorrect: v.boolean(),
+      canAttachReceipt: v.boolean(),
     }),
   ),
   handler: async (ctx, args) => {
@@ -690,7 +693,7 @@ export const recentEntries = query({
     if (args.kind === "sale" && !canViewSales || args.kind === "expense" && !canViewExpenses) return [];
     const limit = Math.max(1, Math.min(Math.floor(args.limit ?? 10), 500));
     if ((args.from && !isIsoDay(args.from)) || (args.toExclusive && !isIsoDay(args.toExclusive)) || (args.from && args.toExclusive && args.from >= args.toExclusive)) throw new Error("Choose a valid entry date range.");
-    let entriesQuery = args.kind && args.account
+    const entriesQuery = args.kind && args.account
       ? ctx.db.query("entries").withIndex("by_business_and_kind_and_account_and_date", q => {
         const base = q.eq("businessId", current.business._id).eq("kind", args.kind!).eq("account", args.account!);
         return args.from && args.toExclusive ? base.gte("occurredOn", args.from).lt("occurredOn", args.toExclusive) : args.from ? base.gte("occurredOn", args.from) : args.toExclusive ? base.lt("occurredOn", args.toExclusive) : base;
@@ -711,7 +714,7 @@ export const recentEntries = query({
           });
     const rows = await entriesQuery.order("desc").take(args.account ? 5000 : limit);
     const visibleRows = rows.filter(row => (row.kind === "sale" ? canViewSales : canViewExpenses) && (!args.account || row.account === args.account)).slice(0, limit);
-    return await Promise.all(visibleRows.map(async ({ _id, kind, amountUgx, occurredOn, account, category, note, state, operationSource, source, correctionOf, correctedBy, idempotencyKey, businessId }) => {
+    return await Promise.all(visibleRows.map(async ({ _id, kind, amountUgx, occurredOn, account, category, note, supplierName, supplierReference, state, operationSource, source, correctionOf, correctedBy, createdBy, idempotencyKey, businessId }) => {
       let importedBatchReady = false;
       if (source === "import" && !correctionOf) {
         const match = /^csv:([a-f0-9]{64}):\d+$/.exec(idempotencyKey);
@@ -728,9 +731,12 @@ export const recentEntries = query({
         account,
         category,
         note,
+        supplierName: supplierName ?? null,
+        supplierReference: supplierReference ?? null,
         state,
         canVoid: !operationSource,
         canCorrect: (source === "manual" || importedBatchReady) && !operationSource && !correctedBy,
+        canAttachReceipt: kind === "expense" && state === "posted" && (createdBy === current.userId || await hasPermission(ctx, current.membership, "expenses.update")),
       };
     }));
   },
@@ -753,6 +759,8 @@ export const entriesForExport = query({
     account: v.union(v.literal("cash"), v.literal("mobile_money"), v.literal("unallocated")),
     category: v.string(),
     note: v.string(),
+    supplierName: v.union(v.string(), v.null()),
+    supplierReference: v.union(v.string(), v.null()),
     state: v.union(v.literal("posted"), v.literal("void")),
     source: v.union(v.literal("manual"), v.literal("import"), v.literal("webhook"), v.literal("google_form")),
     createdAt: v.number(),
@@ -777,7 +785,7 @@ export const entriesForExport = query({
           ? ctx.db.query("entries").withIndex("by_business_and_account_and_date", q => q.eq("businessId", current.business._id).eq("account", args.account!).gte("occurredOn", args.from).lt("occurredOn", args.toExclusive))
           : ctx.db.query("entries").withIndex("by_business_and_date", q => q.eq("businessId", current.business._id).gte("occurredOn", args.from).lt("occurredOn", args.toExclusive));
     const page = await rowsQuery.order("desc").paginate(args.paginationOpts);
-    return { ...page, page: page.page.map(({ _id, kind, amountUgx, occurredOn, account, category, note, state, source, createdAt, createdBy }) => ({ entryId: _id, kind, amountUgx, occurredOn, account, category, note, state, source, createdAt, createdBy })) };
+    return { ...page, page: page.page.map(({ _id, kind, amountUgx, occurredOn, account, category, note, supplierName, supplierReference, state, source, createdAt, createdBy }) => ({ entryId: _id, kind, amountUgx, occurredOn, account, category, note, supplierName: supplierName ?? null, supplierReference: supplierReference ?? null, state, source, createdAt, createdBy })) };
   },
 });
 
@@ -890,6 +898,8 @@ export const createEntry = mutation({
     account: v.union(v.literal("cash"), v.literal("mobile_money")),
     category: v.string(),
     note: v.string(),
+    supplierId: v.optional(v.id("suppliers")),
+    supplierReference: v.optional(v.string()),
     idempotencyKey: v.string(),
     confirmPossibleDuplicate: v.optional(v.boolean()),
     confirmNegativeBalance: v.optional(v.boolean()),
@@ -908,6 +918,11 @@ export const createEntry = mutation({
       throw new Error("Enter a category using 1 to 80 characters.");
     }
     if (args.note.length > 300) throw new Error("Notes can be up to 300 characters.");
+    const supplierReference = args.supplierReference?.trim() ?? "";
+    if (supplierReference.length > 120) throw new Error("Supplier reference can be up to 120 characters.");
+    if (args.kind === "sale" && (args.supplierId || supplierReference)) throw new Error("Supplier details can only be added to an expense.");
+    const supplier = args.supplierId ? await ctx.db.get(args.supplierId) : null;
+    if (args.supplierId && (!supplier || supplier.businessId !== current.business._id || !supplier.active)) throw new Error("Choose an active supplier in this workspace.");
     const preferences = await ctx.db.query("workspacePreferences").withIndex("by_business", q => q.eq("businessId", current.business._id)).unique();
     if (preferences?.requireEntryNote && !args.note.trim()) throw new Error("Add a note before saving. This workspace requires a note on each entry.");
     if (args.idempotencyKey.length < 16 || args.idempotencyKey.length > 120) {
@@ -929,7 +944,9 @@ export const createEntry = mutation({
         duplicate.occurredOn === args.occurredOn &&
         duplicate.account === args.account &&
         duplicate.category === args.category.trim() &&
-        duplicate.note === args.note.trim();
+        duplicate.note === args.note.trim() &&
+        duplicate.supplierId === args.supplierId &&
+        (duplicate.supplierReference ?? "") === supplierReference;
       if (!sameRequest) throw new Error("This request key was already used for another entry.");
       return duplicate._id;
     }
@@ -963,6 +980,9 @@ export const createEntry = mutation({
       account: args.account,
       category: args.category.trim(),
       note: args.note.trim(),
+      supplierId: supplier?._id,
+      supplierName: supplier?.name,
+      supplierReference: supplierReference || undefined,
       source: "manual",
       idempotencyKey: args.idempotencyKey,
       state: "posted",
@@ -1016,6 +1036,7 @@ export const createEntry = mutation({
       entityId: entryId,
       occurredAt: now,
       summary: `${args.kind} · ${formatAmount(args.amountUgx, current.business.currency)} · ${args.occurredOn}`,
+      details: supplier || supplierReference ? JSON.stringify({ supplierId: supplier?._id, supplierName: supplier?.name, supplierReference: supplierReference || undefined }) : undefined,
     });
     if (args.confirmPossibleDuplicate || args.confirmNegativeBalance) {
       const confirmed = [args.confirmPossibleDuplicate && "possible duplicate", args.confirmNegativeBalance && "negative balance"].filter(Boolean).join(" and ");
@@ -1175,9 +1196,9 @@ export const correctEntry = mutation({
       else await ctx.db.insert("accountBalances", { businessId: current.business._id, account, balanceUgx: next, updatedAt: Date.now() });
     }
     const now = Date.now();
-    const replacementId = await ctx.db.insert("entries", { businessId: current.business._id, kind: original.kind, amountUgx: args.amountUgx, occurredOn: args.occurredOn, account: args.account, category, note, source: original.source, idempotencyKey: args.idempotencyKey, state: "posted", correctionOf: original._id, createdBy: current.userId, createdAt: now });
+    const replacementId = await ctx.db.insert("entries", { businessId: current.business._id, kind: original.kind, amountUgx: args.amountUgx, occurredOn: args.occurredOn, account: args.account, category, note, supplierId: original.supplierId, supplierName: original.supplierName, supplierReference: original.supplierReference, source: original.source, idempotencyKey: args.idempotencyKey, state: "posted", correctionOf: original._id, createdBy: current.userId, createdAt: now });
     await ctx.db.patch("entries", original._id, { state: "void", voidedAt: now, voidedBy: current.userId, voidReason: reason, correctedBy: replacementId });
-    await ctx.db.insert("auditEvents", { businessId: current.business._id, actorId: current.userId, action: "entry.corrected", entityType: "entry", entityId: original._id, occurredAt: now, summary: `Corrected entry: ${reason}`, details: JSON.stringify({ replacementId, negativeBalanceOverride: args.confirmNegativeBalance ?? false, possibleDuplicateOverride: args.confirmPossibleDuplicate ?? false, previous: { amountUgx: original.amountUgx, occurredOn: original.occurredOn, account: original.account, category: original.category, note: original.note }, replacement: { amountUgx: args.amountUgx, occurredOn: args.occurredOn, account: args.account, category, note } }) });
+    await ctx.db.insert("auditEvents", { businessId: current.business._id, actorId: current.userId, action: "entry.corrected", entityType: "entry", entityId: original._id, occurredAt: now, summary: `Corrected entry: ${reason}`, details: JSON.stringify({ replacementId, negativeBalanceOverride: args.confirmNegativeBalance ?? false, possibleDuplicateOverride: args.confirmPossibleDuplicate ?? false, previous: { amountUgx: original.amountUgx, occurredOn: original.occurredOn, account: original.account, category: original.category, note: original.note, supplierName: original.supplierName, supplierReference: original.supplierReference }, replacement: { amountUgx: args.amountUgx, occurredOn: args.occurredOn, account: args.account, category, note, supplierName: original.supplierName, supplierReference: original.supplierReference } }) });
     return replacementId;
   },
 });

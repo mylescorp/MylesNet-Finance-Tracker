@@ -1296,3 +1296,9 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .savings-planner-card .form-actions .muted-note { flex-basis:100%; }
 .savings-target-controls .button { min-height:34px; }
 @media (max-width:700px) { .savings-target-controls { grid-template-columns:1fr; } .savings-target-controls .muted-note { grid-column:auto; } }
+
+.setup-checklist-list { display:grid; gap:0; }
+.setup-checklist-row { display:grid; grid-template-columns:minmax(0,1fr) auto auto; align-items:center; gap:var(--mn-space-3); padding:var(--mn-space-3) 0; border-bottom:1px solid var(--mn-line); }
+.setup-checklist-row > div { min-width:0; }
+.setup-checklist-row p { margin:4px 0 0; }
+@media(max-width:560px) { .setup-checklist-row { grid-template-columns:minmax(0,1fr) auto; } .setup-checklist-row .text-link { grid-column:2; justify-self:end; } }

@@ -95,6 +95,30 @@ export default defineSchema({
     updatedAt: v.number(),
     updatedBy: v.id("users"),
   }).index("by_business", ["businessId"]),
+  categoryBudgets: defineTable({
+    businessId: v.id("businesses"),
+    category: v.string(),
+    monthlyBudgetUgx: v.number(),
+    warningAtPercent: v.number(),
+    active: v.boolean(),
+    createdBy: v.id("users"),
+    createdAt: v.number(),
+    updatedBy: v.id("users"),
+    updatedAt: v.number(),
+  }).index("by_business", ["businessId"]).index("by_business_and_category", ["businessId", "category"]).index("by_business_and_active", ["businessId", "active"]),
+  suppliers: defineTable({
+    businessId: v.id("businesses"),
+    name: v.string(),
+    normalizedName: v.string(),
+    phone: v.optional(v.string()),
+    email: v.optional(v.string()),
+    note: v.optional(v.string()),
+    active: v.boolean(),
+    createdBy: v.id("users"),
+    createdAt: v.number(),
+    updatedBy: v.id("users"),
+    updatedAt: v.number(),
+  }).index("by_business", ["businessId"]).index("by_business_and_name", ["businessId", "normalizedName"]).index("by_business_and_active", ["businessId", "active"]),
   workspaceDataResets: defineTable({
     businessId: v.id("businesses"),
     status: v.union(v.literal("running"), v.literal("completed")),
@@ -199,6 +223,9 @@ export default defineSchema({
     account: v.union(v.literal("cash"), v.literal("mobile_money"), v.literal("unallocated")),
     category: v.string(),
     note: v.string(),
+    supplierId: v.optional(v.id("suppliers")),
+    supplierName: v.optional(v.string()),
+    supplierReference: v.optional(v.string()),
     source: v.union(v.literal("manual"), v.literal("import"), v.literal("webhook"), v.literal("google_form")),
     idempotencyKey: v.string(),
     state: v.union(v.literal("posted"), v.literal("void")),
@@ -216,9 +243,30 @@ export default defineSchema({
     .index("by_business_and_kind_and_date", ["businessId", "kind", "occurredOn"])
     .index("by_business_and_account_and_date", ["businessId", "account", "occurredOn"])
     .index("by_business_and_kind_and_account_and_date", ["businessId", "kind", "account", "occurredOn"])
+    .index("by_business_and_supplier_and_date", ["businessId", "supplierId", "occurredOn"])
     .index("by_business_and_idempotency", ["businessId", "idempotencyKey"])
     .searchIndex("search_note", { searchField: "note", filterFields: ["businessId"] })
     .searchIndex("search_category", { searchField: "category", filterFields: ["businessId"] }),
+  expenseReceiptUploads: defineTable({
+    businessId: v.id("businesses"),
+    userId: v.id("users"),
+    storageId: v.optional(v.id("_storage")),
+    createdAt: v.number(),
+  })
+    .index("by_storage", ["storageId"])
+    .index("by_business_and_created_at", ["businessId", "createdAt"]),
+  expenseReceipts: defineTable({
+    businessId: v.id("businesses"),
+    entryId: v.id("entries"),
+    storageId: v.id("_storage"),
+    fileName: v.string(),
+    contentType: v.string(),
+    sizeBytes: v.number(),
+    createdBy: v.id("users"),
+    createdAt: v.number(),
+  })
+    .index("by_business_and_created_at", ["businessId", "createdAt"])
+    .index("by_business_and_entry", ["businessId", "entryId"]),
   operationalRecords: defineTable({
     businessId: v.id("businesses"),
     kind: v.union(v.literal("movement"), v.literal("holding"), v.literal("loan"), v.literal("bill")),
@@ -382,6 +430,10 @@ export default defineSchema({
     account: v.union(v.literal("cash"), v.literal("mobile_money")),
     recurrence: v.union(v.literal("weekly"), v.literal("monthly"), v.literal("quarterly"), v.literal("yearly")),
     nextDueOn: v.string(),
+    supplierId: v.optional(v.id("suppliers")),
+    supplierName: v.optional(v.string()),
+    reminderLeadDays: v.optional(v.number()),
+    paused: v.optional(v.boolean()),
     scheduleStartDueOn: v.optional(v.string()),
     scheduleAnchorDay: v.optional(v.number()),
     scheduleEndOfMonth: v.optional(v.boolean()),
@@ -424,8 +476,13 @@ export default defineSchema({
     asOfDate: v.string(),
     bookBalanceUgx: v.number(),
     countedBalanceUgx: v.number(),
+    denominationCounts: v.optional(v.array(v.object({ denominationUgx: v.number(), quantity: v.number() }))),
     varianceUgx: v.number(),
-    status: v.union(v.literal("matched"), v.literal("open"), v.literal("explained"), v.literal("superseded")),
+    status: v.union(v.literal("matched"), v.literal("open"), v.literal("explained"), v.literal("closed"), v.literal("superseded")),
+    reviewedBy: v.optional(v.id("users")),
+    reviewedByName: v.optional(v.string()),
+    reviewedAt: v.optional(v.number()),
+    reviewNote: v.optional(v.string()),
     note: v.string(),
     explanation: v.optional(v.string()),
     supersedesId: v.optional(v.id("reconciliations")),
