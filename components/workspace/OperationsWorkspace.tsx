@@ -83,7 +83,7 @@ export function OperationsWorkspace({ screen, currency, scale, locale, timezone,
   const can = (permission: string) => data?.access === "ready" && data.permissions?.includes(permission) === true;
   const savingsArchive = usePaginatedQuery(api.operations.savingsArchive, screen === "Savings" && can("savings.view") && data?.access === "ready" ? { businessId: data.businessId } : "skip", { initialNumItems: 20 });
   const billSuppliers = useQuery(api.suppliers.activeOptions, screen === "Bills" ? {} : "skip");
-  const forecastData = useQuery(api.operations.forecastBills, screen === "Bills" && access?.access === "ready" && account !== "unallocated" ? { businessId: access.businessId, ...(account === "all" ? {} : { account }) } : "skip");
+  const forecastData = useQuery(api.operations.forecastBills, screen === "Bills" && access?.access === "ready" && account !== "unallocated" ? { businessId: access.businessId, today: todayForSummary, ...(account === "all" ? {} : { account }) } : "skip");
   const billArchive = usePaginatedQuery(api.operations.billArchive, screen === "Bills" && can("bills.view") && data?.access === "ready" ? { businessId: data.businessId } : "skip", { initialNumItems: 20 });
   const partnerArchive = usePaginatedQuery(api.operations.partnerArchive, screen === "Partners" && can("partners.manage") && data?.access === "ready" ? { businessId: data.businessId } : "skip", { initialNumItems: 20 });
   const distributionAccess = useQuery(api.distributions.overview, screen === "Partners" && access?.access === "ready" ? { businessId: access.businessId, paginationOpts: { numItems: 20, cursor: null } } : "skip");

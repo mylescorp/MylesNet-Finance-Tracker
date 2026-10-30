@@ -94,8 +94,12 @@ export function CsvImportPanel() {
     try { return { rows: flatRows(), error: "" }; }
     catch (e) { return { rows: [] as ImportRow[], error: e instanceof Error ? e.message : "Could not validate the import rows." }; }
   }, [fileName, looksCentipid, report, flatRows]);
-  const previewRowsJson = useMemo(() => JSON.stringify(preview.rows), [preview.rows]);
-  const calculatedPreview = useQuery(api.imports.previewImpact, settings?.access === "ready" && preview.rows.length && !preview.error ? { businessId: settings.businessId, rowsJson: previewRowsJson } : "skip");
+  const previewRowsJsonChunks = useMemo(() => {
+    const chunks: string[] = [];
+    for (let start = 0; start < preview.rows.length; start += 500) chunks.push(JSON.stringify(preview.rows.slice(start, start + 500)));
+    return chunks;
+  }, [preview.rows]);
+  const calculatedPreview = useQuery(api.imports.previewImpact, settings?.access === "ready" && preview.rows.length && !preview.error ? { businessId: settings.businessId, rowsJsonChunks: previewRowsJsonChunks } : "skip");
   const previewTotals = calculatedPreview ?? { error: preview.rows.length && !preview.error ? "Calculating the authorized preview…" : "", totals: { cash: 0, mobile_money: 0, unallocated: 0 }, potentialDuplicateRows: 0 };
   const previewDateRange = useMemo(() => {
     const dates = preview.rows.map(row => row.occurredOn).sort();

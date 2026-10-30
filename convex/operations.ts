@@ -273,7 +273,7 @@ export const overview = query({
 });
 
 export const forecastBills = query({
-  args: { businessId: v.id("businesses"), account: v.optional(v.union(v.literal("cash"), v.literal("mobile_money"))) },
+  args: { businessId: v.id("businesses"), today: v.string(), account: v.optional(v.union(v.literal("cash"), v.literal("mobile_money"))) },
   returns: v.union(v.object({ access: v.literal("restricted") }), v.object({ access: v.literal("ready"), complete: v.boolean(), forecasts: v.array(v.object({ billId: v.id("bills"), name: v.string(), category: v.string(), amountUgx: v.number(), supplierName: v.union(v.string(), v.null()), dueOn: v.string(), paused: v.boolean() })) })),
   handler: async (ctx, args) => {
     const current = await workspace(ctx, args.businessId);
@@ -281,7 +281,9 @@ export const forecastBills = query({
     const bills = args.account
       ? await ctx.db.query("bills").withIndex("by_business_and_account_and_active_due", q => q.eq("businessId", current.business._id).eq("account", args.account!).eq("active", true)).take(101)
       : await ctx.db.query("bills").withIndex("by_business_and_active_due", q => q.eq("businessId", current.business._id).eq("active", true)).take(101);
-    const today = dayInZone(Date.now(), current.business.timezone);
+    const today = /^\d{4}-\d{2}-\d{2}$/.test(args.today) && !Number.isNaN(Date.parse(`${args.today}T00:00:00.000Z`)) && new Date(`${args.today}T00:00:00.000Z`).toISOString().slice(0, 10) === args.today
+      ? args.today
+      : dayInZone(Date.now(), current.business.timezone);
     const forecastInputs = bills.slice(0, 100).map(row => {
       const start = row.scheduleStartDueOn ?? row.nextDueOn;
       const date = new Date(`${start}T00:00:00.000Z`);
