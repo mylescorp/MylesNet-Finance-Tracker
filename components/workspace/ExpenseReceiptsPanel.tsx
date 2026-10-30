@@ -2,7 +2,7 @@
 
 import { useAuthToken } from "@convex-dev/auth/react";
 import { useMutation, useQuery } from "convex/react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { downloadExpenseReceipt } from "@/lib/upload-expense-receipt";
@@ -16,6 +16,7 @@ export function ExpenseReceiptsPanel({ currency, locale, scale }: { currency: st
   const removeReceipt = useMutation(api.expenseReceipts.removeReceipt);
   const token = useAuthToken();
   const [selected, setSelected] = useState<Id<"expenseReceipts"> | null>(null);
+  const requestVersion = useRef(0);
   const [content, setContent] = useState<{ access: "restricted" } | { access: "ready"; fileName: string; contentType: string } | null>(null);
   const [objectUrl, setObjectUrl] = useState("");
   const [busyId, setBusyId] = useState<Id<"expenseReceipts"> | null>(null);
@@ -30,7 +31,7 @@ export function ExpenseReceiptsPanel({ currency, locale, scale }: { currency: st
     setFeedback("");
     try {
       await removeReceipt({ receiptId: id });
-      if (selected === id) { setSelected(null); setObjectUrl(""); }
+      if (selected === id) { requestVersion.current += 1; setSelected(null); setContent(null); setObjectUrl(""); }
       setFeedback("Receipt removed. The expense entry was not changed.");
     } catch (error) {
       setFeedback(error instanceof Error ? error.message : "Could not remove this receipt.");
@@ -38,15 +39,18 @@ export function ExpenseReceiptsPanel({ currency, locale, scale }: { currency: st
   }
 
   async function loadReceipt(id: Id<"expenseReceipts">) {
+    const version = ++requestVersion.current;
+    setFeedback("");
     setSelected(id);
     setObjectUrl("");
     setContent(null);
     try {
       const receipt = await downloadExpenseReceipt({ receiptId: id, token });
+      if (version !== requestVersion.current) return;
       setContent({ access: "ready", fileName: receipt.fileName, contentType: receipt.contentType });
       setObjectUrl(URL.createObjectURL(receipt.blob));
     }
-    catch (error) { setContent({ access: "restricted" }); setFeedback(error instanceof Error ? error.message : "Could not open this receipt."); }
+    catch (error) { if (version !== requestVersion.current) return; setContent({ access: "restricted" }); setFeedback(error instanceof Error ? error.message : "Could not open this receipt."); }
   }
 
   if (result === undefined) return <div className="empty-state compact-empty" role="status"><strong>Loading expense receipts…</strong><span>Receipt links are checked against your workspace access.</span></div>;
@@ -59,6 +63,6 @@ export function ExpenseReceiptsPanel({ currency, locale, scale }: { currency: st
       <td>{row.occurredOn}</td><td>{row.category}</td><td>{money.format(row.amountUgx / scale)}</td><td>{row.entryState === "void" ? "Voided · source receipt retained" : "Posted"}</td><td>{row.fileName}</td><td>{formatSize(row.sizeBytes)}</td><td><div className="form-actions"><button className="button" type="button" onClick={() => void loadReceipt(row._id)} aria-expanded={selected === row._id}>{selected === row._id ? content === null ? "Opening…" : "Selected" : "Preview / download"}</button>{row.canRemove && <button className="button" type="button" disabled={busyId === row._id} onClick={() => void remove(row._id, row.fileName)}>{busyId === row._id ? "Removing…" : "Remove"}</button>}</div></td>
     </tr>)}</tbody></table></div> : <div className="empty-state compact-empty"><strong>No receipts attached yet.</strong><span>Add a PDF or image receipt when recording an expense.</span></div>}
     {!result.complete && <p className="notice-banner notice-info" role="status">Showing the latest 100 receipt files. Narrow the list by reviewing newer expenses first.</p>}
-    {selected && <div className="expense-receipt-preview" aria-live="polite"><div className="card-heading"><div><h3 className="card-title">Receipt preview</h3><p className="card-subtitle">{result.receipts.find(row => row._id === selected)?.fileName}</p></div><button className="button" type="button" onClick={() => { setSelected(null); setContent(null); setObjectUrl(""); }}>Close</button></div>{content === null ? <p className="muted-note">Opening the file securely…</p> : content.access !== "ready" ? <p className="form-feedback form-error" role="alert">This file is no longer available to your account.</p> : objectUrl ? <div className="form-actions"><a className="button button-accent" href={objectUrl} target="_blank" rel="noreferrer">Open preview</a><a className="button" href={objectUrl} download={content.fileName}>Download receipt</a></div> : <p className="muted-note">Preparing file…</p>}</div>}
+    {selected && <div className="expense-receipt-preview" aria-live="polite"><div className="card-heading"><div><h3 className="card-title">Receipt preview</h3><p className="card-subtitle">{result.receipts.find(row => row._id === selected)?.fileName}</p></div><button className="button" type="button" onClick={() => { requestVersion.current += 1; setSelected(null); setContent(null); setObjectUrl(""); }}>Close</button></div>{content === null ? <p className="muted-note">Opening the file securely…</p> : content.access !== "ready" ? <p className="form-feedback form-error" role="alert">This file is no longer available to your account.</p> : objectUrl ? <div className="form-actions"><a className="button button-accent" href={objectUrl} target="_blank" rel="noreferrer">Open preview</a><a className="button" href={objectUrl} download={content.fileName}>Download receipt</a></div> : <p className="muted-note">Preparing file…</p>}</div>}
   </div>;
 }

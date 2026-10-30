@@ -19,6 +19,22 @@ async function setup() {
 }
 
 describe("supplier records and expense linkage", () => {
+  it("allows bill creators to load supplier defaults without expense-create access", async () => {
+    const { t, businessId } = await setup();
+    const owner = t.withIdentity({ subject: await t.run(async ctx => {
+      const ownerId = (await ctx.db.query("memberships").withIndex("by_business_and_user", q => q.eq("businessId", businessId)).unique())!.userId;
+      return ownerId;
+    }) });
+    await owner.mutation(api.suppliers.save, { action: "create", name: "Utilities Co" });
+    const billManagerId = await t.run(async ctx => {
+      const userId = await ctx.db.insert("users", { name: "Bill manager" });
+      const roleId = await ctx.db.insert("workspaceRoles", { businessId, name: "Bill manager", description: "Manage recurring bills", permissions: ["bills.create"], active: true, createdBy: userId, createdAt: Date.now(), updatedAt: Date.now() });
+      await ctx.db.insert("memberships", { businessId, userId, role: "member", roleId, active: true, createdAt: Date.now() });
+      return userId;
+    });
+    const options = await t.withIdentity({ subject: billManagerId }).query(api.suppliers.activeOptions, {});
+    expect(options).toMatchObject({ access: "ready", suppliers: [{ name: "Utilities Co" }] });
+  });
   it("normalizes unique names, links expenses, retains history, and audits changes", async () => {
     const { t, owner, businessId } = await setup();
     const supplierId = await owner.mutation(api.suppliers.save, { action: "create", name: "  North  Supply  ", phone: "+256700000000" });
