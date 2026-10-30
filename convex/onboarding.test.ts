@@ -36,6 +36,15 @@ describe("workspace onboarding checklist", () => {
     expect(bothAccountsReconciled.tasks.find(task => task.id === "balances")?.state).toBe("done");
     expect(bothAccountsReconciled.tasks.find(task => task.id === "closeout")?.state).toBe("done");
     await t.run(async ctx => {
+      const cash = await ctx.db.query("reconciliations").withIndex("by_business_and_account_and_date", q => q.eq("businessId", businessId).eq("account", "cash")).unique();
+      if (!cash) throw new Error("Expected a saved cash count.");
+      await ctx.db.patch("reconciliations", cash._id, { status: "closed", reviewedBy: userId, reviewedByName: "Workspace owner", reviewedAt: Date.now(), reviewNote: "Matched count reviewed." });
+    });
+    const signedOff = await owner.query(api.onboarding.checklist, {});
+    if (signedOff.access !== "ready") throw new Error("Expected checklist access after sign-off.");
+    expect(signedOff.tasks.find(task => task.id === "balances")?.state).toBe("done");
+    expect(signedOff.tasks.find(task => task.id === "closeout")?.state).toBe("done");
+    await t.run(async ctx => {
       await ctx.db.insert("reconciliations", { businessId, account: "cash", asOfDate: "2026-11-01", bookBalanceUgx: 100, countedBalanceUgx: 0, varianceUgx: -100, status: "open", note: "New difference needs review", idempotencyKey: "onboarding-cash-new-open-check-1", createdBy: userId, createdAt: Date.now() });
     });
     const reopenedState = await owner.query(api.onboarding.checklist, {});

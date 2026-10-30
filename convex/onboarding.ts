@@ -28,16 +28,18 @@ export const checklist = query({
     const ledgerStarted = Boolean(firstEntry || firstOperationalRecord);
     const bothOpeningAccountsHaveRecords = balances.some(row => row.account === "cash" && row.openingBalanceUgx !== undefined)
       && balances.some(row => row.account === "mobile_money" && row.openingBalanceUgx !== undefined);
-    const bothAccountsMatched = cashReconciliation?.status === "matched" && mobileReconciliation?.status === "matched";
-    const openingState = bothAccountsMatched || bothOpeningAccountsHaveRecords ? "done" as const : "action" as const;
+    const cashVerified = cashReconciliation?.status === "matched" || (cashReconciliation?.status === "closed" && cashReconciliation.varianceUgx === 0);
+    const mobileVerified = mobileReconciliation?.status === "matched" || (mobileReconciliation?.status === "closed" && mobileReconciliation.varianceUgx === 0);
+    const bothAccountsVerified = cashVerified && mobileVerified;
+    const openingState = bothAccountsVerified || bothOpeningAccountsHaveRecords ? "done" as const : "action" as const;
     return {
       access: "ready" as const,
       tasks: [
         { id: "business", title: "Confirm business details", detail: `${current.business.name} · ${current.business.currency} · ${current.business.timezone}`, href: "/settings/general", state: Boolean(current.business.name.trim() && current.business.currency && current.business.timezone) ? "done" as const : "action" as const },
-        { id: "balances", title: "Set or verify starting balances", detail: ledgerStarted && !bothOpeningAccountsHaveRecords && !bothAccountsMatched ? "Ledger activity already exists. Opening balances are locked; reconcile both accounts and use an auditable adjustment if needed." : "Confirm cash and mobile-money balances against real funds before relying on totals.", href: "/settings/finance", state: openingState },
+        { id: "balances", title: "Set or verify starting balances", detail: ledgerStarted && !bothOpeningAccountsHaveRecords && !bothAccountsVerified ? "Ledger activity already exists. Opening balances are locked; reconcile both accounts and use an auditable adjustment if needed." : "Confirm cash and mobile-money balances against real funds before relying on totals.", href: "/settings/finance", state: openingState },
         { id: "access", title: "Review team access", detail: memberships.length > 1 ? `${memberships.length - 1} additional active workspace member${memberships.length === 2 ? "" : "s"}.` : "Invite staff or assign roles when the team is ready.", href: "/settings/access", state: memberships.length > 1 ? "done" as const : "recommended" as const },
         { id: "imports", title: "Review imports", detail: importBatch ? "Import history is available for review." : "Only needed when bringing existing transaction history into the workspace.", href: "/settings/data", state: importBatch ? "done" as const : "recommended" as const },
-        { id: "closeout", title: "Complete a first reconciliation", detail: bothAccountsMatched ? "Both account counts match their book balances." : "Count cash and confirm mobile-money funds against the book balances; differences need review.", href: "/reconcile", state: bothAccountsMatched ? "done" as const : "action" as const },
+        { id: "closeout", title: "Complete a first reconciliation", detail: bothAccountsVerified ? "Both account counts match their book balances." : "Count cash and confirm mobile-money funds against the book balances; differences need review.", href: "/reconcile", state: bothAccountsVerified ? "done" as const : "action" as const },
       ],
     };
   },
