@@ -2,4 +2,6 @@
 "mylesnet-finance-tracker": minor
 ---
 
-Manage workspace suppliers, link expenses to suppliers, and review posted spend history.
+Manage suppliers and review expense history
+
+Link expenses to workspace suppliers and review posted spend history by supplier.

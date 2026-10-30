@@ -2,4 +2,6 @@
 "mylesnet-finance-tracker": minor
 ---
 
-Attach private receipt files to expenses through an authenticated upload endpoint, with idempotent retries, restricted access, and audit history.
+Attach private receipts to expenses
+
+Upload receipt files through an authenticated endpoint with idempotent retries, restricted access, and audit history.
