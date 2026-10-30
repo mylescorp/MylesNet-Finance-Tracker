@@ -153,6 +153,21 @@ describe("cash reconciliation denomination details", () => {
 });
 
 describe("bill schedule reminders and supplier defaults", () => {
+  it("uses the refreshed business day to advance forecast horizon", async () => {
+    const { owner, businessId } = await setupOwner();
+    await owner.mutation(api.operations.createBill, {
+      businessId, name: "Quarter close service", category: "Services", amountUgx: 25_000, account: "cash",
+      recurrence: "monthly", nextDueOn: "2027-01-29", idempotencyKey: "bill-forecast-midnight-key-1",
+    });
+    const before = await owner.query(api.operations.forecastBills, { businessId, today: "2026-10-31" });
+    const after = await owner.query(api.operations.forecastBills, { businessId, today: "2026-11-01" });
+    expect(before.access).toBe("ready");
+    expect(after.access).toBe("ready");
+    if (before.access !== "ready" || after.access !== "ready") throw new Error("Expected bill access.");
+    expect(before.forecasts.map(row => row.dueOn)).not.toContain("2027-01-29");
+    expect(after.forecasts.map(row => row.dueOn)).toContain("2027-01-29");
+  });
+
   it("keeps a supplier snapshot, exposes forecasts, and audits pause and resume", async () => {
     const { t, owner, businessId } = await setupOwner();
     const supplierId = await owner.mutation(api.suppliers.save, { action: "create", name: "Kampala Power" });
@@ -227,4 +242,3 @@ describe("reconciliation review sign-off", () => {
     await expect(owner.mutation(api.operations.signOffReconciliation, { businessId, reconciliationId, reviewNote: "Review completed" })).rejects.toThrow("Only a matched count or an explained difference can be signed off.");
   });
 });
-
