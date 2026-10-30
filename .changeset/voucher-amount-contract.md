@@ -2,4 +2,6 @@
 "mylesnet-finance-tracker": patch
 ---
 
-Document the UGX amount requirement for Centipid voucher redemption events and verify safe retries after amount-less receipts.
+Document Centipid voucher redemption amounts
+
+Voucher redemption events now require the actual UGX amount, and amount-less receipts can be retried safely with the same reference.
