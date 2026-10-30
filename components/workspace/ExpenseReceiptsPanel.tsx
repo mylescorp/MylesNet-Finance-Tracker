@@ -1,9 +1,11 @@
 "use client";
 
+import { useAuthToken } from "@convex-dev/auth/react";
 import { useMutation, useQuery } from "convex/react";
 import { useEffect, useState } from "react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
+import { downloadExpenseReceipt } from "@/lib/upload-expense-receipt";
 
 function formatSize(bytes: number) {
   return bytes < 1024 * 1024 ? `${Math.max(1, Math.round(bytes / 1024))} KB` : `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
@@ -12,9 +14,9 @@ function formatSize(bytes: number) {
 export function ExpenseReceiptsPanel({ currency, locale, scale }: { currency: string; locale: string; scale: number }) {
   const result = useQuery(api.expenseReceipts.listRecent, {});
   const removeReceipt = useMutation(api.expenseReceipts.removeReceipt);
-  const getReceiptContent = useMutation(api.expenseReceipts.getContent);
+  const token = useAuthToken();
   const [selected, setSelected] = useState<Id<"expenseReceipts"> | null>(null);
-  const [content, setContent] = useState<{ access: "restricted" } | { access: "ready"; fileName: string; contentType: string; data: ArrayBuffer } | null>(null);
+  const [content, setContent] = useState<{ access: "restricted" } | { access: "ready"; fileName: string; contentType: string } | null>(null);
   const [objectUrl, setObjectUrl] = useState("");
   const [busyId, setBusyId] = useState<Id<"expenseReceipts"> | null>(null);
   const [feedback, setFeedback] = useState("");
@@ -40,9 +42,9 @@ export function ExpenseReceiptsPanel({ currency, locale, scale }: { currency: st
     setObjectUrl("");
     setContent(null);
     try {
-      const receipt = await getReceiptContent({ receiptId: id });
-      setContent(receipt);
-      if (receipt.access === "ready") setObjectUrl(URL.createObjectURL(new Blob([receipt.data], { type: receipt.contentType })));
+      const receipt = await downloadExpenseReceipt({ receiptId: id, token });
+      setContent({ access: "ready", fileName: receipt.fileName, contentType: receipt.contentType });
+      setObjectUrl(URL.createObjectURL(receipt.blob));
     }
     catch (error) { setContent({ access: "restricted" }); setFeedback(error instanceof Error ? error.message : "Could not open this receipt."); }
   }

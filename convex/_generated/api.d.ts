@@ -18,6 +18,7 @@ import type * as centipidHttp from "../centipidHttp.js";
 import type * as centipidUtils from "../centipidUtils.js";
 import type * as dataReset from "../dataReset.js";
 import type * as distributions from "../distributions.js";
+import type * as expenseReceiptHttp from "../expenseReceiptHttp.js";
 import type * as expenseReceipts from "../expenseReceipts.js";
 import type * as googleFormHttp from "../googleFormHttp.js";
 import type * as googleForms from "../googleForms.js";
@@ -49,6 +50,7 @@ declare const fullApi: ApiFromModules<{
   centipidUtils: typeof centipidUtils;
   dataReset: typeof dataReset;
   distributions: typeof distributions;
+  expenseReceiptHttp: typeof expenseReceiptHttp;
   expenseReceipts: typeof expenseReceipts;
   googleFormHttp: typeof googleFormHttp;
   googleForms: typeof googleForms;

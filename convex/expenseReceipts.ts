@@ -1,6 +1,5 @@
 import { v } from "convex/values";
-import { internalMutation, mutation, query } from "./_generated/server";
-import { internal } from "./_generated/api";
+import { internalMutation, internalQuery, mutation, query } from "./_generated/server";
 import { hasPermission } from "./accessControl";
 import { getSelectedWorkspace } from "./workspaceContext";
 
@@ -8,75 +7,34 @@ const MAX_FILE_BYTES = 5 * 1024 * 1024;
 const MAX_RECEIPTS_PER_ENTRY = 5;
 const ALLOWED_CONTENT_TYPES = new Set(["application/pdf", "image/jpeg", "image/png", "image/webp"]);
 
-export const generateUploadUrl = mutation({
-  args: {},
-  returns: v.union(v.literal("restricted"), v.object({ uploadUrl: v.string(), uploadId: v.id("expenseReceiptUploads") })),
-  handler: async ctx => {
-    const current = await getSelectedWorkspace(ctx);
-    if (!current || !(await hasPermission(ctx, current.membership, "expenses.create"))) return "restricted";
-    const now = Date.now();
-    const uploadUrl = await ctx.storage.generateUploadUrl();
-    const uploadId = await ctx.db.insert("expenseReceiptUploads", { businessId: current.business._id, userId: current.userId, createdAt: now });
-    await ctx.scheduler.runAfter(24 * 60 * 60 * 1000, internal.expenseReceipts.expireUpload, { uploadId });
-    return { uploadUrl, uploadId };
-  },
-});
-
-export const registerUpload = mutation({
-  args: { uploadId: v.id("expenseReceiptUploads"), storageId: v.id("_storage") },
-  returns: v.union(v.object({ ok: v.literal(true) }), v.object({ ok: v.literal(false), message: v.string() })),
+export const recordUploadedFile = internalMutation({
+  args: { userId: v.id("users"), entryId: v.id("entries"), storageId: v.id("_storage"), requestedFileName: v.string(), idempotencyKey: v.string() },
+  returns: v.object({ receiptId: v.id("expenseReceipts"), reused: v.boolean() }),
   handler: async (ctx, args) => {
-    const current = await getSelectedWorkspace(ctx);
-    if (!current || !(await hasPermission(ctx, current.membership, "expenses.create"))) throw new Error("Your role cannot attach expense receipts.");
-    const upload = await ctx.db.get(args.uploadId);
-    if (!upload || upload.userId !== current.userId || upload.businessId !== current.business._id || Date.now() - upload.createdAt > 24 * 60 * 60 * 1000) throw new Error("This receipt upload session expired. Start the upload again.");
-    if (upload.storageId && upload.storageId !== args.storageId) throw new Error("This upload session was already used for another file.");
-    const otherUpload = await ctx.db.query("expenseReceiptUploads").withIndex("by_storage", q => q.eq("storageId", args.storageId)).unique();
-    if (otherUpload && otherUpload._id !== upload._id) throw new Error("This storage file belongs to another upload session.");
-    const metadata = await ctx.db.system.get("_storage", args.storageId);
-    await ctx.db.patch(upload._id, { storageId: args.storageId });
-    if (!metadata || !metadata.contentType || !ALLOWED_CONTENT_TYPES.has(metadata.contentType) || metadata.size <= 0 || metadata.size > MAX_FILE_BYTES) return { ok: false as const, message: "Choose a PDF, JPEG, PNG, or WebP file under 5 MB." };
-    return { ok: true as const };
-  },
-});
-
-export const discardUpload = mutation({
-  args: { uploadId: v.id("expenseReceiptUploads") },
-  returns: v.null(),
-  handler: async (ctx, args) => {
-    const current = await getSelectedWorkspace(ctx);
-    if (!current) throw new Error("Workspace access is unavailable.");
-    const upload = await ctx.db.get(args.uploadId);
-    if (!upload) return null;
-    if (upload.userId !== current.userId || upload.businessId !== current.business._id) throw new Error("This upload is not available to your account.");
-    if (upload.storageId) await ctx.storage.delete(upload.storageId);
-    await ctx.db.delete(upload._id);
-    return null;
-  },
-});
-
-export const attachToEntry = mutation({
-  args: { entryId: v.id("entries"), uploadId: v.id("expenseReceiptUploads"), fileName: v.string() },
-  returns: v.id("expenseReceipts"),
-  handler: async (ctx, args) => {
-    const current = await getSelectedWorkspace(ctx);
-    if (!current || !(await hasPermission(ctx, current.membership, "expenses.create"))) throw new Error("Your role cannot attach expense receipts.");
     const entry = await ctx.db.get(args.entryId);
-    if (!entry || entry.businessId !== current.business._id || entry.kind !== "expense" || entry.state !== "posted") throw new Error("Choose a posted expense in this workspace.");
-    if (entry.createdBy !== current.userId && !(await hasPermission(ctx, current.membership, "expenses.update"))) throw new Error("You can only attach receipts to expenses you created.");
-    const upload = await ctx.db.get(args.uploadId);
-    if (!upload || !upload.storageId || upload.userId !== current.userId || upload.businessId !== current.business._id || Date.now() - upload.createdAt > 24 * 60 * 60 * 1000) throw new Error("Upload this receipt again before attaching it.");
-    const metadata = await ctx.db.system.get("_storage", upload.storageId);
-    if (!metadata || !metadata.contentType || !ALLOWED_CONTENT_TYPES.has(metadata.contentType) || metadata.size <= 0 || metadata.size > MAX_FILE_BYTES) throw new Error("This receipt upload is no longer valid.");
-    const existing = await ctx.db.query("expenseReceipts").withIndex("by_business_and_entry", q => q.eq("businessId", current.business._id).eq("entryId", entry._id)).collect();
+    const membership = entry ? await ctx.db.query("memberships").withIndex("by_business_and_user", q => q.eq("businessId", entry.businessId).eq("userId", args.userId)).unique() : null;
+    const business = entry ? await ctx.db.get("businesses", entry.businessId) : null;
+    if (!entry || !business || business.dataResetting || !membership?.active || entry.kind !== "expense" || entry.state !== "posted") throw new Error("Choose a posted expense in an active workspace.");
+    const canCreate = await hasPermission(ctx, membership, "expenses.create");
+    const canManage = await hasPermission(ctx, membership, "expenses.update");
+    if (!canCreate && !canManage) throw new Error("Your role cannot attach expense receipts.");
+    if (entry.createdBy !== args.userId && !canManage) throw new Error("You can only attach receipts to expenses you created.");
+    if (args.idempotencyKey.length < 16 || args.idempotencyKey.length > 120) throw new Error("This receipt request could not be verified. Try again.");
+    const previous = await ctx.db.query("expenseReceipts").withIndex("by_business_and_idempotency", q => q.eq("businessId", business._id).eq("idempotencyKey", args.idempotencyKey)).unique();
+    if (previous) {
+      if (previous.entryId !== entry._id) throw new Error("This receipt request key was already used for another expense.");
+      return { receiptId: previous._id, reused: true };
+    }
+    const metadata = await ctx.db.system.get("_storage", args.storageId);
+    if (!metadata?.contentType || !ALLOWED_CONTENT_TYPES.has(metadata.contentType) || metadata.size <= 0 || metadata.size > MAX_FILE_BYTES) throw new Error("Choose a PDF, JPEG, PNG, or WebP file under 5 MB.");
+    const existing = await ctx.db.query("expenseReceipts").withIndex("by_business_and_entry", q => q.eq("businessId", business._id).eq("entryId", entry._id)).take(MAX_RECEIPTS_PER_ENTRY + 1);
     if (existing.length >= MAX_RECEIPTS_PER_ENTRY) throw new Error("An expense can have up to five receipt files.");
-    const fileName = args.fileName.trim().replace(/[\\/\u0000-\u001f]/g, "_").slice(0, 160);
+    const fileName = args.requestedFileName.trim().replace(/[\\/\u0000-\u001f]/g, "_").slice(0, 160);
     if (!fileName) throw new Error("Enter a valid receipt file name.");
     const now = Date.now();
-    const id = await ctx.db.insert("expenseReceipts", { businessId: current.business._id, entryId: entry._id, storageId: upload.storageId, fileName, contentType: metadata.contentType, sizeBytes: metadata.size, createdBy: current.userId, createdAt: now });
-    await ctx.db.delete(upload._id);
-    await ctx.db.insert("auditEvents", { businessId: current.business._id, actorId: current.userId, action: "expense.receipt_attached", entityType: "expenseReceipt", entityId: id, occurredAt: now, summary: `Receipt attached to expense from ${entry.occurredOn}.`, details: JSON.stringify({ entryId: entry._id, contentType: metadata.contentType, sizeBytes: metadata.size }) });
-    return id;
+    const id = await ctx.db.insert("expenseReceipts", { businessId: business._id, entryId: entry._id, storageId: args.storageId, fileName, contentType: metadata.contentType, sizeBytes: metadata.size, idempotencyKey: args.idempotencyKey, createdBy: args.userId, createdAt: now });
+    await ctx.db.insert("auditEvents", { businessId: business._id, actorId: args.userId, action: "expense.receipt_attached", entityType: "expenseReceipt", entityId: id, occurredAt: now, summary: `Receipt attached to expense from ${entry.occurredOn}.`, details: JSON.stringify({ entryId: entry._id, contentType: metadata.contentType, sizeBytes: metadata.size }) });
+    return { receiptId: id, reused: false };
   },
 });
 
@@ -100,18 +58,17 @@ export const listRecent = query({
   },
 });
 
-export const getContent = mutation({
-  args: { receiptId: v.id("expenseReceipts") },
-  returns: v.union(v.object({ access: v.literal("restricted") }), v.object({ access: v.literal("ready"), fileName: v.string(), contentType: v.string(), data: v.bytes() })),
+export const authorizedFile = internalQuery({
+  args: { userId: v.id("users"), receiptId: v.id("expenseReceipts") },
+  returns: v.union(v.null(), v.object({ storageId: v.id("_storage"), fileName: v.string(), contentType: v.string() })),
   handler: async (ctx, args) => {
-    const current = await getSelectedWorkspace(ctx);
     const receipt = await ctx.db.get(args.receiptId);
-    if (!current || !receipt || receipt.businessId !== current.business._id || !(await hasPermission(ctx, current.membership, "expenses.view"))) return { access: "restricted" as const };
+    if (!receipt) return null;
     const entry = await ctx.db.get(receipt.entryId);
-    if (!entry || entry.businessId !== current.business._id || entry.kind !== "expense") return { access: "restricted" as const };
-    const blob = await ctx.storage.get(receipt.storageId);
-    if (!blob) throw new Error("This receipt file is no longer available.");
-    return { access: "ready" as const, fileName: receipt.fileName, contentType: receipt.contentType, data: await blob.arrayBuffer() };
+    const membership = await ctx.db.query("memberships").withIndex("by_business_and_user", q => q.eq("businessId", receipt.businessId).eq("userId", args.userId)).unique();
+    const business = await ctx.db.get("businesses", receipt.businessId);
+    if (!entry || entry.businessId !== receipt.businessId || entry.kind !== "expense" || !membership?.active || !business || business.dataResetting || !(await hasPermission(ctx, membership, "expenses.view"))) return null;
+    return { storageId: receipt.storageId, fileName: receipt.fileName, contentType: receipt.contentType };
   },
 });
 
@@ -127,18 +84,6 @@ export const removeReceipt = mutation({
     await ctx.storage.delete(receipt.storageId);
     await ctx.db.delete(receipt._id);
     await ctx.db.insert("auditEvents", { businessId: current.business._id, actorId: current.userId, action: "expense.receipt_removed", entityType: "expenseReceipt", entityId: receipt._id, occurredAt: Date.now(), summary: "Receipt removed from an expense.", details: JSON.stringify({ entryId: receipt.entryId, fileName: receipt.fileName }) });
-    return null;
-  },
-});
-
-export const expireUpload = internalMutation({
-  args: { uploadId: v.id("expenseReceiptUploads") },
-  returns: v.null(),
-  handler: async (ctx, args) => {
-    const upload = await ctx.db.get(args.uploadId);
-    if (!upload) return null;
-    if (upload.storageId) await ctx.storage.delete(upload.storageId);
-    await ctx.db.delete(upload._id);
     return null;
   },
 });

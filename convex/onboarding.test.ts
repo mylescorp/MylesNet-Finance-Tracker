@@ -7,7 +7,7 @@ import schema from "./schema";
 const modules = import.meta.glob("./**/*.ts");
 
 describe("workspace onboarding checklist", () => {
-  it("keeps starting balances actionable until reconciled and treats imports as optional", async () => {
+  it("requires both account balances to be verified and treats imports as optional", async () => {
     const t = convexTest(schema, modules);
     const { userId, businessId } = await t.run(async ctx => {
       const userId = await ctx.db.insert("users", { name: "Workspace owner" });
@@ -26,8 +26,21 @@ describe("workspace onboarding checklist", () => {
     });
     const afterReconciliation = await owner.query(api.onboarding.checklist, {});
     if (afterReconciliation.access !== "ready") throw new Error("Expected checklist access after reconciliation.");
-    expect(afterReconciliation.tasks.find(task => task.id === "balances")?.state).toBe("done");
-    expect(afterReconciliation.tasks.find(task => task.id === "closeout")?.state).toBe("done");
+    expect(afterReconciliation.tasks.find(task => task.id === "balances")?.state).toBe("action");
+    expect(afterReconciliation.tasks.find(task => task.id === "closeout")?.state).toBe("action");
+    await t.run(async ctx => {
+      await ctx.db.insert("reconciliations", { businessId, account: "mobile_money", asOfDate: "2026-10-31", bookBalanceUgx: 0, countedBalanceUgx: 0, varianceUgx: 0, status: "matched", note: "Verified starting balance", idempotencyKey: "onboarding-mobile-reconciliation-check-1", createdBy: userId, createdAt: Date.now() });
+    });
+    const bothAccountsReconciled = await owner.query(api.onboarding.checklist, {});
+    if (bothAccountsReconciled.access !== "ready") throw new Error("Expected checklist access after both account reconciliations.");
+    expect(bothAccountsReconciled.tasks.find(task => task.id === "balances")?.state).toBe("done");
+    expect(bothAccountsReconciled.tasks.find(task => task.id === "closeout")?.state).toBe("done");
+    await t.run(async ctx => {
+      await ctx.db.insert("reconciliations", { businessId, account: "cash", asOfDate: "2026-11-01", bookBalanceUgx: 100, countedBalanceUgx: 0, varianceUgx: -100, status: "open", note: "New difference needs review", idempotencyKey: "onboarding-cash-new-open-check-1", createdBy: userId, createdAt: Date.now() });
+    });
+    const reopenedState = await owner.query(api.onboarding.checklist, {});
+    if (reopenedState.access !== "ready") throw new Error("Expected checklist access after new reconciliation.");
+    expect(reopenedState.tasks.find(task => task.id === "balances")?.state).toBe("action");
   });
 
   it("does not expose onboarding records without a signed-in workspace member", async () => {

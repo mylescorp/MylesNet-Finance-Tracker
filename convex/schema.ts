@@ -247,14 +247,6 @@ export default defineSchema({
     .index("by_business_and_idempotency", ["businessId", "idempotencyKey"])
     .searchIndex("search_note", { searchField: "note", filterFields: ["businessId"] })
     .searchIndex("search_category", { searchField: "category", filterFields: ["businessId"] }),
-  expenseReceiptUploads: defineTable({
-    businessId: v.id("businesses"),
-    userId: v.id("users"),
-    storageId: v.optional(v.id("_storage")),
-    createdAt: v.number(),
-  })
-    .index("by_storage", ["storageId"])
-    .index("by_business_and_created_at", ["businessId", "createdAt"]),
   expenseReceipts: defineTable({
     businessId: v.id("businesses"),
     entryId: v.id("entries"),
@@ -262,11 +254,13 @@ export default defineSchema({
     fileName: v.string(),
     contentType: v.string(),
     sizeBytes: v.number(),
+    idempotencyKey: v.optional(v.string()),
     createdBy: v.id("users"),
     createdAt: v.number(),
   })
     .index("by_business_and_created_at", ["businessId", "createdAt"])
-    .index("by_business_and_entry", ["businessId", "entryId"]),
+    .index("by_business_and_entry", ["businessId", "entryId"])
+    .index("by_business_and_idempotency", ["businessId", "idempotencyKey"]),
   operationalRecords: defineTable({
     businessId: v.id("businesses"),
     kind: v.union(v.literal("movement"), v.literal("holding"), v.literal("loan"), v.literal("bill")),

@@ -8,42 +8,12 @@ import type { Id } from "@/convex/_generated/dataModel";
 import { Card } from "@/components/AppShell";
 import { formatBusinessDay } from "@/lib/format";
 import { PartnerDistributions } from "@/components/workspace/PartnerDistributions";
+import { billForecast } from "@/lib/bill-forecast";
 
 type Account = "cash" | "mobile_money";
 type FinanceAccount = "all" | "cash" | "mobile_money" | "unallocated";
 type Screen = "Movements" | "Savings" | "Loans" | "Partners" | "Bills" | "Reconcile";
 type CashDenominationCount = { denominationUgx: number; quantity: number };
-type BillRecurrence = "weekly" | "monthly" | "quarterly" | "yearly";
-type BillForecastInput = { _id: string; name: string; category: string; amountUgx: number; recurrence: BillRecurrence; nextDueOn: string; supplierName: string | null; reminderLeadDays: number; scheduleAnchorDay: number; scheduleEndOfMonth: boolean; paused: boolean; active: boolean };
-function nextBillOccurrence(day: string, recurrence: BillRecurrence, anchorDay: number, endOfMonth: boolean) {
-  const date = new Date(`${day}T00:00:00.000Z`);
-  if (recurrence === "weekly") date.setUTCDate(date.getUTCDate() + 7);
-  else {
-    const months = recurrence === "monthly" ? 1 : recurrence === "quarterly" ? 3 : 12;
-    date.setUTCDate(1);
-    date.setUTCMonth(date.getUTCMonth() + months);
-    const lastDay = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 0)).getUTCDate();
-    date.setUTCDate(endOfMonth ? lastDay : Math.min(anchorDay, lastDay));
-  }
-  return date.toISOString().slice(0, 10);
-}
-function billForecast(rows: BillForecastInput[], today: string) {
-  const horizon = new Date(`${today}T00:00:00.000Z`);
-  horizon.setUTCDate(horizon.getUTCDate() + 90);
-  const end = horizon.toISOString().slice(0, 10);
-  return rows.filter(row => row.active && !row.paused).flatMap(row => {
-    const dates: string[] = [];
-    let dueOn = row.nextDueOn;
-    for (let count = 0; dueOn < end && count < 100; count++) {
-      if (dueOn < today) { dates.push(dueOn); break; }
-      dates.push(dueOn);
-      const next = nextBillOccurrence(dueOn, row.recurrence, row.scheduleAnchorDay, row.scheduleEndOfMonth);
-      if (next <= dueOn) break;
-      dueOn = next;
-    }
-    return dates.map(dueOn => ({ billId: row._id, name: row.name, category: row.category, amountUgx: row.amountUgx, supplierName: row.supplierName, dueOn }));
-  }).sort((a, b) => a.dueOn.localeCompare(b.dueOn) || a.name.localeCompare(b.name));
-}
 
 function accountName(account: Account) { return account === "cash" ? "Cash" : "Mobile money"; }
 function dayAfter(day: string) {
@@ -397,7 +367,7 @@ export function OperationsWorkspace({ screen, currency, scale, locale, timezone,
   </div>;
 
   if (screen === "Reconcile") return <div className="board-grid board-grid-operations">{periodNote}{sharedMessages}
-    {todayCloseout?.access === "ready" && <Card className="board-feature-card"><div className="card-heading"><div><h2 className="card-title">Today’s closeout checklist · {formatBusinessDay(day, dateFormat)}</h2><p className="card-subtitle">Compare both account counts with the book and obtain reviewer sign-off. Open differences must be explained before sign-off.</p></div></div><div className="settings-facts">{(["cash", "mobile_money"] as const).map(accountKey => { const count = todayCloseout.reconciliations.find(row => row.account === accountKey && row.status !== "superseded"); const status = !count ? "Count not recorded" : count.status === "closed" ? `Signed off · ${count.reviewedByName ?? "reviewer"}` : count.status === "open" ? "Variance needs explanation" : count.status === "explained" ? "Explained · reviewer sign-off due" : "Count matches · reviewer sign-off due"; return <div key={accountKey}><span>{accountName(accountKey)} · {status}</span><strong>{count ? `${fmt(count.countedBalanceUgx)} counted · ${fmt(count.varianceUgx)} variance` : "No count for today"}</strong>{count?.reviewNote && <small>{count.reviewNote}</small>}</div>; })}</div>{todayCloseout.reconciliations.some(row => row.status === "open") && <p className="notice-banner notice-warning">Today’s closeout has unresolved differences. Explain each variance and obtain sign-off after review.</p>}{todayCloseout.reconciliations.filter(row => row.status === "closed").length === 2 ? <p className="notice-banner notice-info">Both account counts have reviewer sign-off.</p> : <p className="muted-note">This checklist summarizes persisted reconciliation records. It does not lock ledger posting or certify source completeness.</p>}</Card>}
+    {todayCloseout?.access === "ready" && <Card className="board-feature-card"><div className="card-heading"><div><h2 className="card-title">Today’s closeout checklist · {formatBusinessDay(day, dateFormat)}</h2><p className="card-subtitle">Compare both account counts with the book and obtain reviewer sign-off. Open differences must be explained before sign-off.</p></div></div><div className="settings-facts">{(["cash", "mobile_money"] as const).map(accountKey => { const count = todayCloseout.reconciliations.find(row => row.account === accountKey && row.status !== "superseded"); const status = !count ? "Count not recorded" : count.status === "closed" ? `Signed off · ${count.reviewedByName ?? "reviewer"}` : count.status === "open" ? "Variance needs explanation" : count.status === "explained" ? "Explained · reviewer sign-off due" : "Count matches · reviewer sign-off due"; return <div key={accountKey}><span>{accountName(accountKey)} · {status}</span><strong>{count ? `${fmt(count.countedBalanceUgx)} counted · ${fmt(count.varianceUgx)} variance` : "No count for today"}</strong>{count?.reviewNote && <small>{count.reviewNote}</small>}</div>; })}</div>{todayCloseout.reconciliations.some(row => row.status === "open") && <p className="notice-banner notice-warning">Today’s closeout has unresolved differences. Explain each variance and obtain sign-off after review.</p>}{(["cash", "mobile_money"] as const).every(accountKey => todayCloseout.reconciliations.find(row => row.account === accountKey && row.status !== "superseded")?.status === "closed") ? <p className="notice-banner notice-info">Both account counts have reviewer sign-off.</p> : <p className="muted-note">This checklist summarizes persisted reconciliation records. It does not lock ledger posting or certify source completeness.</p>}</Card>}
     <div id="record-entry-card" hidden={!recordFormOpen || !can("reconcile.create")}>
       <Card className="board-feature-card">
         <h2 className="card-title">Record an account count</h2>

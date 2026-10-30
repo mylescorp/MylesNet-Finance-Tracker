@@ -52,7 +52,7 @@ export function SupplierManager({ currency, scale, locale }: { currency: string;
   return <div className="supplier-manager">
     <p className="muted-note">Expense-linked history reports posted spend only. The cashbook does not capture line items or quantities, so these totals are not per-item prices.</p>
     {feedback && <p className="form-feedback" role="status">{feedback}</p>}
-    {directory.canCreate && <form className="form-layout supplier-editor" onSubmit={event => void submit(event)}>
+    {(directory.canCreate || (directory.canManage && Boolean(editingId))) && <form className="form-layout supplier-editor" onSubmit={event => void submit(event)}>
       <div className="field"><label htmlFor="supplier-name">Supplier name</label><input id="supplier-name" value={name} onChange={event => setName(event.target.value)} minLength={2} maxLength={100} required /></div>
       <div className="field"><label htmlFor="supplier-phone">Phone <span className="muted-note">(optional)</span></label><input id="supplier-phone" value={phone} onChange={event => setPhone(event.target.value)} maxLength={40} /></div>
       <div className="field"><label htmlFor="supplier-email">Email <span className="muted-note">(optional)</span></label><input id="supplier-email" type="email" value={email} onChange={event => setEmail(event.target.value)} maxLength={120} /></div>
