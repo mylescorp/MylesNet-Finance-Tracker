@@ -44,6 +44,33 @@ async function deliver(t: ReturnType<typeof convexTest>, event: string, data: Re
 }
 
 describe("Centipid webhook event idempotency", () => {
+  it("accepts a corrected voucher redemption with an explicit amount after the amount-less event was skipped", async () => {
+    const t = await setupWorkspace();
+    const redemption = {
+      id: "redeem-20842-1",
+      package_id: 20842,
+      batch_id: "batch-1",
+      subscriber_id: "subscriber-1",
+      redeemed_at: "2026-10-30T16:00:00Z",
+    };
+
+    expect(await deliver(t, "voucher.redeemed", redemption)).toMatchObject({ status: "ignored" });
+    expect(await deliver(t, "voucher.redeemed", { ...redemption, amount: 1000 }))
+      .toMatchObject({ status: "success", routed: "voucher" });
+
+    const snapshot = await t.run(async ctx => ({
+      entries: await ctx.db.query("entries").collect(),
+      balances: await ctx.db.query("accountBalances").collect(),
+      days: await ctx.db.query("dailyTotals").collect(),
+    }));
+    expect(snapshot.entries).toHaveLength(1);
+    expect(snapshot.entries[0]).toMatchObject({ kind: "sale", account: "cash", amountUgx: 1000, source: "webhook", state: "posted" });
+    expect(snapshot.balances).toHaveLength(1);
+    expect(snapshot.balances[0]).toMatchObject({ account: "cash", balanceUgx: 1000 });
+    expect(snapshot.days).toHaveLength(1);
+    expect(snapshot.days[0]).toMatchObject({ salesUgx: 1000, saleCount: 1 });
+  });
+
   it("records payment and voucher sales that share a reference, but deduplicates each event retry", async () => {
     const t = await setupWorkspace();
 
