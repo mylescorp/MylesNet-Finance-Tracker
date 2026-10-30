@@ -714,6 +714,8 @@ export const recentEntries = query({
           });
     const rows = await entriesQuery.order("desc").take(args.account ? 5000 : limit);
     const visibleRows = rows.filter(row => (row.kind === "sale" ? canViewSales : canViewExpenses) && (!args.account || row.account === args.account)).slice(0, limit);
+    const canCreateExpenses = await hasPermission(ctx, current.membership, "expenses.create");
+    const canManageExpenses = await hasPermission(ctx, current.membership, "expenses.update");
     return await Promise.all(visibleRows.map(async ({ _id, kind, amountUgx, occurredOn, account, category, note, supplierName, supplierReference, state, operationSource, source, correctionOf, correctedBy, createdBy, idempotencyKey, businessId }) => {
       let importedBatchReady = false;
       if (source === "import" && !correctionOf) {
@@ -736,7 +738,7 @@ export const recentEntries = query({
         state,
         canVoid: !operationSource,
         canCorrect: (source === "manual" || importedBatchReady) && !operationSource && !correctedBy,
-        canAttachReceipt: kind === "expense" && state === "posted" && (createdBy === current.userId || await hasPermission(ctx, current.membership, "expenses.update")),
+        canAttachReceipt: kind === "expense" && state === "posted" && (canManageExpenses || (canCreateExpenses && createdBy === current.userId)),
       };
     }));
   },

@@ -1,4 +1,5 @@
 import { v } from "convex/values";
+import { paginationOptsValidator, paginationResultValidator } from "convex/server";
 import { internalMutation, internalQuery, mutation, query } from "./_generated/server";
 import { hasPermission } from "./accessControl";
 import { getSelectedWorkspace } from "./workspaceContext";
@@ -38,23 +39,32 @@ export const recordUploadedFile = internalMutation({
   },
 });
 
-export const listRecent = query({
+const receiptRow = v.object({ _id: v.id("expenseReceipts"), entryId: v.id("entries"), occurredOn: v.string(), category: v.string(), amountUgx: v.number(), entryState: v.union(v.literal("posted"), v.literal("void")), fileName: v.string(), contentType: v.string(), sizeBytes: v.number(), canRemove: v.boolean() });
+
+export const listAccess = query({
   args: {},
-  returns: v.union(
-    v.object({ access: v.literal("restricted") }),
-    v.object({ access: v.literal("ready"), complete: v.boolean(), canRemoveAll: v.boolean(), receipts: v.array(v.object({ _id: v.id("expenseReceipts"), entryId: v.id("entries"), occurredOn: v.string(), category: v.string(), amountUgx: v.number(), entryState: v.union(v.literal("posted"), v.literal("void")), fileName: v.string(), contentType: v.string(), sizeBytes: v.number(), canRemove: v.boolean() })) }),
-  ),
+  returns: v.union(v.object({ access: v.literal("restricted") }), v.object({ access: v.literal("ready"), canRemoveAll: v.boolean() })),
   handler: async ctx => {
     const current = await getSelectedWorkspace(ctx);
     if (!current || !(await hasPermission(ctx, current.membership, "expenses.view"))) return { access: "restricted" as const };
-    const records = await ctx.db.query("expenseReceipts").withIndex("by_business_and_created_at", q => q.eq("businessId", current.business._id)).order("desc").take(101);
-    const visible = records.slice(0, 100);
-    const receipts = await Promise.all(visible.map(async receipt => {
+    return { access: "ready" as const, canRemoveAll: await hasPermission(ctx, current.membership, "expenses.update") };
+  },
+});
+
+export const listRecent = query({
+  args: { paginationOpts: paginationOptsValidator },
+  returns: paginationResultValidator(receiptRow),
+  handler: async (ctx, args) => {
+    const current = await getSelectedWorkspace(ctx);
+    if (!current || !(await hasPermission(ctx, current.membership, "expenses.view"))) throw new Error("Receipt access is restricted.");
+    const page = await ctx.db.query("expenseReceipts").withIndex("by_business_and_created_at", q => q.eq("businessId", current.business._id)).order("desc").paginate(args.paginationOpts);
+    const canManage = await hasPermission(ctx, current.membership, "expenses.update");
+    const receipts = await Promise.all(page.page.map(async receipt => {
       const entry = await ctx.db.get(receipt.entryId);
       if (!entry || entry.businessId !== current.business._id || entry.kind !== "expense") return null;
-      return { _id: receipt._id, entryId: receipt.entryId, occurredOn: entry.occurredOn, category: entry.category, amountUgx: entry.amountUgx, entryState: entry.state, fileName: receipt.fileName, contentType: receipt.contentType, sizeBytes: receipt.sizeBytes, canRemove: receipt.createdBy === current.userId || await hasPermission(ctx, current.membership, "expenses.update") || entry.createdBy === current.userId };
+      return { _id: receipt._id, entryId: receipt.entryId, occurredOn: entry.occurredOn, category: entry.category, amountUgx: entry.amountUgx, entryState: entry.state, fileName: receipt.fileName, contentType: receipt.contentType, sizeBytes: receipt.sizeBytes, canRemove: receipt.createdBy === current.userId || canManage || entry.createdBy === current.userId };
     }));
-    return { access: "ready" as const, complete: records.length <= 100, canRemoveAll: await hasPermission(ctx, current.membership, "expenses.update"), receipts: receipts.filter((row): row is NonNullable<typeof row> => row !== null) };
+    return { ...page, page: receipts.filter((row): row is NonNullable<typeof row> => row !== null) };
   },
 });
 

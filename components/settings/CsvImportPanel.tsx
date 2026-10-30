@@ -94,21 +94,9 @@ export function CsvImportPanel() {
     try { return { rows: flatRows(), error: "" }; }
     catch (e) { return { rows: [] as ImportRow[], error: e instanceof Error ? e.message : "Could not validate the import rows." }; }
   }, [fileName, looksCentipid, report, flatRows]);
-  const previewTotals = useMemo(() => {
-    const totals = { cash: 0, mobile_money: 0, unallocated: 0 };
-    const seen = new Set<string>();
-    let potentialDuplicateRows = 0;
-    for (const row of preview.rows) {
-      const signature = [row.occurredOn, row.kind, row.account, row.category, row.amountUgx, row.note].join("\u0000");
-      if (seen.has(signature)) potentialDuplicateRows++;
-      seen.add(signature);
-      const signed = row.kind === "sale" ? row.amountUgx : -row.amountUgx;
-      const next = totals[row.account] + signed;
-      if (!Number.isSafeInteger(next)) return { error: "The account impact exceeds the supported safe amount range.", totals, potentialDuplicateRows };
-      totals[row.account] = next;
-    }
-    return { error: "", totals, potentialDuplicateRows };
-  }, [preview.rows]);
+  const previewRowsJson = useMemo(() => JSON.stringify(preview.rows), [preview.rows]);
+  const calculatedPreview = useQuery(api.imports.previewImpact, settings?.access === "ready" && preview.rows.length && !preview.error ? { businessId: settings.businessId, rowsJson: previewRowsJson } : "skip");
+  const previewTotals = calculatedPreview ?? { error: preview.rows.length && !preview.error ? "Calculating the authorized preview…" : "", totals: { cash: 0, mobile_money: 0, unallocated: 0 }, potentialDuplicateRows: 0 };
   const previewDateRange = useMemo(() => {
     const dates = preview.rows.map(row => row.occurredOn).sort();
     return dates.length ? { from: dates[0], to: dates[dates.length - 1] } : null;

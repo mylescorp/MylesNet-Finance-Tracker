@@ -48,7 +48,7 @@ export function billForecast(rows: BillForecastInput[], today: string) {
   const horizon = new Date(`${today}T00:00:00.000Z`);
   horizon.setUTCDate(horizon.getUTCDate() + 90);
   const end = horizon.toISOString().slice(0, 10);
-  return rows.filter(row => row.active && !row.paused).flatMap(row => {
+  return rows.filter(row => row.active).flatMap(row => {
     const dates: string[] = [];
     let index = row.nextDueOn < today ? firstIndexOnOrAfter(row.nextDueOn, today, row.recurrence) : 0;
     let dueOn = billOccurrenceAt(row.nextDueOn, row.recurrence, row.scheduleAnchorDay, row.scheduleEndOfMonth, index);
@@ -64,6 +64,6 @@ export function billForecast(rows: BillForecastInput[], today: string) {
       if (next <= dueOn) break;
       dueOn = next;
     }
-    return dates.map(dueOn => ({ billId: row._id, name: row.name, category: row.category, amountUgx: row.amountUgx, supplierName: row.supplierName, dueOn }));
+    return dates.map(dueOn => ({ billId: row._id, name: row.name, category: row.category, amountUgx: row.amountUgx, supplierName: row.supplierName, dueOn, paused: row.paused }));
   }).sort((a, b) => a.dueOn.localeCompare(b.dueOn) || a.name.localeCompare(b.name));
 }

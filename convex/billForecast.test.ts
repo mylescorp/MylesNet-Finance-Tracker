@@ -11,4 +11,9 @@ describe("90-day bill forecast", () => {
   it("fast-forwards an old unpaid schedule without losing its future forecast", () => {
     expect(billForecast([monthly("2010-01-15")], "2026-10-31").map(row => row.dueOn)).toEqual(["2026-10-15", "2026-11-15", "2026-12-15", "2027-01-15"]);
   });
+
+  it("keeps paused obligations in the forecast while callers can suppress reminders", () => {
+    const paused = { ...monthly("2026-10-31"), paused: true };
+    expect(billForecast([paused], "2026-10-31").map(row => row.dueOn)).toContain("2026-10-31");
+  });
 });

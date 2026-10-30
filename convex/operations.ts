@@ -7,6 +7,7 @@ import { hasPermission, permissionsForMembership } from "./accessControl";
 import { getSelectedWorkspace } from "./workspaceContext";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { normalizeCashDenominations } from "./reconciliationUtils";
+import { billForecast as buildBillForecast } from "../lib/bill-forecast";
 
 type Ctx = MutationCtx | QueryCtx;
 type Account = "cash" | "mobile_money";
@@ -262,12 +263,33 @@ export const overview = query({
       savingsFlows: canViewSavings ? savingsFlows.filter(row => !args.account || row.account === args.account).map(row => { const holding = holdingById.get(row.holdingId); return { _id: row._id, holdingName: holding?.name ?? "Inactive holding", kind: row.kind, amountUgx: row.amountUgx, account: row.account, occurredOn: row.occurredOn, note: row.note, state: row.state ?? "posted", voidReason: row.voidReason, canReverse: holding?.active === true }; }) : [],
       loans: canViewLoans ? loans.filter(row => !args.account || row.account === args.account).map(row => ({ _id: row._id, lender: row.lender, principalUgx: row.principalUgx, outstandingPrincipalUgx: row.outstandingPrincipalUgx, annualRateBps: row.annualRateBps, termMonths: row.termMonths, startedOn: row.startedOn, account: row.account, status: row.status })) : [],
       loanRepayments: canViewLoans ? loanRepayments.filter(row => !args.account || row.account === args.account).map(row => ({ _id: row._id, lender: loanById.get(row.loanId) ?? "Loan", amountUgx: row.amountUgx, principalUgx: row.principalUgx, interestUgx: row.interestUgx, account: row.account, paidOn: row.paidOn, state: row.state ?? "posted", voidReason: row.voidReason })) : [],
-      bills: canViewBills ? bills.filter(row => !args.account || row.account === args.account).map(row => ({ _id: row._id, name: row.name, category: row.category, amountUgx: row.amountUgx, account: row.account, recurrence: row.recurrence, nextDueOn: row.nextDueOn, supplierName: row.supplierName ?? null, reminderLeadDays: row.reminderLeadDays ?? 3, scheduleAnchorDay: row.scheduleAnchorDay ?? new Date(`${row.nextDueOn}T00:00:00.000Z`).getUTCDate(), scheduleEndOfMonth: row.scheduleEndOfMonth ?? false, paused: row.paused ?? false, active: row.active })) : [],
+      bills: canViewBills ? bills.filter(row => !args.account || row.account === args.account).map(row => { const scheduleStart = row.scheduleStartDueOn ?? row.nextDueOn; const startDate = new Date(`${scheduleStart}T00:00:00.000Z`); const anchorDay = row.scheduleAnchorDay ?? startDate.getUTCDate(); const anchorMonthEnd = anchorDay === new Date(Date.UTC(startDate.getUTCFullYear(), startDate.getUTCMonth() + 1, 0)).getUTCDate(); return { _id: row._id, name: row.name, category: row.category, amountUgx: row.amountUgx, account: row.account, recurrence: row.recurrence, nextDueOn: row.nextDueOn, supplierName: row.supplierName ?? null, reminderLeadDays: row.reminderLeadDays ?? 3, scheduleAnchorDay: anchorDay, scheduleEndOfMonth: row.scheduleEndOfMonth ?? anchorMonthEnd, paused: row.paused ?? false, active: row.active }; }) : [],
       billsComplete: !canViewBills || bills.length <= 100,
       billPayments: canViewBills ? billPayments.filter(row => !args.account || row.account === args.account).map(row => { const bill = billById.get(row.billId); return { _id: row._id, billName: bill?.name ?? "Inactive bill", amountUgx: row.amountUgx, account: row.account, paidOn: row.paidOn, state: row.state ?? "posted", voidReason: row.voidReason, canReverse: row.state !== "void" && !!row.priorNextDueOn && !!row.nextDueOnAfter && row.priorScheduleStartDueOn !== undefined && row.priorScheduleAnchorDay !== undefined && row.priorScheduleEndOfMonth !== undefined && row.nextScheduleStartDueOn !== undefined && row.nextScheduleAnchorDay !== undefined && row.nextScheduleEndOfMonth !== undefined && bill?.nextDueOn === row.nextDueOnAfter && bill.scheduleStartDueOn === row.nextScheduleStartDueOn && bill.scheduleAnchorDay === row.nextScheduleAnchorDay && bill.scheduleEndOfMonth === row.nextScheduleEndOfMonth }; }) : [],
       reconciliations: canViewReconciliation ? reconciliations.filter(row => !args.account || row.account === args.account).map(row => ({ _id: row._id, account: row.account, asOfDate: row.asOfDate, bookBalanceUgx: row.bookBalanceUgx, countedBalanceUgx: row.countedBalanceUgx, denominationCounts: row.denominationCounts, varianceUgx: row.varianceUgx, status: row.status, reviewedByName: row.reviewedByName, reviewedAt: row.reviewedAt, reviewNote: row.reviewNote, note: row.note, explanation: row.explanation, supersedesId: row.supersedesId })) : [],
       partners: canViewPartners ? currentPartnerShares.map(row => ({ _id: row._id, name: row.name, ownershipBps: row.ownershipBps, active: row.active })) : [],
     };
+  },
+});
+
+export const forecastBills = query({
+  args: { businessId: v.id("businesses"), account: v.optional(v.union(v.literal("cash"), v.literal("mobile_money"))) },
+  returns: v.union(v.object({ access: v.literal("restricted") }), v.object({ access: v.literal("ready"), complete: v.boolean(), forecasts: v.array(v.object({ billId: v.id("bills"), name: v.string(), category: v.string(), amountUgx: v.number(), supplierName: v.union(v.string(), v.null()), dueOn: v.string(), paused: v.boolean() })) })),
+  handler: async (ctx, args) => {
+    const current = await workspace(ctx, args.businessId);
+    if (!current || !(await hasPermission(ctx, current.membership, "bills.view"))) return { access: "restricted" as const };
+    const bills = args.account
+      ? await ctx.db.query("bills").withIndex("by_business_and_account_and_active_due", q => q.eq("businessId", current.business._id).eq("account", args.account!).eq("active", true)).take(101)
+      : await ctx.db.query("bills").withIndex("by_business_and_active_due", q => q.eq("businessId", current.business._id).eq("active", true)).take(101);
+    const today = dayInZone(Date.now(), current.business.timezone);
+    const forecastInputs = bills.slice(0, 100).map(row => {
+      const start = row.scheduleStartDueOn ?? row.nextDueOn;
+      const date = new Date(`${start}T00:00:00.000Z`);
+      const anchor = row.scheduleAnchorDay ?? date.getUTCDate();
+      const anchorIsMonthEnd = anchor === new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 0)).getUTCDate();
+      return { _id: row._id, name: row.name, category: row.category, amountUgx: row.amountUgx, recurrence: row.recurrence, nextDueOn: row.nextDueOn, supplierName: row.supplierName ?? null, reminderLeadDays: row.reminderLeadDays ?? 3, scheduleAnchorDay: anchor, scheduleEndOfMonth: row.scheduleEndOfMonth ?? anchorIsMonthEnd, paused: row.paused ?? false, active: row.active };
+    });
+    return { access: "ready" as const, complete: bills.length <= 100, forecasts: buildBillForecast(forecastInputs, today).map(row => ({ ...row, billId: row.billId as Id<"bills"> })) };
   },
 });
 

@@ -32,12 +32,11 @@ describe("expense receipt authorization and lifecycle", () => {
     const retriedStorageId = await t.run(ctx => ctx.storage.store(new Blob([pdfBytes()], { type: "application/pdf" })));
     await expect(t.mutation(internal.expenseReceipts.recordUploadedFile, { userId, entryId, storageId: retriedStorageId, requestedFileName: "supply receipt.pdf", idempotencyKey: "receipt-upload-idempotency-1" })).resolves.toEqual({ receiptId: first.receiptId, reused: true });
     await t.run(ctx => ctx.db.patch(entryId, { state: "void" }));
-    const receipts = await owner.query(api.expenseReceipts.listRecent, {});
-    expect(receipts.access).toBe("ready");
-    if (receipts.access === "ready") {
-      expect(receipts.receipts).toMatchObject([{ entryId, fileName: "supply receipt.pdf", contentType: "application/pdf", entryState: "void" }]);
-      expect("url" in receipts.receipts[0]).toBe(false);
-    }
+    const access = await owner.query(api.expenseReceipts.listAccess, {});
+    expect(access).toMatchObject({ access: "ready", canRemoveAll: true });
+    const receipts = await owner.query(api.expenseReceipts.listRecent, { paginationOpts: { numItems: 20, cursor: null } });
+    expect(receipts.page).toMatchObject([{ entryId, fileName: "supply receipt.pdf", contentType: "application/pdf", entryState: "void" }]);
+    expect("url" in receipts.page[0]).toBe(false);
     const receiptId = first.receiptId;
     await expect(t.query(internal.expenseReceipts.authorizedFile, { userId: outsiderId, receiptId })).resolves.toBeNull();
     await owner.mutation(api.expenseReceipts.removeReceipt, { receiptId });
