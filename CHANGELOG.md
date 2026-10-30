@@ -2,6 +2,13 @@
 
 Changes are grouped under the semantic version of the production release that ships them. Each feature or fix remains its own card. Add a Changeset file for every user-visible change; the release workflow updates this file when it prepares the version PR. Preview deployments do not count as releases.
 
+## v0.3.7 — 2026-10-30
+
+<!-- change-id: voucher-event-alias -->
+### Fixes — Route misspelled voucher redemption events
+
+- Recognize `voutcher.redeemed` notifications as voucher sales so they reach the cash ledger and update cash balances and daily sales totals.
+
 ## v0.3.6 — 2026-10-29
 
 <!-- change-id: calm-lions-flow -->
