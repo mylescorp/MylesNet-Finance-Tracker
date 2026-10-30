@@ -24,6 +24,7 @@ import type * as googleFormHttp from "../googleFormHttp.js";
 import type * as googleForms from "../googleForms.js";
 import type * as http from "../http.js";
 import type * as imports from "../imports.js";
+import type * as monthEndClose from "../monthEndClose.js";
 import type * as onboarding from "../onboarding.js";
 import type * as operations from "../operations.js";
 import type * as reconciliationUtils from "../reconciliationUtils.js";
@@ -56,6 +57,7 @@ declare const fullApi: ApiFromModules<{
   googleForms: typeof googleForms;
   http: typeof http;
   imports: typeof imports;
+  monthEndClose: typeof monthEndClose;
   onboarding: typeof onboarding;
   operations: typeof operations;
   reconciliationUtils: typeof reconciliationUtils;

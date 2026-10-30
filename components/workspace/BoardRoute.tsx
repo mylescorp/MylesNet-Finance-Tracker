@@ -23,6 +23,7 @@ import { SupplierManager } from "@/components/workspace/SupplierManager";
 import { AttachExpenseReceipt } from "@/components/workspace/AttachExpenseReceipt";
 import { FinancePeriodFilters } from "@/components/workspace/FinancePeriodFilters";
 import { InteractiveFinanceChart } from "@/components/workspace/InteractiveFinanceChart";
+import { MonthEndClosePanel } from "@/components/workspace/MonthEndClosePanel";
 import { financePeriodRange, previousFinanceRange, validateFinanceCustomRange, type FinanceAccount, type FinancePeriod } from "@/lib/finance-period";
 
 type BoardSpec = {
@@ -133,8 +134,8 @@ const specs: Record<string, BoardSpec> = {
       { title: "Profit and loss by month", detail: "Monthly totals use saved cashbook entries. Missing source history is not filled with sample values.", kind: "table" },
       { title: "Profit and loss statement", detail: "Monthly sales, total expenses, and cashbook net from recorded entries in the selected period.", kind: "table" },
       { title: "Operating margin and equipment", detail: "Compare recorded operating costs and equipment spend by period.", kind: "chart" },
-      { title: "Budget versus actual", detail: "Monthly category budgets and posted expense actuals are available in Expenses. Multi-month budget comparisons and period close controls are not implemented." },
-      { title: "Month-end close and statement export", detail: "The selected-period statement can be printed or saved as a PDF from your browser. Period close, reviewer sign-off, and an access-controlled statement share are not implemented yet." },
+      { title: "Budget versus actual", detail: "Monthly category budgets and posted expense actuals are available in Expenses. The month-end close snapshot compares budget limits with actuals for the same month; multi-month budget comparisons remain unavailable." },
+      { title: "Month-end close and statement export", detail: "Prepare a full calendar-month cashbook snapshot after the close checklist passes, then have a different authorized reviewer approve it. Reopening requires an audited reason. The close is a statement control and does not block new ledger entries." },
     ],
   },
   partners: {
@@ -467,7 +468,7 @@ export function BoardRoute({ route }: { route: string }) {
         : section.title === "Voucher batches and mobile entry" ? <div className="empty-state compact-empty"><strong>Voucher stock tracking is not implemented.</strong><span>{section.detail}</span></div>
         : section.title === "Supplier price history" ? <div className="empty-state compact-empty"><strong>Review supplier-linked expense spend in Expenses.</strong><span>{section.detail}</span><Link className="text-link" href="/expenses">Open Expenses →</Link></div>
         : section.title === "Budget versus actual" ? <div className="empty-state compact-empty"><strong>Review monthly category budgets in Expenses.</strong><span>{section.detail}</span><Link className="text-link" href="/expenses">Open Expenses →</Link></div>
-        : section.title === "Month-end close and statement export" ? <div className="empty-state compact-empty"><strong>Month-end close controls are not implemented.</strong><span>{section.detail}</span></div>
+        : section.title === "Month-end close and statement export" ? access?.access === "ready" ? <MonthEndClosePanel businessId={access.businessId} today={today} currency={currency} scale={currencyScale} locale={locale} /> : <div className="empty-state compact-empty"><strong>Workspace access is required.</strong><span>{section.detail}</span></div>
         : section.title === "Expenses by category" ? <ExpenseCategoryTable categories={preferences?.access === "ready" ? preferences.expenseCategories : []} amounts={expenseStats?.categoryTotals} total={expenseStats?.expensesUgx} formatMoney={fmt} />
         : section.title === "Expenses by category · year to date" ? <ExpenseCategoryTable categories={preferences?.access === "ready" ? preferences.expenseCategories : []} amounts={expenseYearStats?.categoryTotals} total={expenseYearStats?.expensesUgx} formatMoney={fmt} />
         : section.title === "Operating vs equipment" ? <ExpenseMix insights={expenseStats?.expenseInsights} total={expenseStats?.expensesUgx} formatMoney={fmt} />
