@@ -2,6 +2,18 @@
 
 Changes are grouped under the semantic version of the production release that ships them. Each feature or fix remains its own card. Add a Changeset file for every user-visible change; the release workflow updates this file when it prepares the version PR. Preview deployments do not count as releases.
 
+## v0.3.8 — 2026-10-30
+
+<!-- change-id: premium-finance-tables -->
+### Fixes — Polish finance and audit tables
+
+- Make sales, expense, and audit records easier to scan with clearer columns, status cues, and compact actions.
+
+<!-- change-id: voucher-amount-contract -->
+### Fixes — Document Centipid voucher redemption amounts
+
+- Voucher redemption events now require the actual UGX amount, and amount-less receipts can be retried safely with the same reference.
+
 ## v0.3.7 — 2026-10-30
 
 <!-- change-id: voucher-event-alias -->
