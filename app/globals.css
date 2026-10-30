@@ -457,6 +457,56 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .issue-review-details { border-top:1px solid var(--mn-line); padding-top:10px; }
 .issue-review-details summary { color:var(--mn-accent); font-size:13px; font-weight:600; cursor:pointer; }
 .issue-review-details .form-layout { margin-top:12px; }
+
+/* Ledger tables: keep record details scannable and row actions compact. */
+.board-entry-ledger-card { padding:0; overflow:hidden; }
+.board-entry-ledger-card > .card-heading { margin:0; padding:18px 20px 15px; }
+.board-ledger-count { flex:none; padding:4px 9px; border:1px solid var(--mn-line); border-radius:999px; color:var(--mn-muted); background:var(--mn-bg); font-size:10px; font-variant-numeric:tabular-nums; }
+.board-entry-ledger-scroll { border-top:1px solid var(--mn-line); }
+.board-entry-ledger { min-width:820px; font-variant-numeric:tabular-nums; }
+.board-entry-ledger thead th { padding:11px 14px; background:var(--mn-inset); }
+.board-entry-ledger tbody tr { transition:background var(--mn-dur-fast); }
+.board-entry-ledger tbody tr:hover { background:color-mix(in srgb,var(--mn-inset) 55%,var(--mn-card)); }
+.board-entry-ledger td { padding:13px 14px; }
+.board-entry-ledger .board-entry-date { color:var(--mn-muted); white-space:nowrap; }
+.board-entry-description { min-width:220px; max-width:390px; }
+.board-entry-description strong { display:block; overflow:hidden; color:var(--mn-ink); font-size:12px; font-weight:600; text-overflow:ellipsis; }
+.board-entry-description small { display:block; margin-top:3px; color:var(--mn-subtle); font-size:10px; }
+.board-entry-amount-heading,.board-entry-amount { text-align:right; white-space:nowrap; }
+.board-entry-amount { font-weight:650; }
+.board-entry-actions { display:flex; justify-content:flex-end; gap:6px; }
+.board-entry-actions .button { min-height:30px; padding:0 9px; font-size:10px; }
+.board-entry-actions .board-entry-void { color:var(--mn-danger-fg); }
+.board-entry-load-more { display:flex; justify-content:center; padding:13px; border-top:1px solid var(--mn-line); }
+.sr-only { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }
+
+/* Audit history uses a stable, high contrast header and readable event hierarchy. */
+.audit-table-card { border-radius:14px; box-shadow:var(--mn-shadow-popover); }
+.audit-table-heading { min-height:68px; padding:16px 20px; }
+.audit-table-heading strong { font-size:13px; }
+.audit-table-heading span { font-size:11px; }
+.audit-table { min-width:800px; font-variant-numeric:tabular-nums; }
+.audit-table thead th { padding:12px 14px; background:var(--mn-inset); }
+.audit-table tbody tr { transition:background var(--mn-dur-fast); }
+.audit-table tbody tr:hover { background:color-mix(in srgb,var(--mn-inset) 55%,var(--mn-card)); }
+.audit-table td { padding:13px 14px; }
+.audit-table td:first-child { max-width:350px; }
+.audit-table td:nth-child(2) { min-width:130px; color:var(--mn-ink); font-weight:550; text-transform:capitalize; }
+.audit-table td:nth-child(3) { color:var(--mn-muted); }
+.audit-table td:nth-child(4) { min-width:145px; }
+.audit-table td:last-child { min-width:155px; color:var(--mn-muted); font-size:11px; }
+.audit-table td:last-child time { display:block; white-space:nowrap; }
+.audit-table td:first-child small { max-width:340px; line-height:1.45; }
+.audit-event-badge { padding:4px 8px; font-size:10px; letter-spacing:.01em; }
+.audit-filters { gap:11px; padding:15px; box-shadow:var(--mn-shadow-popover); }
+.audit-filters label { gap:6px; font-size:10px; letter-spacing:.045em; text-transform:uppercase; }
+.audit-filters input,.audit-filters select { min-height:39px; background:var(--mn-card); font-size:12px; }
+.audit-filter-actions .button { height:39px; padding:0 13px; font-size:11px; }
+@media(max-width:760px) {
+  .board-entry-ledger-card > .card-heading { padding:15px 14px 13px; }
+  .audit-table-heading { padding:14px; }
+  .audit-filters { gap:8px; padding:11px; }
+}
 @media (max-width:600px) { .issues-summary-grid { grid-template-columns:1fr; } .issues-summary-item { grid-template-columns:1fr auto; align-items:center; } .issues-summary-item small { grid-column:1/-1; } .issues-page-heading,.issue-card-heading { flex-wrap:wrap; } .issues-toolbar .field { min-width:100%; } .issues-toolbar .muted-note { margin-left:0; } .issue-card-title { flex-wrap:wrap; } }
 .settings-card .form-layout { max-width:none; margin-top:8px; }
 .settings-note-card { margin-top:16px; }
