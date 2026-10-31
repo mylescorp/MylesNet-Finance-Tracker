@@ -86,6 +86,23 @@ describe("supplier records and expense linkage", () => {
     expect((await t.run(ctx => ctx.db.get(entryId)))?.lineItems).toEqual([item]);
   });
 
+  it("bounds supplier item price history to 500 observations", async () => {
+    const { t, owner, userId, businessId } = await setup();
+    const supplierId = await owner.mutation(api.suppliers.save, { action: "create", name: "Bulk Supplier" });
+    const lineItems = Array.from({ length: 30 }, (_, index) => ({ name: `Item ${index}`, quantity: 1, unit: "each", unitPriceUgx: 1, lineTotalUgx: 1 }));
+    await t.run(async ctx => {
+      for (let index = 0; index < 17; index += 1) {
+        await ctx.db.insert("entries", { businessId, kind: "expense", amountUgx: 30, occurredOn: `2026-10-${String(index + 1).padStart(2, "0")}`, account: "cash", category: "Stock", note: "", supplierId, supplierName: "Bulk Supplier", lineItems, source: "manual", idempotencyKey: `bulk-supplier-entry-${index}`, state: "posted", createdBy: userId, createdAt: Date.now() });
+      }
+    });
+    const history = await owner.query(api.suppliers.expenseHistory, { supplierId });
+    expect(history.access).toBe("ready");
+    if (history.access === "ready") {
+      expect(history.priceHistoryComplete).toBe(false);
+      expect(history.expenses.reduce((total, row) => total + row.lineItems.length, 0)).toBe(500);
+    }
+  });
+
   it("lets recurring-template managers load supplier choices with expenses view and update", async () => {
     const { t, businessId, owner } = await setup();
     await owner.mutation(api.suppliers.save, { action: "create", name: "Template supplier" });
