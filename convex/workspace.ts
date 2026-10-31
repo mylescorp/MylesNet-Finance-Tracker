@@ -902,6 +902,7 @@ export const createEntry = mutation({
     note: v.string(),
     supplierId: v.optional(v.id("suppliers")),
     supplierReference: v.optional(v.string()),
+    lineItems: v.optional(v.array(v.object({ name: v.string(), quantity: v.number(), unit: v.string(), unitPriceUgx: v.number(), lineTotalUgx: v.number() }))),
     idempotencyKey: v.string(),
     confirmPossibleDuplicate: v.optional(v.boolean()),
     confirmNegativeBalance: v.optional(v.boolean()),
@@ -920,6 +921,19 @@ export const createEntry = mutation({
       throw new Error("Enter a category using 1 to 80 characters.");
     }
     if (args.note.length > 300) throw new Error("Notes can be up to 300 characters.");
+    if (args.kind === "sale" && args.lineItems?.length) throw new Error("Item details can only be added to an expense.");
+    if ((args.lineItems?.length ?? 0) > 30) throw new Error("An expense can include up to 30 item lines.");
+    const lineItems = args.lineItems?.map((line) => {
+      const name = line.name.trim().replace(/\s+/g, " ");
+      const unit = line.unit.trim().replace(/\s+/g, " ");
+      if (!name || name.length > 100 || !unit || unit.length > 24) throw new Error("Each item needs a name (up to 100 characters) and unit (up to 24 characters).");
+      if (!Number.isSafeInteger(line.quantity) || line.quantity <= 0 || !Number.isSafeInteger(line.unitPriceUgx) || line.unitPriceUgx <= 0) throw new Error("Item quantities and unit prices must be positive whole numbers.");
+      const lineTotalUgx = line.quantity * line.unitPriceUgx;
+      if (!Number.isSafeInteger(lineTotalUgx) || lineTotalUgx !== line.lineTotalUgx) throw new Error("Item line totals are invalid or exceed the supported range.");
+      return { name, quantity: line.quantity, unit, unitPriceUgx: line.unitPriceUgx, lineTotalUgx };
+    });
+    if (lineItems?.length && args.kind !== "expense") throw new Error("Item details can only be added to an expense.");
+    if (lineItems?.length && lineItems.reduce((sum, line) => sum + line.lineTotalUgx, 0) !== args.amountUgx) throw new Error("Item line totals must add up to the expense amount.");
     const supplierReference = args.supplierReference?.trim() ?? "";
     if (supplierReference.length > 120) throw new Error("Supplier reference can be up to 120 characters.");
     if (args.kind === "sale" && (args.supplierId || supplierReference)) throw new Error("Supplier details can only be added to an expense.");
@@ -949,7 +963,8 @@ export const createEntry = mutation({
         duplicate.note === args.note.trim() &&
         duplicate.supplierId === args.supplierId &&
         (duplicate.supplierReference ?? "") === supplierReference;
-      if (!sameRequest) throw new Error("This request key was already used for another entry.");
+      const sameLines = JSON.stringify(duplicate.lineItems ?? []) === JSON.stringify(lineItems ?? []);
+      if (!sameRequest || !sameLines) throw new Error("This request key was already used for another entry.");
       return duplicate._id;
     }
 
@@ -985,6 +1000,7 @@ export const createEntry = mutation({
       supplierId: supplier?._id,
       supplierName: supplier?.name,
       supplierReference: supplierReference || undefined,
+      lineItems,
       source: "manual",
       idempotencyKey: args.idempotencyKey,
       state: "posted",

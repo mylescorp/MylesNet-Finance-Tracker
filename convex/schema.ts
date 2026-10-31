@@ -226,6 +226,7 @@ export default defineSchema({
     supplierId: v.optional(v.id("suppliers")),
     supplierName: v.optional(v.string()),
     supplierReference: v.optional(v.string()),
+    lineItems: v.optional(v.array(v.object({ name: v.string(), quantity: v.number(), unit: v.string(), unitPriceUgx: v.number(), lineTotalUgx: v.number() }))),
     source: v.union(v.literal("manual"), v.literal("import"), v.literal("webhook"), v.literal("google_form")),
     idempotencyKey: v.string(),
     state: v.union(v.literal("posted"), v.literal("void")),

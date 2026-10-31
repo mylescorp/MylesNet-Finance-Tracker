@@ -78,7 +78,7 @@ export const save = mutation({
 
 export const expenseHistory = query({
   args: { supplierId: v.id("suppliers") },
-  returns: v.union(v.object({ access: v.literal("restricted") }), v.object({ access: v.literal("ready"), complete: v.boolean(), totalUgx: v.number(), expenses: v.array(v.object({ entryId: v.id("entries"), occurredOn: v.string(), category: v.string(), amountUgx: v.number(), reference: v.union(v.string(), v.null()) })) })),
+  returns: v.union(v.object({ access: v.literal("restricted") }), v.object({ access: v.literal("ready"), complete: v.boolean(), totalUgx: v.number(), expenses: v.array(v.object({ entryId: v.id("entries"), occurredOn: v.string(), category: v.string(), amountUgx: v.number(), reference: v.union(v.string(), v.null()), lineItems: v.array(v.object({ name: v.string(), quantity: v.number(), unit: v.string(), unitPriceUgx: v.number(), lineTotalUgx: v.number() })) })) })),
   handler: async (ctx, args) => {
     const current = await getSelectedWorkspace(ctx);
     if (!current || !(await hasPermission(ctx, current.membership, "expenses.view"))) return { access: "restricted" as const };
@@ -91,6 +91,6 @@ export const expenseHistory = query({
       totalUgx += row.amountUgx;
       if (!Number.isSafeInteger(totalUgx)) throw new Error("Supplier expense total exceeds the supported amount range.");
     }
-    return { access: "ready" as const, complete: rows.length <= 500, totalUgx, expenses: posted.map(row => ({ entryId: row._id, occurredOn: row.occurredOn, category: row.category, amountUgx: row.amountUgx, reference: row.supplierReference ?? null })) };
+    return { access: "ready" as const, complete: rows.length <= 500, totalUgx, expenses: posted.map(row => ({ entryId: row._id, occurredOn: row.occurredOn, category: row.category, amountUgx: row.amountUgx, reference: row.supplierReference ?? null, lineItems: row.lineItems ?? [] })) };
   },
 });

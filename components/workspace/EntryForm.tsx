@@ -28,6 +28,7 @@ export function EntryForm({ kind, onSaved }: { kind: EntryKind; onSaved?: () => 
   const currencyScale = 10 ** (context?.access === "ready" ? context.currencyMinorDigits : 0);
   const categories = context?.access === "ready" ? (kind === "sale" ? context.incomeCategories : context.expenseCategories) : [kind === "sale" ? "Product sales" : "Other expense"];
   const [account, setAccount] = useState<"cash" | "mobile_money">("cash");
+  const [itemLineCount, setItemLineCount] = useState(0);
   const [occurredOn, setOccurredOn] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [feedback, setFeedback] = useState<{ message: string; error: boolean } | null>(null);
@@ -48,6 +49,24 @@ export function EntryForm({ kind, onSaved }: { kind: EntryKind; onSaved?: () => 
       setFeedback({ message: `Enter a positive amount using the supported decimal places for ${currency}.`, error: true });
       return;
     }
+    let invalidItemLine = false;
+    const itemLines = kind === "expense" ? Array.from({ length: itemLineCount }, (_, index) => {
+      const name = String(values.get(`itemName-${index}`) ?? "").trim();
+      const quantity = Number(values.get(`itemQuantity-${index}`));
+      const unitPrice = Number(values.get(`itemPrice-${index}`));
+      const unitPriceUgx = Math.round(unitPrice * currencyScale);
+      const unit = String(values.get(`itemUnit-${index}`) ?? "").trim();
+      if (!name && !unit && !String(values.get(`itemQuantity-${index}`) ?? "") && !String(values.get(`itemPrice-${index}`) ?? "")) return null;
+      if (!name || !unit || !Number.isSafeInteger(quantity) || quantity <= 0 || !Number.isFinite(unitPrice) || unitPrice <= 0 || !Number.isSafeInteger(unitPriceUgx)) { invalidItemLine = true; return null; }
+      const lineTotalUgx = quantity * unitPriceUgx;
+      if (!Number.isSafeInteger(lineTotalUgx)) { invalidItemLine = true; return null; }
+      return { name, quantity, unit, unitPriceUgx, lineTotalUgx };
+    }).filter((line): line is NonNullable<typeof line> => line !== null) : [];
+    if (invalidItemLine) { setFeedback({ message: "Complete each item with a name, whole-number quantity, unit, and valid unit price.", error: true }); return; }
+    if (itemLines.length && itemLines.reduce((sum, line) => sum + line.lineTotalUgx, 0) !== amountMinor) {
+      setFeedback({ message: "Item line totals must add up to the expense amount.", error: true });
+      return;
+    }
     setBusy(true); setFeedback(null);
     setDrawerBusy(true);
     let savedEntryId: Id<"entries"> | null = null;
@@ -65,6 +84,7 @@ export function EntryForm({ kind, onSaved }: { kind: EntryKind; onSaved?: () => 
         note: String(values.get("note") ?? "").trim(),
         ...(kind === "expense" && values.get("supplierId") ? { supplierId: String(values.get("supplierId")) as Id<"suppliers"> } : {}),
         ...(kind === "expense" && values.get("supplierReference") ? { supplierReference: String(values.get("supplierReference")).trim() } : {}),
+        ...(itemLines.length ? { lineItems: itemLines } : {}),
         idempotencyKey: requestKey,
         confirmPossibleDuplicate: confirmDuplicate.current,
         confirmNegativeBalance: confirmNegative.current,
@@ -87,6 +107,7 @@ export function EntryForm({ kind, onSaved }: { kind: EntryKind; onSaved?: () => 
       setRuleConfirmation(null);
       form.reset();
       setOccurredOn(null);
+      setItemLineCount(0);
       if (failedReceipt && savedEntryId) {
         setReceiptRetry({ entryId: savedEntryId, ...failedReceipt });
         setFeedback({ message: `Expense saved to the cashbook, but the receipt could not be attached. Retry below.${receiptStatus.replace(" Expense saved, but its receipt was not attached:", "")}`, error: true });
@@ -152,6 +173,7 @@ export function EntryForm({ kind, onSaved }: { kind: EntryKind; onSaved?: () => 
     <div className="field"><label htmlFor="entry-category">Category</label><select id="entry-category" name="category" required>{categories.map(category => <option key={category} value={category}>{category}</option>)}</select></div>
     <div className="field"><label>Account</label><div className="segment-control" role="group" aria-label="Account"><button type="button" aria-pressed={account === "cash"} onClick={() => setAccount("cash")}>Cash</button><button type="button" aria-pressed={account === "mobile_money"} onClick={() => setAccount("mobile_money")}>Mobile money</button></div></div>
     {kind === "expense" && <><div className="field"><label htmlFor="entry-supplier">Supplier <span className="muted-note">(optional)</span></label><select id="entry-supplier" name="supplierId" defaultValue=""><option value="">No supplier recorded</option>{supplierOptions?.access === "ready" && supplierOptions.suppliers.map(supplier => <option value={supplier._id} key={supplier._id}>{supplier.name}</option>)}</select>{supplierOptions?.access === "ready" && !supplierOptions.complete && <small className="muted-note">Only the first 250 active suppliers are listed. Narrow the directory before relying on a missing name.</small>}</div><div className="field"><label htmlFor="entry-supplier-reference">Supplier reference <span className="muted-note">(optional)</span></label><input id="entry-supplier-reference" name="supplierReference" maxLength={120} placeholder="Invoice or receipt number" /></div></>}
+    {kind === "expense" && <section className="field-full"><div className="card-heading"><div><h3 className="card-title">Item details <span className="muted-note">(optional)</span></h3><p className="card-subtitle">Record whole-number quantities and unit prices. Item totals must equal the expense.</p></div>{itemLineCount < 30 && <button className="button" type="button" onClick={() => setItemLineCount(count => count + 1)}>Add item</button>}</div>{Array.from({ length: itemLineCount }, (_, index) => <div className="form-layout" key={index}><div className="field"><label htmlFor={`item-name-${index}`}>Item name</label><input id={`item-name-${index}`} name={`itemName-${index}`} maxLength={100} /></div><div className="field"><label htmlFor={`item-quantity-${index}`}>Quantity</label><input id={`item-quantity-${index}`} name={`itemQuantity-${index}`} type="number" min="1" step="1" /></div><div className="field"><label htmlFor={`item-unit-${index}`}>Unit</label><input id={`item-unit-${index}`} name={`itemUnit-${index}`} maxLength={24} placeholder="bag, bottle, kg" /></div><div className="field"><label htmlFor={`item-price-${index}`}>Unit price ({currency})</label><input id={`item-price-${index}`} name={`itemPrice-${index}`} type="number" min={1 / currencyScale} step={1 / currencyScale} /></div><button className="button" type="button" onClick={() => setItemLineCount(count => Math.max(0, count - 1))}>Remove last item</button></div>)}</section>}
     <div className="field field-full"><label htmlFor="entry-note">Description <span className="muted-note">(optional)</span></label><textarea id="entry-note" name="note" rows={3} maxLength={300} placeholder="Add context for this transaction" /></div>
     {kind === "expense" && <div className="field field-full"><label htmlFor="entry-receipt">Receipt <span className="muted-note">(optional · PDF, JPEG, PNG, or WebP · up to 5 MB)</span></label><input id="entry-receipt" name="receipt" type="file" accept="application/pdf,image/jpeg,image/png,image/webp" onChange={event => { const file = event.currentTarget.files?.[0]; if (file && (file.size > 5 * 1024 * 1024 || !["application/pdf", "image/jpeg", "image/png", "image/webp"].includes(file.type))) { event.currentTarget.value = ""; setFeedback({ message: "Choose a PDF, JPEG, PNG, or WebP receipt under 5 MB.", error: true }); } else setFeedback(null); }} /></div>}
     {ruleConfirmation && <div className="field field-full"><div className="notice-banner notice-warning" role="alert"><strong>Review this cashbook warning</strong><p>{ruleConfirmation.message}</p><div className="form-actions"><button className="button button-accent" type="button" disabled={busy} onClick={() => { if (ruleConfirmation.kind === "duplicate") confirmDuplicate.current = true; else confirmNegative.current = true; setRuleConfirmation(null); formRef.current?.requestSubmit(); }}>Review and continue</button><button className="button" type="button" disabled={busy} onClick={() => { setRuleConfirmation(null); idempotencyKey.current = null; confirmDuplicate.current = false; confirmNegative.current = false; }}>Cancel</button></div></div></div>}
