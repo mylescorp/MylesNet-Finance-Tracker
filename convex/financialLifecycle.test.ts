@@ -37,6 +37,7 @@ describe("financial lifecycle invariants", () => {
 
   it("reverses loan principal and interest with the linked expense and day totals", async () => {
     const { t, owner, businessId, today } = await setup();
+    await owner.mutation(api.workspace.createEntry, { businessId, kind: "expense", amountUgx: 700, occurredOn: today, account: "cash", category: "Unrelated", note: "Office water", idempotencyKey: "lifecycle-loan-unrelated-001" });
     const loanId = await owner.mutation(api.operations.createLoan, { businessId, lender: "Community lender", principalUgx: 30_000, annualRateBps: 1200, termMonths: 12, startedOn: today, account: "cash", note: "Working capital", idempotencyKey: "lifecycle-loan-create-001" });
     const repaymentId = await owner.mutation(api.operations.recordLoanRepayment, { businessId, loanId, principalUgx: 5_000, interestUgx: 1_000, paidOn: today, account: "cash", idempotencyKey: "lifecycle-loan-payment-001" });
     const linkedExpense = await t.run(ctx => ctx.db.query("entries").withIndex("by_business_and_idempotency", q => q.eq("businessId", businessId).eq("idempotencyKey", "loan-interest:lifecycle-loan-payment-001")).unique());
@@ -45,8 +46,8 @@ describe("financial lifecycle invariants", () => {
     expect(stored.loan).toMatchObject({ outstandingPrincipalUgx: 30_000, status: "active" });
     expect(stored.repayment).toMatchObject({ state: "void", amountUgx: 6_000 });
     expect(stored.expense).toMatchObject({ state: "void", amountUgx: 1_000 });
-    expect(stored.day).toMatchObject({ expensesUgx: 0, expenseCount: 0 });
-    expect(stored.cash?.balanceUgx).toBe(130_000);
+    expect(stored.day).toMatchObject({ expensesUgx: 700, expenseCount: 1 });
+    expect(stored.cash?.balanceUgx).toBe(129_300);
   });
 
   it("restores the bill recurrence snapshot and linked cashbook expense on payment reversal", async () => {
@@ -77,6 +78,7 @@ describe("financial lifecycle invariants", () => {
 
   it("reverses a completed import through its bounded chunk and restores balances and totals", async () => {
     const { t, owner, businessId, today } = await setup();
+    await owner.mutation(api.workspace.createEntry, { businessId, kind: "expense", amountUgx: 500, occurredOn: today, account: "cash", category: "Unrelated", note: "Packaging", idempotencyKey: "lifecycle-import-unrelated-001" });
     const sourceHash = "a".repeat(64);
     const batch = await owner.mutation(api.imports.beginBatch, { businessId, sourceHash, fileName: "cashbook.csv", importType: "cashbook", currency: "UGX", totalRows: 1 });
     await owner.mutation(api.imports.importRows, { businessId, batchId: batch.batchId, startRow: 0, rows: [{ rowNumber: 1, kind: "expense", amountUgx: 2_500, occurredOn: today, account: "cash", category: "Supplies", note: "Imported paper" }] });
@@ -87,8 +89,8 @@ describe("financial lifecycle invariants", () => {
     expect(result).toMatchObject({ status: "reversed", rollbackProgressRows: 1, processedRows: 1 });
     expect(stored.batch?.status).toBe("reversed");
     expect(stored.entry).toMatchObject({ state: "void", source: "import" });
-    expect(stored.cash?.balanceUgx).toBe(100_000);
-    expect(stored.day).toMatchObject({ expensesUgx: 0, expenseCount: 0 });
+    expect(stored.cash?.balanceUgx).toBe(99_500);
+    expect(stored.day).toMatchObject({ expensesUgx: 500, expenseCount: 1 });
   });
 
   it("rejects a correction without a reason before changing the ledger", async () => {
