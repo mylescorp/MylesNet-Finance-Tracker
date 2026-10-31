@@ -1,6 +1,7 @@
 import { paginationOptsValidator } from "convex/server";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { ConvexError, v } from "convex/values";
+import { internal } from "./_generated/api";
 import { internalMutation, mutation, query } from "./_generated/server";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import type { Id } from "./_generated/dataModel";
@@ -17,7 +18,7 @@ async function owner(ctx: Ctx, businessId: Id<"businesses">) {
   const business = membership?.active ? await ctx.db.get("businesses", businessId) : null;
   const current = business && membership ? { userId, membership, business } : null;
   if (!current || current.business.dataResetting || !(await hasPermission(ctx, current.membership, "integrations.manage"))) throw new ConvexError("Your role cannot manage Google Forms while the workspace is resetting.");
-  return { userId: current.userId, business: current.business };
+  return { userId: current.userId, membership: current.membership, business: current.business };
 }
 
 async function sha256(value: string) {
@@ -62,9 +63,22 @@ export const status = query({
 export const history = query({
   args: { businessId: v.id("businesses"), paginationOpts: paginationOptsValidator },
   handler: async (ctx, args) => {
-    const { business } = await owner(ctx, args.businessId);
+    const { business, membership } = await owner(ctx, args.businessId);
     const result = await ctx.db.query("googleFormReceipts").withIndex("by_business_and_created", q => q.eq("businessId", business._id)).order("desc").paginate(args.paginationOpts);
-    return { ...result, page: result.page.map(({ _id, submissionKind, status, occurredOn, amountUgx, summary, createdAt, attemptCount, lastAttemptAt }) => ({ _id, submissionKind, status, occurredOn, amountUgx, summary, createdAt, attemptCount: attemptCount ?? 1, lastAttemptAt: lastAttemptAt ?? createdAt })) };
+    return { ...result, page: await Promise.all(result.page.map(async ({ _id, submissionKind, status, occurredOn, amountUgx, summary, createdAt, attemptCount, lastAttemptAt }) => ({ _id, submissionKind, status, occurredOn, amountUgx, summary, createdAt, attemptCount: attemptCount ?? 1, lastAttemptAt: lastAttemptAt ?? createdAt, canReprocess: submissionKind === "sale" ? await hasPermission(ctx, membership, "sales.create") : submissionKind === "expense" ? await hasPermission(ctx, membership, "expenses.create") : false }))) };
+  },
+});
+
+export const reviewDetails = query({
+  args: { businessId: v.id("businesses"), receiptId: v.id("googleFormReceipts") },
+  returns: v.union(v.string(), v.null()),
+  handler: async (ctx, args) => {
+    const { business, membership } = await owner(ctx, args.businessId);
+    const receipt = await ctx.db.get("googleFormReceipts", args.receiptId);
+    if (!receipt || receipt.businessId !== business._id || receipt.status !== "needs_review") return null;
+    const permission = receipt.submissionKind === "sale" ? "sales.create" : receipt.submissionKind === "expense" ? "expenses.create" : null;
+    if (!permission || !(await hasPermission(ctx, membership, permission))) return null;
+    return receipt.detailsJson;
   },
 });
 
@@ -79,7 +93,7 @@ export const exportHistory = query({
   returns: v.string(),
   handler: async (ctx, args) => {
     const { business } = await owner(ctx, args.businessId);
-    const rows = await ctx.db.query("googleFormReceipts").withIndex("by_business_and_created", q => q.eq("businessId", business._id)).order("desc").take(5000);
+    const rows = await ctx.db.query("googleFormReceipts").withIndex("by_business_and_created", q => q.eq("businessId", business._id)).order("desc").take(500);
     const headers = ["submission_type", "date", "amount_ugx", "status", "attempt_count", "created_at_utc", "last_attempt_at_utc", "summary"];
     const data = rows.map(row => [row.submissionKind, row.occurredOn ?? "", row.amountUgx ?? "", row.status, row.attemptCount ?? 1, new Date(row.createdAt).toISOString(), new Date(row.lastAttemptAt ?? row.createdAt).toISOString(), row.summary]);
     return [headers, ...data].map(row => row.map(receiptCsvCell).join(",")).join("\r\n");
@@ -127,22 +141,54 @@ function entryCategoryFallback(label: string, category: string) {
   return /sales|product|goods|revenue/.test(name);
 }
 
+export const reprocessNeedsReview = mutation({
+  args: { businessId: v.id("businesses"), receiptId: v.id("googleFormReceipts"), reason: v.string() },
+  returns: v.object({ status: v.union(v.literal("posted"), v.literal("needs_review")), summary: v.string() }),
+  handler: async (ctx, args) => {
+    const { userId, business } = await owner(ctx, args.businessId);
+    const reason = args.reason.trim();
+    if (reason.length < 5 || reason.length > 500) throw new ConvexError("Add a review reason between 5 and 500 characters.");
+    const receipt = await ctx.db.get("googleFormReceipts", args.receiptId);
+    if (!receipt || receipt.businessId !== business._id || receipt.status !== "needs_review") throw new ConvexError("This submission is no longer waiting for review.");
+    if (receipt.submissionKind !== "sale" && receipt.submissionKind !== "expense") throw new ConvexError("Only sales and expenses can be posted from a reviewed form submission.");
+    const permission = receipt.submissionKind === "sale" ? "sales.create" : "expenses.create";
+    const membership = await ctx.db.query("memberships").withIndex("by_business_and_user", q => q.eq("businessId", business._id).eq("userId", userId)).unique();
+    if (!membership?.active || !(await hasPermission(ctx, membership, permission))) throw new ConvexError("Your role cannot post this submission type.");
+    let fields: Record<string, string>;
+    try {
+      const value: unknown = JSON.parse(receipt.detailsJson);
+      if (!value || typeof value !== "object" || Array.isArray(value) || Object.values(value).some(item => typeof item !== "string")) throw new Error("Invalid fields");
+      fields = value as Record<string, string>;
+    } catch { throw new ConvexError("Saved submission details are invalid and cannot be reprocessed."); }
+    const payload = JSON.stringify({ sourceKey: receipt.sourceKey, kind: receipt.submissionKind, occurredOn: receipt.occurredOn, fields });
+    const result: { status: "posted" | "needs_review" | "duplicate" | "unauthorized"; message?: string } = await ctx.runMutation(internal.googleForms.receive, { tokenHash: "", payload, businessId: business._id, reprocessBy: userId, reprocessReason: reason });
+    if (result.status === "unauthorized") throw new ConvexError("Could not authorize the reviewed submission.");
+    return { status: result.status === "duplicate" ? "posted" as const : result.status, summary: result.message ?? "Submission reprocessed." };
+  },
+});
+
 export const receive = internalMutation({
-  args: { tokenHash: v.string(), payload: v.string() },
+  args: { tokenHash: v.string(), payload: v.string(), businessId: v.optional(v.id("businesses")), reprocessBy: v.optional(v.id("users")), reprocessReason: v.optional(v.string()) },
   returns: v.object({ status: v.union(v.literal("posted"), v.literal("needs_review"), v.literal("duplicate"), v.literal("unauthorized")), message: v.optional(v.string()) }),
   handler: async (ctx, args) => {
-    const integration = await ctx.db.query("googleFormIntegrations").withIndex("by_token_hash", q => q.eq("tokenHash", args.tokenHash)).unique();
-    if (!integration?.active) return { status: "unauthorized" as const };
-    const business = await ctx.db.get("businesses", integration.businessId);
+    const integration = args.reprocessBy ? null : await ctx.db.query("googleFormIntegrations").withIndex("by_token_hash", q => q.eq("tokenHash", args.tokenHash)).unique();
+    if (!args.reprocessBy && !integration?.active) return { status: "unauthorized" as const };
+    const businessId = args.reprocessBy ? args.businessId : integration?.businessId;
+    if (!businessId) return { status: "unauthorized" as const };
+    const business = await ctx.db.get("businesses", businessId);
+    const reprocessMembership = args.reprocessBy ? await ctx.db.query("memberships").withIndex("by_business_and_user", q => q.eq("businessId", businessId).eq("userId", args.reprocessBy!)).unique() : null;
+    const reprocessUser = args.reprocessBy ? await ctx.db.get("users", args.reprocessBy) : null;
+    if (args.reprocessBy && (!reprocessMembership?.active || !reprocessUser || !(await hasPermission(ctx, reprocessMembership, "integrations.manage")))) return { status: "unauthorized" as const };
     if (!business || business.dataResetting || args.payload.length > 16_000) return { status: "needs_review" as const, message: "Workspace is resetting or payload is invalid." };
     const input = parseInput(args.payload);
     if (!input) return { status: "needs_review" as const, message: "Submission format is invalid." };
     const existing = await ctx.db.query("googleFormReceipts").withIndex("by_business_and_source", q => q.eq("businessId", business._id).eq("sourceKey", input.sourceKey)).unique();
     if (existing?.status === "posted") return { status: "duplicate" as const };
-    const submitter = input.submittedByEmail ? await ctx.db.query("users").withIndex("email", q => q.eq("email", input.submittedByEmail)).first() : null;
+    const submitter = args.reprocessBy ? reprocessUser : input.submittedByEmail ? await ctx.db.query("users").withIndex("email", q => q.eq("email", input.submittedByEmail)).first() : null;
     const member = submitter ? await ctx.db.query("memberships").withIndex("by_business_and_user", q => q.eq("businessId", business._id).eq("userId", submitter._id)).first() : null;
     const submissionPermission = input.kind === "sale" ? "sales.create" : input.kind === "expense" ? "expenses.create" : null;
     const authorizedSubmitter = submitter && member?.active && submissionPermission && await hasPermission(ctx, member, submissionPermission) ? submitter : null;
+    if (args.reprocessBy && (!authorizedSubmitter || authorizedSubmitter._id !== args.reprocessBy)) return { status: "unauthorized" as const };
     const prefs = await ctx.db.query("workspacePreferences").withIndex("by_business", q => q.eq("businessId", business._id)).unique();
     const digits = 0; // The legacy Google Form labels its finance amounts in UGX.
     const now = Date.now();
@@ -256,6 +302,7 @@ export const receive = internalMutation({
     const receiptValues = { businessId: business._id, sourceKey: input.sourceKey, submissionKind: input.kind, status, occurredOn: validDay(date) ? date : undefined, amountUgx: totalUgx || undefined, summary, detailsJson: JSON.stringify(fields).slice(0, 16_000), attemptCount, lastAttemptAt: now };
     if (existing) await ctx.db.patch("googleFormReceipts", existing._id, receiptValues);
     else await ctx.db.insert("googleFormReceipts", { ...receiptValues, createdAt: now });
+    if (args.reprocessBy && args.reprocessReason && existing) await ctx.db.insert("auditEvents", { businessId: business._id, actorId: args.reprocessBy, action: "google_form.receipt_reprocessed", entityType: "googleFormReceipt", entityId: existing._id, occurredAt: now, summary: `Reviewed Google Form submission reprocessed as ${status}.`, details: JSON.stringify({ outcome: status, reason: args.reprocessReason }) });
     return { status, message: summary };
   },
 });
