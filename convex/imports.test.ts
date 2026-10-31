@@ -26,4 +26,28 @@ describe("import impact preview", () => {
     expect(result.totals.cash).toBe(250_000);
     expect(result.potentialDuplicateRows).toBe(1);
   });
+
+  it("exports only the authorized batch rows with correction state and spreadsheet-safe cells", async () => {
+    const t = convexTest(schema, modules);
+    const { userId, businessId, batchId, entryId, replacementId } = await t.run(async ctx => {
+      const userId = await ctx.db.insert("users", { name: "Import owner" });
+      const createdAt = Date.now();
+      const businessId = await ctx.db.insert("businesses", { name: "Import workspace", currency: "UGX", timezone: "Africa/Kampala", createdBy: userId, createdAt });
+      await ctx.db.insert("memberships", { businessId, userId, role: "owner", active: true, createdAt });
+      const batchId = await ctx.db.insert("importBatches", { businessId, fileName: "cash.csv", importType: "cashbook", sourceHash: "sourcehash", currency: "UGX", totalRows: 2, importedCount: 2, skippedCount: 0, progressRows: 2, status: "completed", createdBy: userId, createdAt });
+      const entryId = await ctx.db.insert("entries", { businessId, kind: "expense", amountUgx: 1200, occurredOn: "2026-10-30", account: "cash", category: "=2+2", note: 'Paper, "A"', source: "import", idempotencyKey: "csv:sourcehash:1", state: "void", createdBy: userId, createdAt, voidReason: "duplicate" });
+      const replacementId = await ctx.db.insert("entries", { businessId, kind: "expense", amountUgx: 1300, occurredOn: "2026-10-30", account: "cash", category: "Supplies", note: "Corrected", source: "import", idempotencyKey: "csv:sourcehash:2", state: "posted", correctionOf: entryId, createdBy: userId, createdAt });
+      await ctx.db.patch("entries", entryId, { correctedBy: replacementId });
+      await ctx.db.insert("entries", { businessId, kind: "sale", amountUgx: 5, occurredOn: "2026-10-30", account: "cash", category: "Other", note: "unrelated", source: "import", idempotencyKey: "csv:anotherhash:1", state: "posted", createdBy: userId, createdAt });
+      return { userId, businessId, batchId, entryId, replacementId };
+    });
+    const csv = await t.withIdentity({ subject: userId }).query(api.imports.cashbookReport, { businessId, batchId });
+    expect(csv).toContain('"source_row","entry_id","date"');
+    expect(csv).toContain(`"1","${entryId}"`);
+    expect(csv).toContain("\"'=2+2\"");
+    expect(csv).toContain('"Paper, ""A"""');
+    expect(csv).toContain(`"${replacementId}",""`);
+    expect(csv).not.toContain("unrelated");
+    await expect(t.query(api.imports.cashbookReport, { businessId, batchId })).rejects.toThrow();
+  });
 });

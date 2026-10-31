@@ -288,3 +288,31 @@ export const reportDetails = query({
     return (await ctx.db.query("importReportDetails").withIndex("by_batch", q => q.eq("batchId", batch._id)).unique())?.reportSummary ?? null;
   },
 });
+
+function csvCell(value: string | number) {
+  const text = String(value);
+  const safe = typeof value === "string" && /^[\s\u0000-\u001f]*[=+@-]/.test(text) ? `'${text}` : text;
+  return `"${safe.replace(/"/g, '""')}"`;
+}
+
+export const cashbookReport = query({
+  args: { businessId: v.id("businesses"), batchId: v.id("importBatches") },
+  returns: v.union(v.string(), v.null()),
+  handler: async (ctx, args) => {
+    const { business } = await ownerContext(ctx, args.businessId);
+    const batch = await ctx.db.get("importBatches", args.batchId);
+    if (!batch || batch.businessId !== business._id || batch.importType !== "cashbook") return null;
+    if (!Number.isSafeInteger(batch.totalRows) || batch.totalRows < 0 || batch.totalRows > 10_000) throw new ConvexError("This import is outside the supported report size.");
+    const prefix = `csv:${batch.sourceHash}:`;
+    const rows = await ctx.db.query("entries").withIndex("by_business_and_idempotency", q => q.eq("businessId", business._id).gte("idempotencyKey", prefix).lt("idempotencyKey", `${prefix}\uffff`)).take(10_001);
+    if (rows.length > 10_000) throw new ConvexError("This import contains too many rows to export safely.");
+    if (rows.some(row => row.source !== "import" || !row.idempotencyKey.startsWith(prefix))) throw new ConvexError("This import contains inconsistent source rows; reconcile it before exporting.");
+    const headers = ["source_row", "entry_id", "date", "kind", "amount_ugx", "account", "category", "note", "state", "void_reason", "corrected_by_entry_id", "correction_of_entry_id", "created_at_utc"];
+    const data = rows.map(row => {
+      const sourceRow = row.idempotencyKey.slice(prefix.length);
+      if (!/^\d+$/.test(sourceRow) || Number(sourceRow) > batch.totalRows) throw new ConvexError("This import contains an invalid source row reference.");
+      return [sourceRow, row._id, row.occurredOn, row.kind, row.amountUgx, row.account, row.category, row.note, row.state, row.voidReason ?? "", row.correctedBy ?? "", row.correctionOf ?? "", new Date(row.createdAt).toISOString()];
+    });
+    return [headers, ...data].map(row => row.map(csvCell).join(",")).join("\r\n");
+  },
+});
