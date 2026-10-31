@@ -70,4 +70,17 @@ describe("supplier records and expense linkage", () => {
     await expect(owner.mutation(api.workspace.createEntry, { ...args, supplierReference: "INV-2" })).rejects.toThrow("This request key was already used for another entry.");
     expect(userId).toBeTruthy();
   });
+
+  it("lets recurring-template managers load supplier choices with expenses view and update", async () => {
+    const { t, businessId, owner } = await setup();
+    await owner.mutation(api.suppliers.save, { action: "create", name: "Template supplier" });
+    const managerId = await t.run(async ctx => {
+      const userId = await ctx.db.insert("users", { name: "Template manager" });
+      const roleId = await ctx.db.insert("workspaceRoles", { businessId, name: "Template manager", description: "Manage recurring expense defaults", permissions: ["expenses.view", "expenses.update"], active: true, createdBy: userId, createdAt: Date.now(), updatedAt: Date.now() });
+      await ctx.db.insert("memberships", { businessId, userId, role: "member", roleId, active: true, createdAt: Date.now() });
+      return userId;
+    });
+    const options = await t.withIdentity({ subject: managerId }).query(api.suppliers.activeOptions, {});
+    expect(options).toMatchObject({ access: "ready", suppliers: [{ name: "Template supplier" }] });
+  });
 });

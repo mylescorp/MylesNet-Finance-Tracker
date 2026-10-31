@@ -32,6 +32,7 @@ import type * as reconciliationUtils from "../reconciliationUtils.js";
 import type * as settings from "../settings.js";
 import type * as suppliers from "../suppliers.js";
 import type * as users from "../users.js";
+import type * as weakDayReviews from "../weakDayReviews.js";
 import type * as workspace from "../workspace.js";
 import type * as workspaceContext from "../workspaceContext.js";
 
@@ -66,6 +67,7 @@ declare const fullApi: ApiFromModules<{
   settings: typeof settings;
   suppliers: typeof suppliers;
   users: typeof users;
+  weakDayReviews: typeof weakDayReviews;
   workspace: typeof workspace;
   workspaceContext: typeof workspaceContext;
 }>;

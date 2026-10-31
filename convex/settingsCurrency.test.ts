@@ -26,4 +26,23 @@ describe("workspace currency safety", () => {
     })).rejects.toThrow("Currency is locked after financial activity");
     expect(await t.run(async ctx => (await ctx.db.get("businesses", businessId))?.currency)).toBe("UGX");
   });
+
+  it("locks currency changes when amount-based expense reminders exist", async () => {
+    const t = convexTest(schema, modules);
+    const { userId, businessId, createdAt } = await t.run(async ctx => {
+      const userId = await ctx.db.insert("users", { name: "Reminder owner" });
+      const createdAt = Date.now();
+      const businessId = await ctx.db.insert("businesses", { name: "Reminder workspace", currency: "UGX", timezone: "Africa/Kampala", createdBy: userId, createdAt });
+      await ctx.db.insert("memberships", { businessId, userId, role: "owner", active: true, createdAt });
+      return { userId, businessId, createdAt };
+    });
+    const owner = t.withIdentity({ subject: userId });
+    await owner.mutation(api.expenseTemplates.save, { action: "create", name: "Rent", category: "Rent", amountUgx: 200_000, account: "cash", recurrence: "monthly", nextDueOn: "2026-11-01", idempotencyKey: "currency-template-lock-0001" });
+    await expect(owner.mutation(api.settings.update, {
+      expectedSettingsUpdatedAt: createdAt,
+      businessName: "Reminder workspace", countryCode: "UG", currency: "USD", timezone: "Africa/Kampala", weekStartsOn: "monday", locale: "en-UG", dateFormat: "DD/MM/YYYY", fiscalYearStartMonth: 1,
+      incomeCategories: ["Sales"], expenseCategories: ["Rent"], highExpenseReviewUgx: 500_000, weakDaySalesUgx: 50_000, monthlySalesTargetUgx: 0, monthlyExpenseWarningUgx: 0, lowCashAlertUgx: 100_000, duplicateWindowDays: 1, requireEntryNote: false, negativeBalanceWarning: true, cashOpeningBalance: 0, mobileOpeningBalance: 0,
+    })).rejects.toThrow("Currency is locked after financial activity");
+    expect(await t.run(async ctx => (await ctx.db.get("businesses", businessId))?.currency)).toBe("UGX");
+  });
 });

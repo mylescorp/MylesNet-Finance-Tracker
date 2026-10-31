@@ -38,6 +38,7 @@ async function hasCurrencySensitiveData(ctx: MutationCtx, businessId: Id<"busine
     ctx.db.query("loanRepayments").withIndex("by_business_and_date", q => q.eq("businessId", businessId)).first(),
     ctx.db.query("bills").withIndex("by_business_and_active_due", q => q.eq("businessId", businessId)).first(),
     ctx.db.query("categoryBudgets").withIndex("by_business", q => q.eq("businessId", businessId)).first(),
+    ctx.db.query("expenseTemplates").withIndex("by_business_and_amount", q => q.eq("businessId", businessId).gt("amountUgx", 0)).first(),
     ctx.db.query("billPayments").withIndex("by_business_and_date", q => q.eq("businessId", businessId)).first(),
     ctx.db.query("reconciliations").withIndex("by_business_and_date", q => q.eq("businessId", businessId)).first(),
     ctx.db.query("balanceAdjustments").withIndex("by_business_and_created_at", q => q.eq("businessId", businessId)).first(),

@@ -51,4 +51,25 @@ describe("recurring expense templates", () => {
     expect(await owner.query(api.expenseTemplates.list, {})).toEqual({ access: "ready", canManage: true, complete: true, templates: [] });
     expect(businessId).toBeTruthy();
   });
+
+  it("advances completed occurrences without posting an expense and preserves month-end cadence", async () => {
+    const { t, owner, businessId } = await setup();
+    const id = await owner.mutation(api.expenseTemplates.save, { action: "create", name: "Rent", category: "Rent", amountUgx: 200_000, account: "cash", recurrence: "monthly", nextDueOn: "2026-01-31", idempotencyKey: "expense-template-month-end-01" });
+    await owner.mutation(api.expenseTemplates.save, { action: "complete", templateId: id, name: "Rent", category: "", amountUgx: null, account: "cash", recurrence: "monthly", nextDueOn: "2000-01-01", expectedNextDueOn: "2026-01-31" });
+    expect(await owner.query(api.expenseTemplates.list, {})).toMatchObject({ access: "ready", templates: [{ nextDueOn: "2026-02-28" }] });
+    await owner.mutation(api.expenseTemplates.save, { action: "complete", templateId: id, name: "Rent", category: "", amountUgx: null, account: "cash", recurrence: "monthly", nextDueOn: "2000-01-01", expectedNextDueOn: "2026-02-28" });
+    await expect(owner.mutation(api.expenseTemplates.save, { action: "complete", templateId: id, name: "Rent", category: "", amountUgx: null, account: "cash", recurrence: "monthly", nextDueOn: "2000-01-01", expectedNextDueOn: "2026-02-28" })).rejects.toThrow("date changed in another session");
+    expect(await owner.query(api.expenseTemplates.list, {})).toMatchObject({ access: "ready", templates: [{ nextDueOn: "2026-03-31" }] });
+    expect(await t.run(ctx => ctx.db.query("entries").collect())).toHaveLength(0);
+    expect((await t.run(ctx => ctx.db.query("auditEvents").collect())).map(row => row.action)).toEqual(["expense_template.created", "expense_template.occurrence_completed", "expense_template.occurrence_completed"]);
+    expect(businessId).toBeTruthy();
+  });
+
+  it("does not allow an upcoming reminder occurrence to be completed early", async () => {
+    const { owner } = await setup();
+    const id = await owner.mutation(api.expenseTemplates.save, { action: "create", name: "Annual license", category: "Software", amountUgx: null, account: "cash", recurrence: "yearly", nextDueOn: "2026-12-01", idempotencyKey: "expense-template-future-001" });
+    await expect(owner.mutation(api.expenseTemplates.save, { action: "complete", templateId: id, name: "Annual license", category: "", amountUgx: null, account: "cash", recurrence: "yearly", nextDueOn: "2000-01-01", expectedNextDueOn: "2026-12-01" })).rejects.toThrow("not due yet");
+    const overview = await owner.query(api.expenseTemplates.list, {});
+    expect(overview.access === "ready" ? overview.templates[0].nextDueOn : null).toBe("2026-12-01");
+  });
 });

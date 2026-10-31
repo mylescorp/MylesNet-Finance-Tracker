@@ -14,7 +14,7 @@ export const activeOptions = query({
   returns: v.union(v.object({ access: v.literal("restricted") }), v.object({ access: v.literal("ready"), complete: v.boolean(), suppliers: v.array(v.object({ _id: v.id("suppliers"), name: v.string() })) })),
   handler: async ctx => {
     const current = await getSelectedWorkspace(ctx);
-    if (!current || (!(await hasPermission(ctx, current.membership, "expenses.create")) && !(await hasPermission(ctx, current.membership, "bills.create")))) return { access: "restricted" as const };
+    if (!current || (!(await hasPermission(ctx, current.membership, "expenses.create")) && !(await hasPermission(ctx, current.membership, "expenses.update")) && !(await hasPermission(ctx, current.membership, "bills.create")))) return { access: "restricted" as const };
     const rows = await ctx.db.query("suppliers").withIndex("by_business_and_active", q => q.eq("businessId", current.business._id).eq("active", true)).take(251);
     return { access: "ready" as const, complete: rows.length <= 250, suppliers: rows.slice(0, 250).sort((a, b) => a.normalizedName.localeCompare(b.normalizedName)).map(row => ({ _id: row._id, name: row.name })) };
   },

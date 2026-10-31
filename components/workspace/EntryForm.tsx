@@ -128,12 +128,18 @@ export function EntryForm({ kind, onSaved }: { kind: EntryKind; onSaved?: () => 
     const amount = form.elements.namedItem("amount");
     const category = form.elements.namedItem("category");
     const supplier = form.elements.namedItem("supplierId");
-    if (amount instanceof HTMLInputElement && row.amountUgx !== null) amount.value = String(row.amountUgx / currencyScale);
+    const unavailable: string[] = [];
+    if (amount instanceof HTMLInputElement) amount.value = row.amountUgx === null ? "" : String(row.amountUgx / currencyScale);
     if (category instanceof HTMLSelectElement && [...category.options].some(option => option.value === row.category)) category.value = row.category;
-    if (supplier instanceof HTMLSelectElement && row.supplierId && [...supplier.options].some(option => option.value === row.supplierId)) supplier.value = row.supplierId;
+    else { if (category instanceof HTMLSelectElement && category.options.length) category.selectedIndex = 0; unavailable.push(`category “${row.category}” is not in your current list`); }
+    if (supplier instanceof HTMLSelectElement) {
+      if (!row.supplierId) supplier.value = "";
+      else if ([...supplier.options].some(option => option.value === row.supplierId)) supplier.value = row.supplierId;
+      else { supplier.value = ""; unavailable.push(`supplier “${row.supplierName ?? "saved supplier"}” is no longer active`); }
+    }
     setAccount(row.account);
     setOccurredOn(row.nextDueOn);
-    setFeedback({ message: `Applied ${row.name} defaults. Review the amount, date and account before saving; this does not create a scheduled or automatic payment.`, error: false });
+    setFeedback({ message: `Applied ${row.name} defaults. ${row.amountUgx === null ? "Enter the variable amount. " : ""}${unavailable.length ? `Check ${unavailable.join(" and ")}. ` : ""}Review the amount, date and account before saving; this does not create a scheduled or automatic payment.`, error: unavailable.length > 0 });
   }
   const createPermission = kind === "sale" ? "sales.create" : "expenses.create";
   if (access?.access === "ready" && !access.permissions.includes(createPermission)) {
