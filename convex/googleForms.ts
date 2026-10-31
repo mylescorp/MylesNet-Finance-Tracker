@@ -173,6 +173,11 @@ export const reprocessNeedsReview = mutation({
       await recordReprocessFailure(ctx, receipt, userId, reason, summary);
       return { status: "needs_review" as const, summary };
     }
+    if (fields._error === "Submission details exceed the safe storage size.") {
+      const summary = "Saved submission details exceed the safe storage size. Correct the source form and submit it again before approval.";
+      await recordReprocessFailure(ctx, receipt, userId, reason, summary);
+      return { status: "needs_review" as const, summary };
+    }
     const payload = JSON.stringify({ sourceKey: receipt.sourceKey, kind: receipt.submissionKind, occurredOn: receipt.occurredOn, fields });
     if (payload.length > 16_000) {
       const summary = "Saved submission exceeds the safe retry size. Reduce the form fields before submitting it again.";
@@ -212,6 +217,8 @@ export const receive = internalMutation({
     const now = Date.now();
     const date = input.occurredOn;
     const fields = input.fields;
+    const fieldsJson = JSON.stringify(fields);
+    const fieldsWithinLimit = fieldsJson.length <= 16_000;
     let status: "posted" | "needs_review" = "needs_review";
     let totalUgx = 0;
     let summary = authorizedSubmitter
@@ -290,7 +297,7 @@ export const receive = internalMutation({
       status = "needs_review";
       summary = `This submission is dated in the closed ${date!.slice(0, 7)} period. Reopen the month and review the saved receipt before posting it.`;
     }
-    if (JSON.stringify(fields).length > 16_000) {
+    if (!fieldsWithinLimit) {
       status = "needs_review";
       totalUgx = 0;
       summary = "Submission details exceed the safe storage size. Reduce the form fields before submitting it again.";
@@ -322,7 +329,8 @@ export const receive = internalMutation({
       }
     }
     const attemptCount = existing ? (existing.attemptCount ?? 1) + 1 : 1;
-    const receiptValues = { businessId: business._id, sourceKey: input.sourceKey, submissionKind: input.kind, status, occurredOn: validDay(date) ? date : undefined, amountUgx: totalUgx || undefined, summary, detailsJson: JSON.stringify(fields), attemptCount, lastAttemptAt: now };
+    const detailsJson = fieldsWithinLimit ? fieldsJson : JSON.stringify({ _error: "Submission details exceed the safe storage size." });
+    const receiptValues = { businessId: business._id, sourceKey: input.sourceKey, submissionKind: input.kind, status, occurredOn: validDay(date) ? date : undefined, amountUgx: totalUgx || undefined, summary, detailsJson, attemptCount, lastAttemptAt: now };
     if (existing) await ctx.db.patch("googleFormReceipts", existing._id, receiptValues);
     else await ctx.db.insert("googleFormReceipts", { ...receiptValues, createdAt: now });
     if (args.reprocessBy && args.reprocessReason && existing) await ctx.db.insert("auditEvents", { businessId: business._id, actorId: args.reprocessBy, action: "google_form.receipt_reprocessed", entityType: "googleFormReceipt", entityId: existing._id, occurredAt: now, summary: `Reviewed Google Form submission reprocessed as ${status}.`, details: JSON.stringify({ outcome: status, reason: args.reprocessReason }) });
