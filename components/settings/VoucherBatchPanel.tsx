@@ -5,16 +5,33 @@ import { useEffect, useState, type FormEvent } from "react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 
-export function VoucherBatchPanel({ businessId }: { businessId: Id<"businesses"> }) {
+export function VoucherBatchPanel({ businessId, timezone }: { businessId: Id<"businesses">; timezone: string }) {
   const [currentTime, setCurrentTime] = useState<number | null>(null);
   useEffect(() => {
     const refresh = () => setCurrentTime(Date.now());
-    const timer = window.setTimeout(refresh, 0);
-    const interval = window.setInterval(refresh, 60_000);
+    const dayKey = (timestamp: number) => new Intl.DateTimeFormat("en-CA", { timeZone: timezone, year: "numeric", month: "2-digit", day: "2-digit" }).format(timestamp);
+    const delayToNextDay = (now: number) => {
+      let low = now;
+      let high = now + 48 * 60 * 60 * 1000;
+      const today = dayKey(now);
+      while (dayKey(high) === today) high += 24 * 60 * 60 * 1000;
+      while (high - low > 1_000) {
+        const middle = Math.floor((low + high) / 2);
+        if (dayKey(middle) === today) low = middle;
+        else high = middle;
+      }
+      return Math.max(1_000, high - now);
+    };
+    let timer = 0;
+    const scheduleNextDay = () => {
+      const now = Date.now();
+      timer = window.setTimeout(() => { refresh(); scheduleNextDay(); }, delayToNextDay(now));
+    };
+    const initial = window.setTimeout(() => { refresh(); scheduleNextDay(); }, 0);
     const onVisibilityChange = () => { if (document.visibilityState === "visible") refresh(); };
     document.addEventListener("visibilitychange", onVisibilityChange);
-    return () => { window.clearTimeout(timer); window.clearInterval(interval); document.removeEventListener("visibilitychange", onVisibilityChange); };
-  }, []);
+    return () => { window.clearTimeout(initial); window.clearTimeout(timer); document.removeEventListener("visibilitychange", onVisibilityChange); };
+  }, [timezone]);
   const { results: batches, status, loadMore } = usePaginatedQuery(api.vouchers.list, currentTime === null ? "skip" : { businessId, currentTime }, { initialNumItems: 30 });
   const createBatch = useMutation(api.vouchers.createBatch);
   const recordEvent = useMutation(api.vouchers.recordEvent);
