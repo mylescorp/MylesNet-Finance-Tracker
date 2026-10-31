@@ -8,8 +8,12 @@ import type { Id } from "@/convex/_generated/dataModel";
 export function VoucherBatchPanel({ businessId }: { businessId: Id<"businesses"> }) {
   const [currentTime, setCurrentTime] = useState<number | null>(null);
   useEffect(() => {
-    const timer = window.setTimeout(() => setCurrentTime(Date.now()), 0);
-    return () => window.clearTimeout(timer);
+    const refresh = () => setCurrentTime(Date.now());
+    const timer = window.setTimeout(refresh, 0);
+    const interval = window.setInterval(refresh, 60_000);
+    const onVisibilityChange = () => { if (document.visibilityState === "visible") refresh(); };
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => { window.clearTimeout(timer); window.clearInterval(interval); document.removeEventListener("visibilitychange", onVisibilityChange); };
   }, []);
   const { results: batches, status, loadMore } = usePaginatedQuery(api.vouchers.list, currentTime === null ? "skip" : { businessId, currentTime }, { initialNumItems: 30 });
   const createBatch = useMutation(api.vouchers.createBatch);
