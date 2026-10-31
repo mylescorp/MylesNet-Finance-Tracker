@@ -1,7 +1,8 @@
 "use client";
 
 import { useMutation, useQuery } from "convex/react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 
@@ -25,6 +26,9 @@ type Snapshot = {
   salesByCategory: Array<{ category: string; amountUgx: number }>;
   expensesByCategory: Array<{ category: string; amountUgx: number }>;
   postedEntryCount: number;
+  excludedVoidEntryCount: number;
+  movementsByAccount: Array<{ account: "cash" | "mobile_money" | "unallocated"; salesUgx: number; expensesUgx: number; netUgx: number }>;
+  checklist: Array<{ key: string; label: string; ready: boolean; detail: string }>;
   activityDays: Array<{ day: string; status: "confirmed_no_activity" | "source_reviewed"; note: string }>;
   unreviewedSourceDays: Array<{ day: string; activityExists: boolean; priorStatus: "confirmed_no_activity" | "source_reviewed" | null; note: string | null; updatedAt: number | null }>;
   categoryBudgets: Array<{ category: string; limitUgx: number; warningAtPercent: number; actualUgx: number }>;
@@ -35,9 +39,21 @@ export function MonthEndClosePanel({ businessId, today, currency, scale, locale 
   const [feedback, setFeedback] = useState("");
   const [reopenReason, setReopenReason] = useState("");
   const [busy, setBusy] = useState(false);
+  const [printing, setPrinting] = useState(false);
   const validMonth = /^\d{4}-(0[1-9]|1[0-2])$/.test(month);
   const period = useMemo(() => validMonth ? monthRange(month) : { periodFrom: "", periodToExclusive: "" }, [month, validMonth]);
   const data = useQuery(api.monthEndClose.overview, validMonth ? { businessId, ...period } : "skip");
+  useEffect(() => {
+    if (!printing) return;
+    document.body.classList.add("printing-month-end-statement");
+    const finish = () => setPrinting(false);
+    window.addEventListener("afterprint", finish, { once: true });
+    window.print();
+    return () => {
+      window.removeEventListener("afterprint", finish);
+      document.body.classList.remove("printing-month-end-statement");
+    };
+  }, [printing]);
   const prepare = useMutation(api.monthEndClose.prepare);
   const approve = useMutation(api.monthEndClose.approve);
   const reopen = useMutation(api.monthEndClose.reopen);
@@ -60,9 +76,13 @@ export function MonthEndClosePanel({ businessId, today, currency, scale, locale 
   const displaySnapshot = data?.access === "ready" && data.closure && data.closure.status !== "reopened" ? savedSnapshot : data?.access === "ready" ? data.snapshot : null;
   const maxMonth = monthFor(1, today);
   const canPrepare = data?.access === "ready" && data.canClose && data.snapshot.ready && data.closure?.status !== "closed";
+  function printStatement() {
+    setPrinting(true);
+  }
 
-  return <div className="month-end-close-panel">
-    <div className="card-heading"><div><h2 className="card-title">Month-end close</h2><p className="card-subtitle">A reviewer-approved snapshot of posted cashbook totals and the matching category-budget actuals. This closes the report period; it does not lock new ledger entries.</p></div></div>
+  return <>
+  <div className="month-end-close-panel">
+    <div className="card-heading"><div><h2 className="card-title">Month-end close</h2><p className="card-subtitle">A reviewer-approved snapshot of posted cashbook totals and the matching category-budget actuals. This closes the report period; it does not lock new ledger entries.</p></div>{data?.access === "ready" && data.closure?.status === "closed" && displaySnapshot?.complete && <button className="button no-print" type="button" onClick={printStatement}>Print / Save PDF statement</button>}</div>
     <div className="form-actions"><label className="field"><span>Calendar month</span><input type="month" value={month} max={maxMonth} onChange={event => setMonth(event.target.value)} /></label><span className="muted-note">{period.periodFrom} to {period.periodToExclusive} (exclusive)</span></div>
     {!validMonth ? <p className="muted-note">Choose a calendar month to review its close checklist.</p>
       : data === undefined ? <p className="muted-note">Loading close checklist…</p>
@@ -84,5 +104,18 @@ export function MonthEndClosePanel({ businessId, today, currency, scale, locale 
           {data.events.length > 0 && <details><summary>Close history</summary><div className="entry-list">{data.events.map((event, index) => <div className="entry-row" key={`${event.action}-${event.occurredAt}-${index}`}><span className="status-chip">{event.action}</span><span>{event.actorName} · {new Date(event.occurredAt).toLocaleString(locale)}{event.reason ? ` · ${event.reason}` : ""}</span></div>)}</div></details>}
         </>}
     {feedback && <p className="muted-note" role="status">{feedback}</p>}
-  </div>;
+  </div>
+  {printing && data?.access === "ready" && data.closure?.status === "closed" && displaySnapshot?.complete && createPortal(<article className="month-end-print-statement" aria-label="Approved month-end cashbook statement">
+    <h1>Month-end cashbook statement</h1><p><strong>Period:</strong> {data.periodFrom} through {new Date(Date.parse(`${data.periodToExclusive}T00:00:00.000Z`) - 86_400_000).toISOString().slice(0, 10)} · <strong>Status:</strong> Approved</p>
+    <p><strong>Prepared by:</strong> {data.closure.preparedByName} · {new Date(data.closure.preparedAt).toLocaleString(locale)}<br /><strong>Approved by:</strong> {data.closure.reviewedByName ?? "Reviewer"} · {new Date(data.closure.reviewedAt ?? 0).toLocaleString(locale)}</p>
+    <h2>Recorded cashbook totals</h2><table><thead><tr><th>Sales</th><th>Posted expenses</th><th>Cashbook net</th></tr></thead><tbody><tr><td>{money(displaySnapshot.totals.salesUgx)}</td><td>{money(displaySnapshot.totals.expensesUgx)}</td><td>{money(displaySnapshot.totals.cashbookNetUgx)}</td></tr></tbody></table>
+    <p>Basis: posted cashbook entries only ({displaySnapshot.postedEntryCount.toLocaleString(locale)} rows). Void rows excluded: {displaySnapshot.excludedVoidEntryCount.toLocaleString(locale)}. This statement is not accrual accounting, a tax statement, or a formal profit calculation. Historical opening and ending balances are not reconstructed.</p>
+    <h2>Cashbook movement by account</h2><table><thead><tr><th>Account</th><th>Sales</th><th>Expenses</th><th>Net movement</th></tr></thead><tbody>{displaySnapshot.movementsByAccount.map(row => <tr key={row.account}><td>{row.account === "mobile_money" ? "Mobile money" : row.account === "unallocated" ? "Unallocated" : "Cash"}</td><td>{money(row.salesUgx)}</td><td>{money(row.expensesUgx)}</td><td>{money(row.netUgx)}</td></tr>)}</tbody></table>
+    <h2>Sales by category</h2><table><thead><tr><th>Category</th><th>Recorded sales</th></tr></thead><tbody>{displaySnapshot.salesByCategory.length ? displaySnapshot.salesByCategory.map(row => <tr key={row.category}><td>{row.category}</td><td>{money(row.amountUgx)}</td></tr>) : <tr><td>No posted sales</td><td>{money(0)}</td></tr>}</tbody></table>
+    <h2>Expenses by category</h2><table><thead><tr><th>Category</th><th>Posted actual</th></tr></thead><tbody>{displaySnapshot.expensesByCategory.length ? displaySnapshot.expensesByCategory.map(row => <tr key={row.category}><td>{row.category}</td><td>{money(row.amountUgx)}</td></tr>) : <tr><td>No posted expenses</td><td>{money(0)}</td></tr>}</tbody></table>
+    <h2>Matching-period budgets</h2>{displaySnapshot.categoryBudgets.length ? <table><thead><tr><th>Category</th><th>Monthly limit</th><th>Posted actual</th><th>Remaining</th></tr></thead><tbody>{displaySnapshot.categoryBudgets.map(row => <tr key={row.category}><td>{row.category}</td><td>{money(row.limitUgx)}</td><td>{money(row.actualUgx)}</td><td>{money(row.limitUgx - row.actualUgx)}</td></tr>)}</tbody></table> : <p>No active category budgets were configured at close preparation.</p>}
+    <h2>Close checklist and exclusions</h2><ul>{displaySnapshot.checklist.map(item => <li key={item.key}><strong>{item.label}:</strong> {item.detail}</li>)}</ul><p>Budget actuals use posted expenses in the same calendar month without proration. Bill schedules, unpaid obligations, non-cash assets and tax adjustments are excluded. Unallocated cashbook movements are shown as a separate account line.</p>
+    <footer>Approved snapshot · {data.periodFrom} · Cashbook basis · Generated from the saved close snapshot</footer>
+  </article>, document.body)}
+  </>;
 }

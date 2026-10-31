@@ -33,6 +33,7 @@ async function setup({ complete = true }: { complete?: boolean } = {}) {
     await ctx.db.insert("accountBalances", { businessId, account: "mobile_money", balanceUgx: 50_000, openingBalanceUgx: 0, updatedAt: createdAt });
     await ctx.db.insert("entries", { businessId, kind: "sale", amountUgx: 500_000, occurredOn: `${period.periodFrom.slice(0, 8)}15`, account: "cash", category: "Shop sales", note: "Monthly sales", source: "manual", idempotencyKey: "close-test-sale-idempotency", state: "posted", createdBy: preparerId, createdAt });
     await ctx.db.insert("entries", { businessId, kind: "expense", amountUgx: 120_000, occurredOn: `${period.periodFrom.slice(0, 8)}18`, account: "mobile_money", category: "Utilities", note: "Monthly power", source: "manual", idempotencyKey: "close-test-expense-idempotency", state: "posted", createdBy: preparerId, createdAt });
+    await ctx.db.insert("entries", { businessId, kind: "expense", amountUgx: 40_000, occurredOn: `${period.periodFrom.slice(0, 8)}20`, account: "cash", category: "Repairs", note: "Voided duplicate", source: "manual", idempotencyKey: "close-test-void-expense-idempotency", state: "void", createdBy: preparerId, createdAt, voidedAt: createdAt, voidedBy: preparerId, voidReason: "Duplicate entry." });
     await ctx.db.insert("categoryBudgets", { businessId, category: "Utilities", monthlyBudgetUgx: 200_000, warningAtPercent: 80, active: true, createdBy: preparerId, createdAt, updatedBy: preparerId, updatedAt: createdAt });
     if (complete) for (const account of ["cash", "mobile_money"] as const) {
       const bookBalanceUgx = account === "cash" ? 100_000 : 50_000;
@@ -55,7 +56,7 @@ describe("month-end close controls", () => {
   it("requires the full checklist, snapshots cashbook and budget totals, and requires a separate reviewer", async () => {
     const { t, period, businessId, preparer, reviewer, member } = await setup();
     const overview = await preparer.query(api.monthEndClose.overview, { businessId, periodFrom: period.periodFrom, periodToExclusive: period.periodToExclusive });
-    expect(overview).toMatchObject({ access: "ready", snapshot: { ready: true, complete: true, totals: { salesUgx: 500_000, expensesUgx: 120_000, cashbookNetUgx: 380_000 }, postedEntryCount: 2 } });
+    expect(overview).toMatchObject({ access: "ready", snapshot: { ready: true, complete: true, totals: { salesUgx: 500_000, expensesUgx: 120_000, cashbookNetUgx: 380_000 }, postedEntryCount: 2, excludedVoidEntryCount: 1, movementsByAccount: [{ account: "cash", salesUgx: 500_000, expensesUgx: 0, netUgx: 500_000 }, { account: "mobile_money", salesUgx: 0, expensesUgx: 120_000, netUgx: -120_000 }] } });
     if (overview.access !== "ready") throw new Error("Expected close access.");
     expect(overview.snapshot.categoryBudgets).toEqual([{ category: "Utilities", limitUgx: 200_000, warningAtPercent: 80, actualUgx: 120_000 }]);
     expect(await member.query(api.monthEndClose.overview, { businessId, periodFrom: period.periodFrom, periodToExclusive: period.periodToExclusive })).toEqual({ access: "restricted" });
@@ -69,7 +70,7 @@ describe("month-end close controls", () => {
     const closed = await preparer.query(api.monthEndClose.overview, { businessId, periodFrom: period.periodFrom, periodToExclusive: period.periodToExclusive });
     if (closed.access !== "ready" || !closed.closure) throw new Error("Expected approved close.");
     expect(closed.closure.status).toBe("closed");
-    expect(JSON.parse(closed.closure.snapshotJson).totals).toEqual({ salesUgx: 500_000, expensesUgx: 120_000, cashbookNetUgx: 380_000 });
+    expect(JSON.parse(closed.closure.snapshotJson)).toMatchObject({ totals: { salesUgx: 500_000, expensesUgx: 120_000, cashbookNetUgx: 380_000 }, excludedVoidEntryCount: 1 });
 
     await reviewer.mutation(api.monthEndClose.reopen, { businessId, closureId, reason: "Correct the month-end source records." });
     const reopened = await preparer.query(api.monthEndClose.overview, { businessId, periodFrom: period.periodFrom, periodToExclusive: period.periodToExclusive });

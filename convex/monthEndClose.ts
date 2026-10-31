@@ -100,6 +100,16 @@ async function snapshotForPeriod(ctx: Ctx, businessId: Id<"businesses">, period:
   const expensesByCategory = [...expenseByCategory.entries()].sort(([first], [second]) => first.localeCompare(second)).map(([category, amountUgx]) => ({ category, amountUgx }));
   const cashbookNetUgx = salesUgx - expensesUgx;
   if (!Number.isSafeInteger(cashbookNetUgx)) throw new ConvexError("Cashbook net exceeds the supported safe amount range.");
+  const accountTotals = new Map<"cash" | "mobile_money" | "unallocated", { salesUgx: number; expensesUgx: number }>();
+  for (const entry of posted) {
+    const current = accountTotals.get(entry.account) ?? { salesUgx: 0, expensesUgx: 0 };
+    const key = entry.kind === "sale" ? "salesUgx" : "expensesUgx";
+    const total = current[key] + entry.amountUgx;
+    if (!Number.isSafeInteger(total)) throw new ConvexError("Account movement exceeds the supported safe amount range.");
+    current[key] = total;
+    accountTotals.set(entry.account, current);
+  }
+  const movementsByAccount = [...accountTotals.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([account, totals]) => ({ account, ...totals, netUgx: totals.salesUgx - totals.expensesUgx }));
   const postedDays = new Set(posted.map(entry => entry.occurredOn));
   const entriesByDay = new Map<string, typeof entries>();
   for (const entry of entries) entriesByDay.set(entry.occurredOn, [...(entriesByDay.get(entry.occurredOn) ?? []), entry]);
@@ -116,7 +126,7 @@ async function snapshotForPeriod(ctx: Ctx, businessId: Id<"businesses">, period:
     else activityDays.push({ day, status: saved.status, note: saved.note });
   }
   const checklist = [
-    { key: "records", label: "Cashbook history is complete", ready: entries.length <= 10_000, detail: entries.length <= 10_000 ? `${posted.length} posted or void rows reviewed.` : "This month exceeds the 10,000-row close review limit; narrow or export the period before closing." },
+    { key: "records", label: "Cashbook history is complete", ready: entries.length <= 10_000, detail: entries.length <= 10_000 ? `${entries.length} posted or void rows reviewed.` : "This month exceeds the 10,000-row close review limit; narrow or export the period before closing." },
     { key: "balances", label: "Cash and mobile-money balances are present", ready: Boolean(cash && mobileMoney), detail: cash && mobileMoney ? "Both account balance records are available." : "Initialize both account balances before closing the month." },
     { key: "cash-count", label: "Final-day cash count is signed off", ready: lastDayCashClosed, detail: lastDayCashClosed ? `A signed-off cash count exists for ${lastDayIso}.` : `A cash count for ${lastDayIso} is missing. Counts cannot be entered retroactively; record the final-day count before that business day ends.` },
     { key: "mobile-count", label: "Final-day mobile-money balance is signed off", ready: lastDayMobileClosed, detail: lastDayMobileClosed ? `A signed-off mobile-money count exists for ${lastDayIso}.` : `A mobile-money count for ${lastDayIso} is missing. Counts cannot be entered retroactively; record the final-day balance before that business day ends.` },
@@ -132,6 +142,8 @@ async function snapshotForPeriod(ctx: Ctx, businessId: Id<"businesses">, period:
     salesByCategory,
     expensesByCategory,
     postedEntryCount: posted.length,
+    excludedVoidEntryCount: entries.length - posted.length,
+    movementsByAccount,
     activityDays,
     unreviewedSourceDays,
     categoryBudgets,
@@ -144,7 +156,7 @@ export const overview = query({
   args: { businessId: v.id("businesses"), periodFrom: v.string(), periodToExclusive: v.string() },
   returns: v.union(v.object({ access: v.literal("restricted") }), v.object({
     access: v.literal("ready"), periodFrom: v.string(), periodToExclusive: v.string(), today: v.string(),
-    snapshot: v.object({ complete: v.boolean(), totals: v.object({ salesUgx: v.number(), expensesUgx: v.number(), cashbookNetUgx: v.number() }), salesByCategory: v.array(v.object({ category: v.string(), amountUgx: v.number() })), expensesByCategory: v.array(v.object({ category: v.string(), amountUgx: v.number() })), postedEntryCount: v.number(), activityDays: v.array(v.object({ day: v.string(), status: v.union(v.literal("confirmed_no_activity"), v.literal("source_reviewed")), note: v.string() })), unreviewedSourceDays: v.array(v.object({ day: v.string(), activityExists: v.boolean(), priorStatus: v.union(v.literal("confirmed_no_activity"), v.literal("source_reviewed"), v.null()), note: v.union(v.string(), v.null()), updatedAt: v.union(v.number(), v.null()) })), categoryBudgets: v.array(v.object({ category: v.string(), limitUgx: v.number(), warningAtPercent: v.number(), actualUgx: v.number() })), checklist: v.array(v.object({ key: v.string(), label: v.string(), ready: v.boolean(), detail: v.string() })), ready: v.boolean() }),
+    snapshot: v.object({ complete: v.boolean(), totals: v.object({ salesUgx: v.number(), expensesUgx: v.number(), cashbookNetUgx: v.number() }), salesByCategory: v.array(v.object({ category: v.string(), amountUgx: v.number() })), expensesByCategory: v.array(v.object({ category: v.string(), amountUgx: v.number() })), postedEntryCount: v.number(), excludedVoidEntryCount: v.number(), movementsByAccount: v.array(v.object({ account: v.union(v.literal("cash"), v.literal("mobile_money"), v.literal("unallocated")), salesUgx: v.number(), expensesUgx: v.number(), netUgx: v.number() })), activityDays: v.array(v.object({ day: v.string(), status: v.union(v.literal("confirmed_no_activity"), v.literal("source_reviewed")), note: v.string() })), unreviewedSourceDays: v.array(v.object({ day: v.string(), activityExists: v.boolean(), priorStatus: v.union(v.literal("confirmed_no_activity"), v.literal("source_reviewed"), v.null()), note: v.union(v.string(), v.null()), updatedAt: v.union(v.number(), v.null()) })), categoryBudgets: v.array(v.object({ category: v.string(), limitUgx: v.number(), warningAtPercent: v.number(), actualUgx: v.number() })), checklist: v.array(v.object({ key: v.string(), label: v.string(), ready: v.boolean(), detail: v.string() })), ready: v.boolean() }),
     closure: v.union(v.null(), v.object({ _id: v.id("monthEndClosures"), status: v.union(v.literal("awaiting_review"), v.literal("closed"), v.literal("reopened")), snapshotJson: v.string(), preparedByName: v.string(), preparedAt: v.number(), reviewedByName: v.union(v.string(), v.null()), reviewedAt: v.union(v.number(), v.null()), reopenReason: v.union(v.string(), v.null()) })),
     events: v.array(v.object({ action: v.union(v.literal("prepared"), v.literal("approved"), v.literal("reopened")), actorName: v.string(), occurredAt: v.number(), reason: v.union(v.string(), v.null()) })),
     canClose: v.boolean(), canReview: v.boolean(), canApprove: v.boolean(),
