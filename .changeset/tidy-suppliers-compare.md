@@ -2,4 +2,6 @@
 "mylesnet-finance-tracker": minor
 ---
 
-Record expense item quantities and unit prices, validate them against expense totals, and show item-price observations in supplier history.
+Compare item prices across suppliers.
+
+Record quantities and unit prices on expenses, and review item-level observations in supplier history with clear coverage limits.
