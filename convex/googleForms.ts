@@ -5,7 +5,7 @@ import { internalMutation, mutation, query } from "./_generated/server";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import type { Id } from "./_generated/dataModel";
 import { hasPermission } from "./accessControl";
-import { assertPeriodUnlocked } from "./periodLocks";
+import { assertPeriodUnlocked, isPeriodClosed } from "./periodLocks";
 
 type Ctx = MutationCtx | QueryCtx;
 type Kind = "sale" | "expense" | "movement" | "savings" | "loan" | "unknown";
@@ -203,6 +203,10 @@ export const receive = internalMutation({
           break;
         }
       }
+    }
+    if (status === "posted" && await isPeriodClosed(ctx, business._id, date!)) {
+      status = "needs_review";
+      summary = `This submission is dated in the closed ${date!.slice(0, 7)} period. Reopen the month and review the saved receipt before posting it.`;
     }
     if (status === "posted") {
       for (const [index, entry] of changes.entries()) {

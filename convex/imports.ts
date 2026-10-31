@@ -229,7 +229,6 @@ export const reverseBatchChunk = mutation({
     let reversedNow = 0;
     for (const entry of result.page) {
       if (!entry.idempotencyKey.startsWith(prefix) || entry.source !== "import") throw new ConvexError("The batch contains a row that is not a matching imported cashbook entry.");
-      await assertPeriodUnlocked(ctx, business._id, entry.occurredOn);
       let effectiveEntry = entry;
       if (entry.state === "void") {
         if (!entry.correctedBy) continue;
