@@ -1,6 +1,7 @@
 /// <reference types="vite/client" />
 import { convexTest } from "convex-test";
 import { describe, expect, it } from "vitest";
+import { api } from "./_generated/api";
 import schema from "./schema";
 
 const modules = import.meta.glob("./**/*.ts");
@@ -44,6 +45,26 @@ async function deliver(t: ReturnType<typeof convexTest>, event: string, data: Re
 }
 
 describe("Centipid webhook event idempotency", () => {
+  it("exports bounded receipt summaries only to authorized integration managers", async () => {
+    const t = await setupWorkspace();
+    const { userId, businessId } = await t.run(async ctx => {
+      const user = await ctx.db.query("users").first();
+      const business = await ctx.db.query("businesses").first();
+      if (!user || !business) throw new Error("Test workspace was not seeded.");
+      await ctx.db.insert("memberships", { businessId: business._id, userId: user._id, role: "owner", active: true, createdAt: Date.now() });
+      await ctx.db.insert("webhookReceipts", { businessId: business._id, eventKey: "private-reference-123", event: "=payment.received", status: "failed", errorMessage: "Processing failed.", rawHash: "private-payload-hash", createdAt: Date.now(), attemptCount: 3 });
+      return { userId: user._id, businessId: business._id };
+    });
+    const csv = await t.withIdentity({ subject: userId }).query(api.centipid.exportHistory, { businessId });
+    expect(csv).toContain('"event","status","routed_to"');
+    expect(csv).toContain("\"'=payment.received\"");
+    expect(csv).toContain('"failed"');
+    expect(csv).toContain('"3"');
+    expect(csv).not.toContain("private-reference-123");
+    expect(csv).not.toContain("private-payload-hash");
+    await expect(t.query(api.centipid.exportHistory, { businessId })).rejects.toThrow();
+  });
+
   it("accepts a corrected voucher redemption with an explicit amount after the amount-less event was skipped", async () => {
     const t = await setupWorkspace();
     const redemption = {
