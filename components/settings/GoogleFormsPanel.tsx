@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { useMutation, usePaginatedQuery, useQuery } from "convex/react";
+import { useConvex, useMutation, usePaginatedQuery, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 
 function siteBase() {
@@ -11,21 +11,26 @@ function siteBase() {
 }
 
 export function GoogleFormsPanel() {
+  const convex = useConvex();
   const settings = useQuery(api.settings.overview, {});
   const status = useQuery(api.googleForms.status, settings?.access === "ready" ? { businessId: settings.businessId } : "skip");
-  const receiptCsv = useQuery(api.googleForms.exportHistory, settings?.access === "ready" ? { businessId: settings.businessId } : "skip");
   const { results: history, status: historyStatus, loadMore } = usePaginatedQuery(api.googleForms.history, settings?.access === "ready" ? { businessId: settings.businessId } : "skip", { initialNumItems: 20 });
   const create = useMutation(api.googleForms.createToken);
   const revoke = useMutation(api.googleForms.revokeToken);
   const [endpoint, setEndpoint] = useState("");
   const [busy, setBusy] = useState(false);
+  const [exporting, setExporting] = useState(false);
   const [message, setMessage] = useState("");
   function currentBusinessId() { if (settings?.access !== "ready") throw new Error("Workspace is still loading."); return settings.businessId; }
 
-  function downloadReceiptHistory() {
-    if (!receiptCsv) return;
-    const url = URL.createObjectURL(new Blob([receiptCsv], { type: "text/csv;charset=utf-8" }));
-    const anchor = document.createElement("a"); anchor.href = url; anchor.download = "google-form-submissions.csv"; anchor.click(); URL.revokeObjectURL(url);
+  async function downloadReceiptHistory() {
+    setExporting(true); setMessage("");
+    try {
+      const receiptCsv = await convex.query(api.googleForms.exportHistory, { businessId: currentBusinessId() });
+      const url = URL.createObjectURL(new Blob([receiptCsv], { type: "text/csv;charset=utf-8" }));
+      const anchor = document.createElement("a"); anchor.href = url; anchor.download = "google-form-submissions.csv"; anchor.click(); URL.revokeObjectURL(url);
+    } catch (error) { setMessage(error instanceof Error ? `Could not export submissions: ${error.message}` : "Could not export submissions."); }
+    finally { setExporting(false); }
   }
 
   async function rotate() {
@@ -54,7 +59,7 @@ export function GoogleFormsPanel() {
     {endpoint && <div className="field field-full"><label htmlFor="google-form-endpoint">Google Form connection URL · copy before leaving this page</label><div className="copy-row"><input id="google-form-endpoint" readOnly value={endpoint} onFocus={event => event.target.select()} /><button className="button" type="button" onClick={() => void navigator.clipboard.writeText(endpoint).then(() => setMessage("Connection URL copied."))}>Copy URL</button></div></div>}
     {message && <p className="muted-note" role="status">{message}</p>}
     <div className="form-actions"><button className="button button-accent" type="button" disabled={busy} onClick={() => void rotate()}>{busy ? "Working…" : status?.enabled ? "Rotate connection key" : "Create connection URL"}</button>{status?.enabled && <button className="button" type="button" disabled={busy} onClick={() => void disable()}>Revoke key</button>}</div>
-    <div className="card-heading"><h3 className="card-title">Recent submissions</h3><button className="button" type="button" disabled={!receiptCsv} onClick={downloadReceiptHistory}>Download receipt CSV</button></div>
+    <div className="card-heading"><h3 className="card-title">Recent submissions</h3><button className="button" type="button" disabled={exporting || settings?.access !== "ready"} onClick={() => void downloadReceiptHistory()}>{exporting ? "Preparing CSV…" : "Download receipt CSV"}</button></div>
     {history.length ? <div className="table-scroll"><table className="data-table"><thead><tr><th>Type</th><th>Date</th><th>Amount</th><th>Status</th><th>Attempts</th><th>Details</th></tr></thead><tbody>{history.map(row => { const amount = row.amountUgx === undefined ? "—" : new Intl.NumberFormat("en-UG", { style: "currency", currency: "UGX", maximumFractionDigits: 0 }).format(row.amountUgx); return <tr key={row._id}><td>{row.submissionKind.replaceAll("_", " ")}</td><td>{row.occurredOn ?? "Needs date"}</td><td>{amount}</td><td>{row.status === "posted" ? "Posted" : "Needs review"}</td><td>{row.attemptCount}</td><td>{row.summary}</td></tr>; })}</tbody></table>{historyStatus === "CanLoadMore" && <button className="button" type="button" onClick={() => loadMore(20)}>Load older submissions</button>}</div> : <p className="muted-note">{historyStatus === "LoadingFirstPage" ? "Loading submissions…" : "No Google Form submissions have reached the app yet."}</p>}
     <p className="muted-note">A submission held for review can be corrected in the source form and safely retried with the same source key. Posted submissions remain idempotent.</p>
     <p className="muted-note">Creating the URL does not install or deploy the Apps Script bridge. Keep the current Sheet handler active until a staging parity check has passed.</p>
