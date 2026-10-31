@@ -2,6 +2,53 @@
 
 Changes are grouped under the semantic version of the production release that ships them. Each feature or fix remains its own card. Add a Changeset file for every user-visible change; the release workflow updates this file when it prepares the version PR. Preview deployments do not count as releases.
 
+## v0.5.0 — 2026-10-31
+
+<!-- change-id: accurate-period-lock-copy -->
+### Fixes — Month-end period lock status
+
+- Explain that approval locks financial changes dated in the closed month, how an authorized reviewer reopens it, and how daily account counts differ from a period close.
+
+<!-- change-id: bright-receipt-exports -->
+### New — Download integration receipt history
+
+- Workspace integration managers can export recent Centipid and Google Forms receipt summaries as CSV without exposing raw payloads or source keys.
+
+<!-- change-id: calm-form-review -->
+### New — Approve and reprocess Google Form submissions
+
+- Authorized managers can inspect saved sales and expense fields, add an approval reason, and retry through existing validation and idempotency checks.
+
+<!-- change-id: careful-lifecycle-regression -->
+### Fixes — Strengthen financial recovery regression coverage.
+
+- Exercise savings, loan, bill-payment, cashbook-correction, and import-reversal invariants so regressions cannot silently desynchronize balances, daily totals, or linked records.
+
+<!-- change-id: fair-import-reports-export -->
+### New — Download traceable cashbook import reports
+
+- Owners can export imported ledger rows with their source row, current state, and correction links for reconciliation.
+
+<!-- change-id: firm-period-locks -->
+### Fixes — Approved month-end period locks
+
+- Enforce approved month-end period locks across ledger entries, corrections, imports, operational postings, reversals, and balance adjustments. Reopening a close continues to permit documented changes.
+
+<!-- change-id: quiet-voucher-batches -->
+### New — Track voucher batches and redemptions
+
+- Workspace managers can track issued and available voucher value, record idempotent redemptions and stock removals, and see expired stock without changing cashbook entries.
+
+<!-- change-id: tidy-splits-confirmed -->
+### New — Review and confirm category splits for cashbook corrections
+
+- Save proposed allocations for review before replacing an entry. Confirmed splits preserve the original amount, show whether allocations are estimated or verified, and retain an auditable link to the source row.
+
+<!-- change-id: tidy-suppliers-compare -->
+### New — Compare item prices across suppliers.
+
+- Record quantities and unit prices on expenses, and review item-level observations in supplier history with clear coverage limits.
+
 ## v0.4.0 — 2026-10-31
 
 <!-- change-id: bill-forecast-reminders -->
