@@ -2,6 +2,103 @@
 
 Changes are grouped under the semantic version of the production release that ships them. Each feature or fix remains its own card. Add a Changeset file for every user-visible change; the release workflow updates this file when it prepares the version PR. Preview deployments do not count as releases.
 
+## v0.4.0 — 2026-10-31
+
+<!-- change-id: bill-forecast-reminders -->
+### New — Add bill forecasts, supplier defaults, and reminders
+
+- View scheduled bill occurrences for the next 90 days, choose a supplier and in-app reminder lead time, and pause or resume reminders without archiving the schedule. Forecasts remain separate from posted expenses.
+
+<!-- change-id: bright-print-gate -->
+### Fixes — Print only approved close snapshots
+
+- Printing an approved close now hides live workspace reports and renders only the saved statement. Older saved close formats show an explanation instead of failing when they lack the account movement fields.
+
+<!-- change-id: calm-weak-day-diary -->
+### New — Add an audited low-sales explanation diary
+
+- Authorized reviewers can record the operational context for past low-sales days while preserving the original cashbook values and the review-time threshold context.
+
+<!-- change-id: cash-count-breakdown -->
+### New — Add optional cash denomination counts
+
+- Cash reconciliations can now retain a count by note or coin value. The app validates that denomination totals match the counted balance and preserves the breakdown in the reconciliation audit history.
+
+<!-- change-id: clear-finance-workflow-status -->
+### Fixes — Clarify finance screens and first-use setup
+
+- Pages now describe implemented finance workflows accurately, label roadmap items as unavailable, omit unsupported summary metrics, calculate "Sales today" from today's records, guide new workspaces to review starting balances, and distinguish printing a report from copying its page link.
+
+<!-- change-id: clear-import-preview -->
+### New — Preview cashbook imports before saving
+
+- Imports now show validated rows, date coverage, account mapping, potential identical rows, and estimated account balance changes before they are recorded. The completion message reports new and skipped rows.
+
+<!-- change-id: greptile-comprehensive-review-fixes -->
+### Fixes — Keep bill, budget, and receipt records accurate
+
+- Paused bills remain visible as unpaid obligations, recurring dates follow the saved schedule, receipt history is paginated, and workspace currency cannot change while budgets exist. Receipt actions and supplier defaults now follow current permissions, and import and bill forecast calculations run in Convex.
+
+<!-- change-id: greptile-follow-up-fixes -->
+### Fixes — Fix receipt preview races and bill supplier access
+
+- Receipt previews now ignore stale file-download responses after another file is selected. Members who can create bill schedules can also load the active supplier defaults, even when their role cannot create expenses.
+
+<!-- change-id: greptile-review-fixes -->
+### Fixes — Fix finance workflow edge cases
+
+- Receipt retries preserve ownership and clean up failed uploads; onboarding and closeout require both account reconciliations; overdue bills no longer hide future forecasts; and supplier editing follows the required permission.
+
+<!-- change-id: monthly-category-budgets -->
+### New — Add monthly category budgets
+
+- Set monthly limits and review thresholds for saved expense categories; posted actuals are compared against the full monthly budget.
+
+<!-- change-id: private-expense-receipts -->
+### New — Attach private receipts to expenses
+
+- Upload receipt files through an authenticated endpoint with idempotent retries, restricted access, and audit history.
+
+<!-- change-id: quiet-diary-copy -->
+### Fixes — Clarify weak-day diary availability
+
+- Analytics now retains explanations for days in the selected period. Update the Sales board description to explain the diary and its audit-safe behavior accurately.
+
+<!-- change-id: quiet-reconciliation-review -->
+### New — Assign reconciliation reviewers and preserve close evidence
+
+- Owners and reconciliation reviewers can assign counts to active members with reconciliation review access. Assigned counts can only be explained or signed off by the assigned reviewer, and sign-off must be completed by someone other than the member who recorded the count. Approved month-end statements now include saved account counts, differences, and review notes.
+
+<!-- change-id: reconciliation-review-signoff -->
+### New — Add reconciliation review sign-off
+
+- Authorized reviewers can sign off matched counts or explained differences with a saved review note. Reopening requires a reason and preserves the prior review in the audit trail.
+
+<!-- change-id: smart-month-close -->
+### New — Add reviewed month-end cashbook closes
+
+- Authorized staff can prepare a full-month cashbook and matching-budget snapshot after account reconciliations and data checks pass. A different reviewer must approve it; later changes require an audited reopen reason.  Approved snapshots can be printed or saved as a PDF with recorded account movements, category totals, budget actuals, exclusions, checklist results, and preparer/reviewer history.
+
+<!-- change-id: steady-imports-forecast -->
+### Fixes — Keep large import previews and bill forecasts current
+
+- Supported CSV imports now calculate account impact across bounded preview chunks, and bill forecasts refresh when the business day changes.
+
+<!-- change-id: supplier-expense-history -->
+### New — Manage suppliers and review expense history
+
+- Link expenses to workspace suppliers and review posted spend history by supplier.
+
+<!-- change-id: tidy-expense-reminders -->
+### New — Add recurring expense reminders
+
+- Save cadence, due date and supplier/account/category defaults, then apply them to an expense form for review before recording. Authorized managers can mark an occurrence handled to advance the recurrence without automatically posting an expense. Amount-based reminders also participate in the workspace currency lock.
+
+<!-- change-id: workspace-setup-checklist -->
+### New — Add a workspace setup checklist
+
+- Owners can review business details, starting balances, team access, import history, and the first reconciliation from the dashboard, with optional steps clearly separated from required actions.
+
 ## v0.3.8 — 2026-10-30
 
 <!-- change-id: premium-finance-tables -->
