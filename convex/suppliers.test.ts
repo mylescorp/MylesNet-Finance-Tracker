@@ -71,6 +71,38 @@ describe("supplier records and expense linkage", () => {
     expect(userId).toBeTruthy();
   });
 
+  it("records supplier item prices and rejects totals that do not match the expense", async () => {
+    const { t, owner, businessId } = await setup();
+    const supplierId = await owner.mutation(api.suppliers.save, { action: "create", name: "Produce Market" });
+    const item = { name: "Rice", quantity: 2, unit: "bag", unitPriceUgx: 12000, lineTotalUgx: 24000 };
+    const args = { businessId, kind: "expense" as const, amountUgx: 24000, occurredOn: "2026-10-06", account: "cash" as const, category: "Stock", note: "", supplierId, lineItems: [item], idempotencyKey: "supplier-item-key-00001" };
+    const entryId = await owner.mutation(api.workspace.createEntry, args);
+    expect(await owner.mutation(api.workspace.createEntry, { ...args, lineItems: [{ lineTotalUgx: 24000, unitPriceUgx: 12000, unit: "bag", quantity: 2, name: "Rice" }] })).toBe(entryId);
+    await expect(owner.mutation(api.workspace.createEntry, { ...args, lineItems: [{ ...item, quantity: 3, unitPriceUgx: 8000, lineTotalUgx: 24000 }] })).rejects.toThrow("This request key was already used for another entry.");
+    await expect(owner.mutation(api.workspace.createEntry, { ...args, idempotencyKey: "supplier-item-key-00002", amountUgx: 25000 })).rejects.toThrow("Item line totals must add up to the expense amount.");
+    const history = await owner.query(api.suppliers.expenseHistory, { supplierId });
+    expect(history.access).toBe("ready");
+    if (history.access === "ready") expect(history.expenses[0]).toMatchObject({ entryId, lineItems: [item] });
+    expect((await t.run(ctx => ctx.db.get(entryId)))?.lineItems).toEqual([item]);
+  });
+
+  it("bounds supplier item price history to 500 observations", async () => {
+    const { t, owner, userId, businessId } = await setup();
+    const supplierId = await owner.mutation(api.suppliers.save, { action: "create", name: "Bulk Supplier" });
+    const lineItems = Array.from({ length: 30 }, (_, index) => ({ name: `Item ${index}`, quantity: 1, unit: "each", unitPriceUgx: 1, lineTotalUgx: 1 }));
+    await t.run(async ctx => {
+      for (let index = 0; index < 17; index += 1) {
+        await ctx.db.insert("entries", { businessId, kind: "expense", amountUgx: 30, occurredOn: `2026-10-${String(index + 1).padStart(2, "0")}`, account: "cash", category: "Stock", note: "", supplierId, supplierName: "Bulk Supplier", lineItems, source: "manual", idempotencyKey: `bulk-supplier-entry-${index}`, state: "posted", createdBy: userId, createdAt: Date.now() });
+      }
+    });
+    const history = await owner.query(api.suppliers.expenseHistory, { supplierId });
+    expect(history.access).toBe("ready");
+    if (history.access === "ready") {
+      expect(history.priceHistoryComplete).toBe(false);
+      expect(history.expenses.reduce((total, row) => total + row.lineItems.length, 0)).toBe(500);
+    }
+  });
+
   it("lets recurring-template managers load supplier choices with expenses view and update", async () => {
     const { t, businessId, owner } = await setup();
     await owner.mutation(api.suppliers.save, { action: "create", name: "Template supplier" });
