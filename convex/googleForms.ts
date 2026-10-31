@@ -5,6 +5,7 @@ import { internalMutation, mutation, query } from "./_generated/server";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import type { Id } from "./_generated/dataModel";
 import { hasPermission } from "./accessControl";
+import { assertPeriodUnlocked } from "./periodLocks";
 
 type Ctx = MutationCtx | QueryCtx;
 type Kind = "sale" | "expense" | "movement" | "savings" | "loan" | "unknown";
@@ -208,6 +209,7 @@ export const receive = internalMutation({
         const idempotencyKey = `google-form:${input.sourceKey}:${index}`;
         const old = await ctx.db.query("entries").withIndex("by_business_and_idempotency", q => q.eq("businessId", business._id).eq("idempotencyKey", idempotencyKey)).unique();
         if (old) continue;
+        await assertPeriodUnlocked(ctx, business._id, date!);
         const balance = await ctx.db.query("accountBalances").withIndex("by_business_and_account", q => q.eq("businessId", business._id).eq("account", entry.account)).unique();
         const delta = entry.kind === "sale" ? entry.amountUgx : -entry.amountUgx;
         const nextBalance = (balance?.balanceUgx ?? 0) + delta;

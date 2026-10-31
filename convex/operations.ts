@@ -7,6 +7,7 @@ import { hasPermission, permissionsForMembership } from "./accessControl";
 import { getSelectedWorkspace } from "./workspaceContext";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { normalizeCashDenominations } from "./reconciliationUtils";
+import { assertPeriodUnlocked } from "./periodLocks";
 import { billForecast as buildBillForecast } from "../lib/bill-forecast";
 
 type Ctx = MutationCtx | QueryCtx;
@@ -87,6 +88,7 @@ async function postExpense(ctx: MutationCtx, args: {
     assertSameRequest(previous.kind === "expense" && previous.amountUgx === args.amountUgx && previous.occurredOn === args.occurredOn && previous.account === args.account && previous.category === args.category && previous.note === args.note && previous.state === "posted" && previous.operationSource === args.operationSource && previous.operationKey === args.operationKey && previous.supplierId === args.supplierId && previous.supplierName === args.supplierName);
     return previous._id;
   }
+  await assertPeriodUnlocked(ctx, args.businessId, args.occurredOn);
   const entryId = await ctx.db.insert("entries", {
     businessId: args.businessId, kind: "expense", amountUgx: args.amountUgx, occurredOn: args.occurredOn,
     account: args.account, category: args.category, note: args.note, supplierId: args.supplierId, supplierName: args.supplierName, source: "manual", idempotencyKey: args.idempotencyKey,
@@ -105,6 +107,7 @@ async function postExpense(ctx: MutationCtx, args: {
 async function reverseLinkedExpense(ctx: MutationCtx, current: NonNullable<Awaited<ReturnType<typeof workspace>>>, idempotencyKey: string, operationKey: string, operationSource: "loan_interest" | "bill_payment", reason: string) {
   const entry = await ctx.db.query("entries").withIndex("by_business_and_idempotency", q => q.eq("businessId", current.business._id).eq("idempotencyKey", idempotencyKey)).unique();
   if (!entry || entry.state !== "posted" || entry.operationSource !== operationSource || entry.operationKey !== operationKey) throw new Error("The linked expense is missing or already changed. Reconcile its source record before reversing.");
+  await assertPeriodUnlocked(ctx, current.business._id, entry.occurredOn);
   const day = await ctx.db.query("dailyTotals").withIndex("by_business_and_day", q => q.eq("businessId", current.business._id).eq("day", entry.occurredOn)).unique();
   if (!day || day.expensesUgx < entry.amountUgx || day.expenseCount < 1) throw new Error("Daily expense totals need reconciliation before this payment can be reversed.");
   await ctx.db.patch("dailyTotals", day._id, { expensesUgx: safeAdd(day.expensesUgx, -entry.amountUgx, "Daily expenses"), expenseCount: safeAdd(day.expenseCount, -1, "Daily expense count") });
@@ -444,6 +447,7 @@ export const createMovement = mutation({
       assertSameRequest(existing.kind === args.kind && existing.amountUgx === args.amountUgx && (existing.feeUgx ?? 0) === feeUgx && existing.fromAccount === fromAccount && existing.toAccount === toAccount && existing.partnerId === (args.kind === "capital_contribution" ? args.partnerId : undefined) && existing.occurredOn === args.occurredOn && existing.note === args.note.trim());
       return existing._id;
     }
+    await assertPeriodUnlocked(ctx, current.business._id, args.occurredOn);
     if (args.kind === "transfer" || args.kind === "withdrawal") {
       const outflow = -(args.amountUgx + (args.kind === "withdrawal" ? feeUgx : 0));
       await checkOutflow(ctx, current.business._id, fromAccount!, outflow, args.confirmNegativeBalance ?? false);
@@ -492,6 +496,7 @@ export const reverseMovement = mutation({
     const movement = await ctx.db.get("movements", args.movementId);
     if (!movement || movement.businessId !== current.business._id) throw new Error("Movement not found.");
     if (movement.state === "void") return null;
+    await assertPeriodUnlocked(ctx, current.business._id, movement.occurredOn);
     const reason = args.reason.trim();
     if (reason.length < 5 || reason.length > 300) throw new Error("Explain the movement reversal in 5 to 300 characters.");
     if (!movement.toAccount) throw new Error("This movement has no receiving account and cannot be reversed automatically.");
@@ -637,6 +642,7 @@ export const recordSavingsFlow = mutation({
       assertSameRequest(duplicate.holdingId === args.holdingId && duplicate.kind === args.kind && duplicate.amountUgx === args.amountUgx && duplicate.account === args.account && duplicate.occurredOn === args.occurredOn && duplicate.note === args.note.trim());
       return duplicate._id;
     }
+    await assertPeriodUnlocked(ctx, current.business._id, args.occurredOn);
     const holding = await ctx.db.get("savingsHoldings", args.holdingId);
     if (!holding || holding.businessId !== current.business._id || !holding.active) throw new Error("Savings holding is not available.");
     const delta = args.kind === "contribution" ? -args.amountUgx : args.amountUgx;
@@ -682,6 +688,7 @@ export const recordWeeklySavingsContributions = mutation({
       if (dates.length > 520) throw new Error("Choose a range of 520 weekly contributions or fewer (up to 10 years).");
     }
     if (dates.length === 0) throw new Error("The selected range contains no contribution day. Extend the latest date to include the selected weekday.");
+    for (const day of dates) await assertPeriodUnlocked(ctx, current.business._id, day);
     if (!Number.isSafeInteger(args.amountUgx * dates.length)) throw new Error("The total contribution is too large to record safely.");
 
     let holdingBalanceUgx = holding.balanceUgx;
@@ -723,6 +730,7 @@ export const reverseSavingsFlow = mutation({
     const flow = await ctx.db.get("savingsFlows", args.flowId);
     if (!flow || flow.businessId !== current.business._id) throw new Error("Savings activity not found.");
     if (flow.state === "void") return null;
+    await assertPeriodUnlocked(ctx, current.business._id, flow.occurredOn);
     const reason = args.reason.trim();
     if (reason.length < 5 || reason.length > 300) throw new Error("Explain the savings reversal in 5 to 300 characters.");
     const holding = await ctx.db.get("savingsHoldings", flow.holdingId);
@@ -754,6 +762,7 @@ export const createLoan = mutation({
       assertSameRequest(duplicate.lender === lender && duplicate.principalUgx === args.principalUgx && duplicate.annualRateBps === args.annualRateBps && duplicate.termMonths === args.termMonths && duplicate.startedOn === args.startedOn && duplicate.account === args.account && duplicate.note === args.note.trim());
       return duplicate._id;
     }
+    await assertPeriodUnlocked(ctx, current.business._id, args.startedOn);
     const activeLoans = await ctx.db.query("loans").withIndex("by_business_and_status", q => q.eq("businessId", current.business._id).eq("status", "active")).take(100);
     if (activeLoans.length >= 100) throw new Error("A workspace can have up to 100 active loans. Pay off or review an existing loan before adding another.");
     await applyAccountDelta(ctx, current.business._id, args.account, args.principalUgx);
@@ -775,6 +784,7 @@ export const recordLoanRepayment = mutation({
       assertSameRequest(duplicate.loanId === args.loanId && duplicate.principalUgx === args.principalUgx && duplicate.interestUgx === args.interestUgx && duplicate.account === args.account && duplicate.paidOn === args.paidOn);
       return duplicate._id;
     }
+    await assertPeriodUnlocked(ctx, current.business._id, args.paidOn);
     const loan = await ctx.db.get("loans", args.loanId);
     if (!loan || loan.businessId !== current.business._id || loan.status !== "active") throw new Error("Active loan not found.");
     if (args.principalUgx > loan.outstandingPrincipalUgx) throw new Error("Principal repayment exceeds the outstanding balance.");
@@ -799,6 +809,7 @@ export const reverseLoanRepayment = mutation({
     const repayment = await ctx.db.get("loanRepayments", args.repaymentId);
     if (!repayment || repayment.businessId !== current.business._id) throw new Error("Loan repayment not found.");
     if (repayment.state === "void") return null;
+    await assertPeriodUnlocked(ctx, current.business._id, repayment.paidOn);
     const reason = args.reason.trim();
     if (reason.length < 5 || reason.length > 300) throw new Error("Explain the repayment reversal in 5 to 300 characters.");
     const loan = await ctx.db.get("loans", repayment.loanId);

@@ -143,4 +143,26 @@ describe("month-end close controls", () => {
     expect(after.access === "ready" ? after.closure?.status : null).toBe("awaiting_review");
     expect(after.access === "ready" && after.snapshot.unreviewedSourceDays.some(row => row.day === `${period.periodFrom.slice(0, 8)}15`)).toBe(true);
   });
+
+  it("locks ledger writes after approval and permits them after audited reopening", async () => {
+    const { preparer, reviewer, businessId, period } = await setup();
+    const closureId = await preparer.mutation(api.monthEndClose.prepare, { businessId, periodFrom: period.periodFrom, periodToExclusive: period.periodToExclusive });
+    const prepared = await preparer.query(api.monthEndClose.overview, { businessId, periodFrom: period.periodFrom, periodToExclusive: period.periodToExclusive });
+    if (prepared.access !== "ready" || !prepared.closure) throw new Error("Expected prepared close.");
+    await reviewer.mutation(api.monthEndClose.approve, { businessId, closureId, expectedSnapshotJson: prepared.closure.snapshotJson });
+    const occurredOn = `${period.periodFrom.slice(0, 8)}22`;
+    await expect(preparer.mutation(api.workspace.createEntry, {
+      businessId, kind: "expense", amountUgx: 10_000, occurredOn, account: "cash", category: "Repairs", note: "Late invoice",
+      idempotencyKey: "closed-period-entry-key-0001",
+    })).rejects.toThrow("This period is closed");
+    await expect(preparer.mutation(api.operations.createMovement, {
+      businessId, kind: "transfer", amountUgx: 1_000, fromAccount: "cash", toAccount: "mobile_money", occurredOn,
+      note: "Late transfer", idempotencyKey: "closed-period-movement-01",
+    })).rejects.toThrow("This period is closed");
+    await reviewer.mutation(api.monthEndClose.reopen, { businessId, closureId, reason: "Record an invoice received late." });
+    await preparer.mutation(api.workspace.createEntry, {
+      businessId, kind: "expense", amountUgx: 10_000, occurredOn, account: "cash", category: "Repairs", note: "Late invoice",
+      idempotencyKey: "closed-period-entry-key-0001",
+    });
+  });
 });

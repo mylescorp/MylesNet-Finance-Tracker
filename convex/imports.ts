@@ -5,6 +5,7 @@ import { mutation, query } from "./_generated/server";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import type { Id } from "./_generated/dataModel";
 import { hasPermission } from "./accessControl";
+import { assertPeriodUnlocked } from "./periodLocks";
 
 const account = v.union(v.literal("cash"), v.literal("mobile_money"), v.literal("unallocated"));
 const importType = v.union(v.literal("cashbook"), v.literal("centipid_analytics"));
@@ -95,6 +96,7 @@ export const importRows = mutation({
       const idempotencyKey = `csv:${batch.sourceHash}:${row.rowNumber}`;
       const existing = await ctx.db.query("entries").withIndex("by_business_and_idempotency", q => q.eq("businessId", business._id).eq("idempotencyKey", idempotencyKey)).unique();
       if (existing) { skipped++; continue; }
+      await assertPeriodUnlocked(ctx, business._id, row.occurredOn);
 
       if (row.account !== "unallocated") {
         const financialAccount: "cash" | "mobile_money" = row.account;
@@ -227,6 +229,7 @@ export const reverseBatchChunk = mutation({
     let reversedNow = 0;
     for (const entry of result.page) {
       if (!entry.idempotencyKey.startsWith(prefix) || entry.source !== "import") throw new ConvexError("The batch contains a row that is not a matching imported cashbook entry.");
+      await assertPeriodUnlocked(ctx, business._id, entry.occurredOn);
       let effectiveEntry = entry;
       if (entry.state === "void") {
         if (!entry.correctedBy) continue;
@@ -235,6 +238,7 @@ export const reverseBatchChunk = mutation({
         if (replacement.state === "void") continue;
         effectiveEntry = replacement;
       }
+      await assertPeriodUnlocked(ctx, business._id, effectiveEntry.occurredOn);
       if (effectiveEntry.operationSource) throw new ConvexError("An imported row is linked to an operation and cannot be safely reversed with this batch.");
       const day = await ctx.db.query("dailyTotals").withIndex("by_business_and_day", q => q.eq("businessId", business._id).eq("day", effectiveEntry.occurredOn)).unique();
       if (!day) throw new ConvexError(`Daily totals for ${effectiveEntry.occurredOn} are missing; reconcile them before reversing this import.`);

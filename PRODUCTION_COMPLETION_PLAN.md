@@ -47,7 +47,7 @@ This plan tracks every gap found in the production-readiness audit. Financial re
 ### F. Analytics, issues, reports, and close
 - [x] Turn generated data-health flags into a persistent, role-scoped review queue with acknowledge/assign/resolve and audit events. Flags persist review status, note, and owner/cashier assignment by report-period issue key; the cross-period history is filterable by status and paginated.
 - [ ] Complete report exports and paginated source data; distinguish print-to-PDF from generated downloadable PDF. Sales, Expenses, historical issue reviews, and the advanced analytics snapshot now have spreadsheet-safe CSV exports; cashbook exports include source, stable entry ID, creation time, and actor ID. Browser printing is labeled “Print / Save PDF.” A generated PDF remains.
-- [ ] Add period close, role-scoped lock/unlock with reason, and controls preventing edits to locked periods except authorized reopen/correction.
+- [ ] Complete period close controls: approved closes enforce server-side locks for manual entries, corrections, imports, operational postings/reversals, balance adjustments, and Google Forms ingress; audited reopening restores write access. Persisted multi-account period states and source-linked issue disposition remain. The existing Centipid webhook remains outside lock enforcement until its deployed contract is captured and staging parity is confirmed.
 - [ ] Add scheduled report delivery and delivery history once the provider and recipient-consent contract are configured.
 
 ### G. Backup, restore, and production readiness
