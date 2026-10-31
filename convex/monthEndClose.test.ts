@@ -56,7 +56,7 @@ describe("month-end close controls", () => {
   it("requires the full checklist, snapshots cashbook and budget totals, and requires a separate reviewer", async () => {
     const { t, period, businessId, preparer, reviewer, member } = await setup();
     const overview = await preparer.query(api.monthEndClose.overview, { businessId, periodFrom: period.periodFrom, periodToExclusive: period.periodToExclusive });
-    expect(overview).toMatchObject({ access: "ready", snapshot: { ready: true, complete: true, totals: { salesUgx: 500_000, expensesUgx: 120_000, cashbookNetUgx: 380_000 }, postedEntryCount: 2, excludedVoidEntryCount: 1, movementsByAccount: [{ account: "cash", salesUgx: 500_000, expensesUgx: 0, netUgx: 500_000 }, { account: "mobile_money", salesUgx: 0, expensesUgx: 120_000, netUgx: -120_000 }] } });
+    expect(overview).toMatchObject({ access: "ready", snapshot: { ready: true, complete: true, totals: { salesUgx: 500_000, expensesUgx: 120_000, cashbookNetUgx: 380_000 }, postedEntryCount: 2, excludedVoidEntryCount: 1, movementsByAccount: [{ account: "cash", salesUgx: 500_000, expensesUgx: 0, netUgx: 500_000 }, { account: "mobile_money", salesUgx: 0, expensesUgx: 120_000, netUgx: -120_000 }], reconciliationEvidence: expect.arrayContaining([expect.objectContaining({ account: "cash", asOfDate: period.lastDay, bookBalanceUgx: 100_000, countedBalanceUgx: 100_000, varianceUgx: 0, status: "closed", reviewedByName: "Close reviewer", reviewNote: "Final account count approved." })]) } });
     if (overview.access !== "ready") throw new Error("Expected close access.");
     expect(overview.snapshot.categoryBudgets).toEqual([{ category: "Utilities", limitUgx: 200_000, warningAtPercent: 80, actualUgx: 120_000 }]);
     expect(await member.query(api.monthEndClose.overview, { businessId, periodFrom: period.periodFrom, periodToExclusive: period.periodToExclusive })).toEqual({ access: "restricted" });
@@ -70,7 +70,7 @@ describe("month-end close controls", () => {
     const closed = await preparer.query(api.monthEndClose.overview, { businessId, periodFrom: period.periodFrom, periodToExclusive: period.periodToExclusive });
     if (closed.access !== "ready" || !closed.closure) throw new Error("Expected approved close.");
     expect(closed.closure.status).toBe("closed");
-    expect(JSON.parse(closed.closure.snapshotJson)).toMatchObject({ totals: { salesUgx: 500_000, expensesUgx: 120_000, cashbookNetUgx: 380_000 }, excludedVoidEntryCount: 1 });
+    expect(JSON.parse(closed.closure.snapshotJson)).toMatchObject({ totals: { salesUgx: 500_000, expensesUgx: 120_000, cashbookNetUgx: 380_000 }, excludedVoidEntryCount: 1, reconciliationEvidence: expect.arrayContaining([expect.objectContaining({ account: "mobile_money", asOfDate: period.lastDay, status: "closed", reviewedByName: "Close reviewer", reviewNote: "Final account count approved." })]) });
 
     await reviewer.mutation(api.monthEndClose.reopen, { businessId, closureId, reason: "Correct the month-end source records." });
     const reopened = await preparer.query(api.monthEndClose.overview, { businessId, periodFrom: period.periodFrom, periodToExclusive: period.periodToExclusive });

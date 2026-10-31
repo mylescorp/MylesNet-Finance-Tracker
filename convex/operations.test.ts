@@ -28,7 +28,38 @@ function todayInKampala() {
   return new Intl.DateTimeFormat("en-CA", { timeZone: "Africa/Kampala", year: "numeric", month: "2-digit", day: "2-digit" }).format(Date.now());
 }
 
+function dayAfterForTest(day: string) {
+  const date = new Date(`${day}T00:00:00.000Z`);
+  date.setUTCDate(date.getUTCDate() + 1);
+  return date.toISOString().slice(0, 10);
+}
+
 describe("cash reconciliation denomination details", () => {
+  it("assigns review to an authorized member and restricts sign-off to that reviewer", async () => {
+    const { t, owner, businessId } = await setupOwner();
+    const { reviewerId, memberId } = await t.run(async ctx => {
+      const reviewerId = await ctx.db.insert("users", { name: "Independent reviewer" });
+      const memberId = await ctx.db.insert("users", { name: "Unprivileged member" });
+      await ctx.db.insert("memberships", { businessId, userId: reviewerId, role: "owner", active: true, createdAt: Date.now() });
+      await ctx.db.insert("memberships", { businessId, userId: memberId, role: "member", active: true, createdAt: Date.now() });
+      return { reviewerId, memberId };
+    });
+    const reviewer = t.withIdentity({ subject: reviewerId });
+    const member = t.withIdentity({ subject: memberId });
+    const reconciliationId = await owner.mutation(api.operations.createReconciliation, {
+      businessId, account: "cash", asOfDate: todayInKampala(), countedBalanceUgx: 0,
+      note: "Opening drawer count", idempotencyKey: "reconciliation-assignment-test-001",
+    });
+    await expect(member.mutation(api.operations.assignReconciliationReviewer, { businessId, reconciliationId, reviewerId })).rejects.toThrow("cannot assign reconciliation reviewers");
+    await owner.mutation(api.operations.assignReconciliationReviewer, { businessId, reconciliationId, reviewerId });
+    await expect(owner.mutation(api.operations.signOffReconciliation, { businessId, reconciliationId, reviewNote: "Verified count" })).rejects.toThrow("different authorized reviewer");
+    const overview = await owner.query(api.operations.overview, { businessId, from: todayInKampala(), toExclusive: dayAfterForTest(todayInKampala()) });
+    expect(overview.access === "ready" ? overview.reconciliations[0] : null).toMatchObject({ assignedReviewerId: reviewerId, assignedReviewerName: "Independent reviewer" });
+    await reviewer.mutation(api.operations.signOffReconciliation, { businessId, reconciliationId, reviewNote: "Verified count" });
+    expect(await t.run(ctx => ctx.db.get("reconciliations", reconciliationId))).toMatchObject({ status: "closed", reviewedBy: reviewerId, assignedReviewerId: reviewerId });
+    expect((await t.run(ctx => ctx.db.query("auditEvents").collect())).map(row => row.action)).toContain("reconciliation.reviewer_assigned");
+  });
+
   it("saves a validated breakdown and records it in the audit trail", async () => {
     const { t, owner, businessId } = await setupOwner();
     const reconciliationId = await owner.mutation(api.operations.createReconciliation, {
@@ -217,13 +248,20 @@ describe("bill schedule reminders and supplier defaults", () => {
 describe("reconciliation review sign-off", () => {
   it("closes a matched count with reviewer audit and reopens with a reason", async () => {
     const { t, owner, businessId } = await setupOwner();
+    const reviewerId = await t.run(async ctx => {
+      const reviewerId = await ctx.db.insert("users", { name: "Independent count reviewer" });
+      await ctx.db.insert("memberships", { businessId, userId: reviewerId, role: "owner", active: true, createdAt: Date.now() });
+      return reviewerId;
+    });
+    const reviewer = t.withIdentity({ subject: reviewerId });
     const reconciliationId = await owner.mutation(api.operations.createReconciliation, {
       businessId, account: "cash", asOfDate: todayInKampala(), countedBalanceUgx: 0,
       note: "Opening till count", idempotencyKey: "reconcile-signoff-count-key-1",
     });
-    await owner.mutation(api.operations.signOffReconciliation, { businessId, reconciliationId, reviewNote: "Count matches book balance." });
+    await expect(owner.mutation(api.operations.signOffReconciliation, { businessId, reconciliationId, reviewNote: "Count matches book balance." })).rejects.toThrow("different authorized reviewer");
+    await reviewer.mutation(api.operations.signOffReconciliation, { businessId, reconciliationId, reviewNote: "Count matches book balance." });
     const closed = await t.run(ctx => ctx.db.get("reconciliations", reconciliationId));
-    expect(closed).toMatchObject({ status: "closed", reviewedByName: "Reconciliation owner", reviewNote: "Count matches book balance." });
+    expect(closed).toMatchObject({ status: "closed", reviewedBy: reviewerId, reviewedByName: "Independent count reviewer", reviewNote: "Count matches book balance." });
     expect(closed?.reviewedAt).toEqual(expect.any(Number));
     await owner.mutation(api.operations.reopenReconciliation, { businessId, reconciliationId, reason: "Need to verify the account statement." });
     const reopened = await t.run(async ctx => ({ row: await ctx.db.get("reconciliations", reconciliationId), audit: await ctx.db.query("auditEvents").collect() }));
@@ -234,11 +272,17 @@ describe("reconciliation review sign-off", () => {
   });
 
   it("does not sign off unresolved variance", async () => {
-    const { owner, businessId } = await setupOwner();
+    const { t, owner, businessId } = await setupOwner();
     const reconciliationId = await owner.mutation(api.operations.createReconciliation, {
       businessId, account: "cash", asOfDate: todayInKampala(), countedBalanceUgx: 100,
       note: "Till count with variance", idempotencyKey: "reconcile-signoff-count-key-2",
     });
-    await expect(owner.mutation(api.operations.signOffReconciliation, { businessId, reconciliationId, reviewNote: "Review completed" })).rejects.toThrow("Only a matched count or an explained difference can be signed off.");
+    const reviewerId = await t.run(async ctx => {
+      const reviewerId = await ctx.db.insert("users", { name: "Independent count reviewer" });
+      await ctx.db.insert("memberships", { businessId, userId: reviewerId, role: "owner", active: true, createdAt: Date.now() });
+      return reviewerId;
+    });
+    const reviewer = t.withIdentity({ subject: reviewerId });
+    await expect(reviewer.mutation(api.operations.signOffReconciliation, { businessId, reconciliationId, reviewNote: "Review completed" })).rejects.toThrow("Only a matched count or an explained difference can be signed off.");
   });
 });

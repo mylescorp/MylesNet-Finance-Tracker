@@ -477,6 +477,7 @@ export default defineSchema({
     reviewedByName: v.optional(v.string()),
     reviewedAt: v.optional(v.number()),
     reviewNote: v.optional(v.string()),
+    assignedReviewerId: v.optional(v.id("users")),
     note: v.string(),
     explanation: v.optional(v.string()),
     supersedesId: v.optional(v.id("reconciliations")),
