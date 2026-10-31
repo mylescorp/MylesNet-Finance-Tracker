@@ -28,6 +28,7 @@ import type * as imports from "../imports.js";
 import type * as monthEndClose from "../monthEndClose.js";
 import type * as onboarding from "../onboarding.js";
 import type * as operations from "../operations.js";
+import type * as periodLocks from "../periodLocks.js";
 import type * as reconciliationUtils from "../reconciliationUtils.js";
 import type * as settings from "../settings.js";
 import type * as suppliers from "../suppliers.js";
@@ -63,6 +64,7 @@ declare const fullApi: ApiFromModules<{
   monthEndClose: typeof monthEndClose;
   onboarding: typeof onboarding;
   operations: typeof operations;
+  periodLocks: typeof periodLocks;
   reconciliationUtils: typeof reconciliationUtils;
   settings: typeof settings;
   suppliers: typeof suppliers;

@@ -40,7 +40,7 @@ This plan tracks every gap found in the production-readiness audit. Financial re
 
 ### E. Imports and external ingress
 - [ ] Add preview, completed-batch reversal, partial-batch recovery, and row-level correction while keeping source hashes/idempotency stable. Preview, source-hash idempotency, partial-batch resume/cancel, owner-only resumable reversal for completed or cancelled batches, and owner correction of imported rows are implemented; reversing a batch also reverses a corrected replacement. New coverage verifies reversal of a completed batch and its account/daily totals; chunk-resume and corrected-row rollback coverage remains open.
-- [ ] Add paginated import history and exportable import reports. Import history now paginates in the owner settings screen, and retained Centipid metadata downloads as JSON; standardized CSV/PDF reports remain.
+- [ ] Add paginated import history and exportable import reports. Import history paginates in the owner settings screen; retained Centipid metadata downloads as JSON; cashbook batches export imported rows to spreadsheet-safe CSV with source row, stable entry ID, void status, and correction links. Standardized PDF reports remain.
 - [ ] Add integration receipt history, actionable failures, and safe idempotent retry/reprocess for Google Forms and Centipid. Receipt histories are now paginated; Centipid processing failures are recorded with safe retry counts; Google Form needs-review submissions can be retried with the same source key. Owner-triggered reprocessing and downloadable receipt exports remain.
 - [ ] Preserve the existing webhook URL and payload contract; run documented staging parity before any caller cutover.
 
