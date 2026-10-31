@@ -5,7 +5,7 @@ import { internal } from "./_generated/api";
 import { internalMutation, mutation, query } from "./_generated/server";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import type { Id } from "./_generated/dataModel";
-import { hasPermission } from "./accessControl";
+import { hasPermission, permissionsForMembership } from "./accessControl";
 import { assertPeriodUnlocked, isPeriodClosed } from "./periodLocks";
 
 type Ctx = MutationCtx | QueryCtx;
@@ -65,7 +65,10 @@ export const history = query({
   handler: async (ctx, args) => {
     const { business, membership } = await owner(ctx, args.businessId);
     const result = await ctx.db.query("googleFormReceipts").withIndex("by_business_and_created", q => q.eq("businessId", business._id)).order("desc").paginate(args.paginationOpts);
-    return { ...result, page: await Promise.all(result.page.map(async ({ _id, submissionKind, status, occurredOn, amountUgx, summary, createdAt, attemptCount, lastAttemptAt }) => ({ _id, submissionKind, status, occurredOn, amountUgx, summary, createdAt, attemptCount: attemptCount ?? 1, lastAttemptAt: lastAttemptAt ?? createdAt, canReprocess: submissionKind === "sale" ? await hasPermission(ctx, membership, "sales.create") : submissionKind === "expense" ? await hasPermission(ctx, membership, "expenses.create") : false }))) };
+    const permissions = await permissionsForMembership(ctx, membership);
+    const canCreateSales = permissions.includes("sales.create");
+    const canCreateExpenses = permissions.includes("expenses.create");
+    return { ...result, page: result.page.map(({ _id, submissionKind, status, occurredOn, amountUgx, summary, createdAt, attemptCount, lastAttemptAt }) => ({ _id, submissionKind, status, occurredOn, amountUgx, summary, createdAt, attemptCount: attemptCount ?? 1, lastAttemptAt: lastAttemptAt ?? createdAt, canReprocess: submissionKind === "sale" ? canCreateSales : submissionKind === "expense" ? canCreateExpenses : false })) };
   },
 });
 
