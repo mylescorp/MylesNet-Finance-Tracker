@@ -16,6 +16,7 @@ const AUDIT_ACTIONS = [
   "invitation.accepted", "invitation.revoked", "loan.interest_recorded",
   "member.access.granted", "member.access.updated", "member.invited", "movement.fee_recorded",
   "role.created", "role.updated", "webhook.entry_created", "webhook.ignored",
+  "voucher.batch_created", "voucher.redeemed", "voucher.stock_voided",
   "workspace.created", "workspace.settings.updated",
 ];
 

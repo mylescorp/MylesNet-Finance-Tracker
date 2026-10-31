@@ -660,4 +660,27 @@ export default defineSchema({
     lastAttemptAt: v.optional(v.number()),
     createdAt: v.number(),
   }).index("by_business_and_event", ["businessId", "eventKey"]).index("by_business_and_created", ["businessId", "createdAt"]),
+  voucherBatches: defineTable({
+    businessId: v.id("businesses"),
+    name: v.string(),
+    description: v.string(),
+    faceValueUgx: v.number(),
+    issuedQuantity: v.number(),
+    redeemedQuantity: v.number(),
+    voidedQuantity: v.number(),
+    expiresOn: v.optional(v.string()),
+    createdBy: v.id("users"),
+    createdAt: v.number(),
+  }).index("by_business_and_created", ["businessId", "createdAt"]),
+  voucherEvents: defineTable({
+    businessId: v.id("businesses"),
+    batchId: v.id("voucherBatches"),
+    sourceReference: v.string(),
+    eventType: v.union(v.literal("redemption"), v.literal("void_stock")),
+    quantity: v.number(),
+    reason: v.string(),
+    actorId: v.id("users"),
+    occurredAt: v.number(),
+  }).index("by_business_and_batch_and_reference", ["businessId", "batchId", "sourceReference"])
+    .index("by_business_and_batch_and_time", ["businessId", "batchId", "occurredAt"]),
 });
