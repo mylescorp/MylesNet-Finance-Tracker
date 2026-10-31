@@ -77,6 +77,7 @@ describe("supplier records and expense linkage", () => {
     const item = { name: "Rice", quantity: 2, unit: "bag", unitPriceUgx: 12000, lineTotalUgx: 24000 };
     const args = { businessId, kind: "expense" as const, amountUgx: 24000, occurredOn: "2026-10-06", account: "cash" as const, category: "Stock", note: "", supplierId, lineItems: [item], idempotencyKey: "supplier-item-key-00001" };
     const entryId = await owner.mutation(api.workspace.createEntry, args);
+    expect(await owner.mutation(api.workspace.createEntry, { ...args, lineItems: [{ lineTotalUgx: 24000, unitPriceUgx: 12000, unit: "bag", quantity: 2, name: "Rice" }] })).toBe(entryId);
     await expect(owner.mutation(api.workspace.createEntry, { ...args, lineItems: [{ ...item, quantity: 3, unitPriceUgx: 8000, lineTotalUgx: 24000 }] })).rejects.toThrow("This request key was already used for another entry.");
     await expect(owner.mutation(api.workspace.createEntry, { ...args, idempotencyKey: "supplier-item-key-00002", amountUgx: 25000 })).rejects.toThrow("Item line totals must add up to the expense amount.");
     const history = await owner.query(api.suppliers.expenseHistory, { supplierId });

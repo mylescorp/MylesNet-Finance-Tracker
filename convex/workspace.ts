@@ -963,7 +963,13 @@ export const createEntry = mutation({
         duplicate.note === args.note.trim() &&
         duplicate.supplierId === args.supplierId &&
         (duplicate.supplierReference ?? "") === supplierReference;
-      const sameLines = JSON.stringify(duplicate.lineItems ?? []) === JSON.stringify(lineItems ?? []);
+      const savedLines = duplicate.lineItems ?? [];
+      const requestedLines = lineItems ?? [];
+      const sameLines = savedLines.length === requestedLines.length && savedLines.every((saved, index) => {
+        const requested = requestedLines[index];
+        return saved.name === requested.name && saved.quantity === requested.quantity && saved.unit === requested.unit
+          && saved.unitPriceUgx === requested.unitPriceUgx && saved.lineTotalUgx === requested.lineTotalUgx;
+      });
       if (!sameRequest || !sameLines) throw new Error("This request key was already used for another entry.");
       return duplicate._id;
     }
