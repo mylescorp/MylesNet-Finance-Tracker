@@ -48,7 +48,7 @@ const specs: Record<string, BoardSpec> = {
       { title: "Sales by income type", detail: "Category breakdown uses saved entries; no mock amounts are loaded.", kind: "chart" },
       { title: "Best days and weekday pattern", detail: "Strongest sales days are calculated from the selected period.", kind: "chart" },
       { title: "Imports and data checks", detail: "Review imported batches, row counts, and reversals in Settings → Data. Imported entries retain their source and audit history." },
-      { title: "Weak-day review and entry corrections", detail: "Analytics flags weak days and keeps review history. Correct a saved entry from the ledger to retain the original and record the reason; a separate weak-day diary is not available yet." },
+      { title: "Weak-day review and entry corrections", detail: "Analytics flags low-sales days and keeps explanations with the selected report period. Correct a saved entry from the ledger to retain the original and record the reason; diary notes never change sales values." },
       { title: "Voucher batches and mobile entry", detail: "Voucher redemptions can arrive through the Centipid integration. Voucher stock and issued-batch tracking are not implemented; record manual sales through the cashbook form." },
     ],
   },
