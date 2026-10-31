@@ -1,6 +1,6 @@
 "use client";
 
-import { useMutation, usePaginatedQuery } from "convex/react";
+import { useMutation, usePaginatedQuery, useQuery } from "convex/react";
 import { useEffect, useState, type FormEvent } from "react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
@@ -32,7 +32,8 @@ export function VoucherBatchPanel({ businessId, timezone }: { businessId: Id<"bu
     document.addEventListener("visibilitychange", onVisibilityChange);
     return () => { window.clearTimeout(initial); window.clearTimeout(timer); document.removeEventListener("visibilitychange", onVisibilityChange); };
   }, [timezone]);
-  const { results: batches, status, loadMore } = usePaginatedQuery(api.vouchers.list, currentTime === null ? "skip" : { businessId, currentTime }, { initialNumItems: 30 });
+  const { results: batches, status, loadMore } = usePaginatedQuery(api.vouchers.list, { businessId }, { initialNumItems: 30 });
+  const businessDay = useQuery(api.vouchers.businessDay, currentTime === null ? "skip" : { businessId, currentTime });
   const createBatch = useMutation(api.vouchers.createBatch);
   const recordEvent = useMutation(api.vouchers.recordEvent);
   const [name, setName] = useState("");
@@ -71,6 +72,8 @@ export function VoucherBatchPanel({ businessId, timezone }: { businessId: Id<"bu
   }
 
   const selectedBatch = selected ? batches.find(batch => batch._id === selected.batchId) : undefined;
+  const selectedBatchExpired = Boolean(selectedBatch?.expiresOn && businessDay && selectedBatch.expiresOn < businessDay);
+  const selectedMaximum = selected && selectedBatch ? selected.eventType === "redemption" ? selectedBatchExpired ? 0 : selectedBatch.unredeemedQuantity : selectedBatch.unredeemedQuantity : 0;
   return <section className="card settings-card">
     <div className="card-heading"><div><h2 className="card-title">Voucher batches</h2><p className="card-subtitle">Track issued vouchers, redemptions, stock removals, and expiry. This inventory does not create or change cashbook entries.</p></div></div>
     <form className="form-layout" onSubmit={e => void create(e)}>
@@ -84,14 +87,17 @@ export function VoucherBatchPanel({ businessId, timezone }: { businessId: Id<"bu
     {selected && selectedBatch && <form className="form-layout" onSubmit={e => void submitEvent(e)}>
       <h3 className="card-title">{selected.eventType === "redemption" ? "Record redemption" : "Remove vouchers from stock"} · {selectedBatch.name}</h3>
       <label className="field"><span>Stable transaction or adjustment reference</span><input value={sourceReference} onChange={e => setSourceReference(e.target.value)} required maxLength={120} /></label>
-      <label className="field"><span>Quantity</span><input type="number" min="1" step="1" max={selected.eventType === "redemption" ? selectedBatch.remainingQuantity : selectedBatch.unredeemedQuantity} value={eventQuantity} onChange={e => setEventQuantity(e.target.value)} required /></label>
+      <label className="field"><span>Quantity</span><input type="number" min="1" step="1" max={selectedMaximum} value={eventQuantity} onChange={e => setEventQuantity(e.target.value)} required /></label>
       <label className="field"><span>Reason or note</span><input value={reason} onChange={e => setReason(e.target.value)} minLength={3} maxLength={300} required /></label>
-      <div className="form-actions"><button className="button button-accent" disabled={busy}>Record activity</button><button className="button" type="button" disabled={busy} onClick={() => setSelected(null)}>Cancel</button></div>
+      <div className="form-actions"><button className="button button-accent" disabled={busy || selectedMaximum === 0 || Number(eventQuantity) > selectedMaximum}>Record activity</button><button className="button" type="button" disabled={busy} onClick={() => setSelected(null)}>Cancel</button></div>
     </form>}
-    {status === "LoadingFirstPage" ? <p className="muted-note">Loading voucher batches…</p> : batches.length === 0 ? <p className="muted-note">No voucher batches have been recorded.</p> : <div className="table-scroll"><table className="data-table"><thead><tr><th>Batch</th><th>Unit value</th><th>Issued</th><th>Redeemed</th><th>Voided</th><th>Available value</th><th>Expires</th><th>Actions</th></tr></thead><tbody>{batches.map(batch => <tr key={batch._id}>
-      <td>{batch.name}{batch.description && <small className="balance-adjustment-reason">{batch.description}</small>}</td><td>UGX {batch.faceValueUgx.toLocaleString()}</td><td>{batch.issuedQuantity}</td><td>{batch.redeemedQuantity}</td><td>{batch.voidedQuantity}</td><td>{batch.expired ? `${batch.expiredQuantity} expired` : `${batch.remainingQuantity} · UGX ${batch.availableValueUgx.toLocaleString()}`}</td><td>{batch.expiresOn ?? "—"}</td>
-      <td><div className="balance-adjustment-actions"><button type="button" className="button button-small" disabled={busy || batch.expired || batch.remainingQuantity === 0} onClick={() => { setFeedback(""); setSelected({ batchId: batch._id, eventType: "redemption" }); }}>Redeem</button><button type="button" className="button button-small button-danger-quiet" disabled={busy || batch.unredeemedQuantity === 0} onClick={() => { setFeedback(""); setSelected({ batchId: batch._id, eventType: "void_stock" }); }}>Void stock</button></div></td>
-    </tr>)}</tbody></table></div>}
+    {status === "LoadingFirstPage" ? <p className="muted-note">Loading voucher batches…</p> : batches.length === 0 ? <p className="muted-note">No voucher batches have been recorded.</p> : <div className="table-scroll"><table className="data-table"><thead><tr><th>Batch</th><th>Unit value</th><th>Issued</th><th>Redeemed</th><th>Voided</th><th>Unredeemed value</th><th>Expires</th><th>Actions</th></tr></thead><tbody>{batches.map(batch => {
+      const expired = Boolean(batch.expiresOn && businessDay && batch.expiresOn < businessDay);
+      const remainingQuantity = expired ? 0 : batch.unredeemedQuantity;
+      return <tr key={batch._id}>
+      <td>{batch.name}{batch.description && <small className="balance-adjustment-reason">{batch.description}</small>}</td><td>UGX {batch.faceValueUgx.toLocaleString()}</td><td>{batch.issuedQuantity}</td><td>{batch.redeemedQuantity}</td><td>{batch.voidedQuantity}</td><td>{expired ? `${batch.unredeemedQuantity} expired · UGX ${batch.unredeemedValueUgx.toLocaleString()}` : `${batch.unredeemedQuantity} · UGX ${batch.unredeemedValueUgx.toLocaleString()}`}</td><td>{batch.expiresOn ?? "—"}</td>
+      <td><div className="balance-adjustment-actions"><button type="button" className="button button-small" disabled={busy || expired || remainingQuantity === 0} onClick={() => { setFeedback(""); setSelected({ batchId: batch._id, eventType: "redemption" }); }}>Redeem</button><button type="button" className="button button-small button-danger-quiet" disabled={busy || batch.unredeemedQuantity === 0} onClick={() => { setFeedback(""); setSelected({ batchId: batch._id, eventType: "void_stock" }); }}>Void stock</button></div></td>
+    </tr>; })}</tbody></table></div>}
     {status === "CanLoadMore" && <button type="button" className="button" disabled={busy} onClick={() => loadMore(30)}>Load older batches</button>}
     {status === "LoadingMore" && <p className="muted-note" role="status">Loading older batches…</p>}
     {feedback && <p className="form-feedback" role="status">{feedback}</p>}

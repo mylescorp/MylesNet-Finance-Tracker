@@ -38,21 +38,26 @@ function localDay(timestamp: number, timezone: string) {
 }
 
 export const list = query({
-  args: { businessId: v.id("businesses"), paginationOpts: paginationOptsValidator, currentTime: v.number() },
+  args: { businessId: v.id("businesses"), paginationOpts: paginationOptsValidator },
   returns: paginationResultValidator(v.object({
-    _id: v.id("voucherBatches"), name: v.string(), description: v.string(), faceValueUgx: v.number(), issuedQuantity: v.number(), redeemedQuantity: v.number(), voidedQuantity: v.number(), expiresOn: v.union(v.string(), v.null()), createdAt: v.number(), expired: v.boolean(), unredeemedQuantity: v.number(), remainingQuantity: v.number(), expiredQuantity: v.number(), availableValueUgx: v.number(),
+    _id: v.id("voucherBatches"), name: v.string(), description: v.string(), faceValueUgx: v.number(), issuedQuantity: v.number(), redeemedQuantity: v.number(), voidedQuantity: v.number(), expiresOn: v.union(v.string(), v.null()), createdAt: v.number(), unredeemedQuantity: v.number(), unredeemedValueUgx: v.number(),
   })),
   handler: async (ctx, args) => {
     const { business } = await authorize(ctx, args.businessId);
     const page = await ctx.db.query("voucherBatches").withIndex("by_business_and_created", q => q.eq("businessId", business._id)).order("desc").paginate(args.paginationOpts);
-    const today = localDay(args.currentTime, business.timezone);
     return { ...page, page: page.page.map(({ _id, name, description, faceValueUgx, issuedQuantity, redeemedQuantity, voidedQuantity, expiresOn, createdAt }) => {
       const remainingQuantity = issuedQuantity - redeemedQuantity - voidedQuantity;
-      const expired = Boolean(expiresOn && expiresOn < today);
-      const expiredQuantity = expired ? remainingQuantity : 0;
-      const redeemableQuantity = expired ? 0 : remainingQuantity;
-      return { _id, name, description, faceValueUgx, issuedQuantity, redeemedQuantity, voidedQuantity, expiresOn: expiresOn ?? null, createdAt, expired, unredeemedQuantity: remainingQuantity, remainingQuantity: redeemableQuantity, expiredQuantity, availableValueUgx: redeemableQuantity * faceValueUgx };
+      return { _id, name, description, faceValueUgx, issuedQuantity, redeemedQuantity, voidedQuantity, expiresOn: expiresOn ?? null, createdAt, unredeemedQuantity: remainingQuantity, unredeemedValueUgx: remainingQuantity * faceValueUgx };
     }) };
+  },
+});
+
+export const businessDay = query({
+  args: { businessId: v.id("businesses"), currentTime: v.number() },
+  returns: v.string(),
+  handler: async (ctx, args) => {
+    const { business } = await authorize(ctx, args.businessId);
+    return localDay(args.currentTime, business.timezone);
   },
 });
 
