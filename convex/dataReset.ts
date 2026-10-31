@@ -12,6 +12,7 @@ const PHASES = [
   "loanRepayments", "loans", "billPayments", "bills", "reconciliations", "issueReviews", "webhookReceipts", "importBatches",
   // Append new phases to preserve numeric progress for a reset already in flight.
   "expenseReceipts", "categoryBudgets", "suppliers", "monthEndCloseEvents", "monthEndClosures", "dailyActivityReviews", "expenseTemplates", "weakDayReviews",
+  "voucherEvents", "voucherBatches",
 ] as const;
 type Phase = typeof PHASES[number];
 
@@ -89,6 +90,8 @@ async function pageFor(ctx: MutationCtx, phase: Phase, businessId: Id<"businesse
     case "dailyActivityReviews": return ctx.db.query("dailyActivityReviews").withIndex("by_business_and_day", q => q.eq("businessId", businessId)).paginate(opts);
     case "expenseTemplates": return ctx.db.query("expenseTemplates").withIndex("by_business_and_due", q => q.eq("businessId", businessId)).paginate(opts);
     case "weakDayReviews": return ctx.db.query("weakDayReviews").withIndex("by_business_and_day", q => q.eq("businessId", businessId)).paginate(opts);
+    case "voucherEvents": return ctx.db.query("voucherEvents").withIndex("by_business_and_batch_and_time", q => q.eq("businessId", businessId)).paginate(opts);
+    case "voucherBatches": return ctx.db.query("voucherBatches").withIndex("by_business_and_created", q => q.eq("businessId", businessId)).paginate(opts);
     case "entries": return ctx.db.query("entries").withIndex("by_business_and_date", q => q.eq("businessId", businessId)).paginate(opts);
     case "operationalRecords": return ctx.db.query("operationalRecords").withIndex("by_business_and_kind_and_date", q => q.eq("businessId", businessId)).paginate(opts);
     case "accountBalances": return ctx.db.query("accountBalances").withIndex("by_business_and_account", q => q.eq("businessId", businessId)).paginate(opts);

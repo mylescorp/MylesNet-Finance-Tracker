@@ -26,15 +26,27 @@ describe("voucher batches", () => {
     await expect(owner.mutation(api.vouchers.recordEvent, { businessId, batchId, eventType: "redemption", sourceReference: "sale-100", quantity: 3, reason: "Counter sale" })).resolves.toEqual({ duplicate: false });
     await expect(owner.mutation(api.vouchers.recordEvent, { businessId, batchId, eventType: "redemption", sourceReference: "sale-100", quantity: 3, reason: "Retry" })).resolves.toEqual({ duplicate: true });
     await owner.mutation(api.vouchers.recordEvent, { businessId, batchId, eventType: "void_stock", sourceReference: "void-1", quantity: 2, reason: "Damaged vouchers" });
-    const rows = await owner.query(api.vouchers.list, { businessId });
-    expect(rows[0]).toMatchObject({ _id: batchId, issuedQuantity: 12, redeemedQuantity: 3, voidedQuantity: 2 });
+    const rows = await owner.query(api.vouchers.list, { businessId, currentTime: Date.now(), paginationOpts: { numItems: 20, cursor: null } });
+    expect(rows.page.find(row => row._id === batchId)).toMatchObject({ _id: batchId, issuedQuantity: 12, redeemedQuantity: 3, voidedQuantity: 2, unredeemedQuantity: 7, availableValueUgx: 35_000 });
     await expect(owner.mutation(api.vouchers.recordEvent, { businessId, batchId, eventType: "redemption", sourceReference: "sale-101", quantity: 8, reason: "Over available quantity" })).rejects.toThrow("not have enough");
-    await expect(t.withIdentity({ subject: deniedUserId }).query(api.vouchers.list, { businessId })).rejects.toThrow();
-    await expect(owner.query(api.vouchers.list, { businessId: foreignBusinessId })).rejects.toThrow();
+    const expiredBatchId = await owner.mutation(api.vouchers.createBatch, { businessId, name: "Expired batch", description: "Old stock", faceValueUgx: 1_000, issuedQuantity: 2, expiresOn: "2026-10-30" });
+    await expect(owner.mutation(api.vouchers.recordEvent, { businessId, batchId: expiredBatchId, eventType: "redemption", sourceReference: "expired-sale", quantity: 1, reason: "Must reject expired redemption" })).rejects.toThrow("has expired");
+    await owner.mutation(api.vouchers.recordEvent, { businessId, batchId: expiredBatchId, eventType: "void_stock", sourceReference: "expired-void", quantity: 1, reason: "Remove expired stock" });
+    const currentRows = await owner.query(api.vouchers.list, { businessId, currentTime: Date.now(), paginationOpts: { numItems: 20, cursor: null } });
+    await expect(t.withIdentity({ subject: deniedUserId }).query(api.vouchers.list, { businessId, currentTime: Date.now(), paginationOpts: { numItems: 20, cursor: null } })).rejects.toThrow();
+    await expect(owner.query(api.vouchers.list, { businessId: foreignBusinessId, currentTime: Date.now(), paginationOpts: { numItems: 20, cursor: null } })).rejects.toThrow();
+    const firstPage = await owner.query(api.vouchers.list, { businessId, currentTime: Date.now(), paginationOpts: { numItems: 1, cursor: null } });
+    expect(firstPage.isDone).toBe(false);
+    const secondPage = await owner.query(api.vouchers.list, { businessId, currentTime: Date.now(), paginationOpts: { numItems: 1, cursor: firstPage.continueCursor } });
+    expect(secondPage.isDone).toBe(true);
+    const expiredRow = currentRows.page.find(row => row._id === expiredBatchId);
+    expect(expiredRow).toMatchObject({ _id: expiredBatchId, expired: true, unredeemedQuantity: 1, expiredQuantity: 1, availableValueUgx: 0 });
+    const auditFilters = await owner.query(api.audits.filterOptions, {});
+    expect(auditFilters.access === "ready" && auditFilters.actions).toContain("voucher.redeemed");
     const counts = await t.run(async ctx => ({ events: await ctx.db.query("voucherEvents").collect(), entries: await ctx.db.query("entries").collect(), audits: await ctx.db.query("auditEvents").collect() }));
-    expect(counts.events).toHaveLength(2);
+    expect(counts.events).toHaveLength(3);
     expect(counts.entries).toHaveLength(0);
-    expect(counts.audits.filter(a => a.action.startsWith("voucher."))).toHaveLength(3);
+    expect(counts.audits.filter(a => a.action.startsWith("voucher."))).toHaveLength(5);
   });
 
   it("rejects fractional amounts and quantities", async () => {

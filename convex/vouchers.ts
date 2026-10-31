@@ -1,4 +1,5 @@
 import { getAuthUserId } from "@convex-dev/auth/server";
+import { paginationOptsValidator, paginationResultValidator } from "convex/server";
 import { ConvexError, v } from "convex/values";
 import { mutation, query } from "./_generated/server";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
@@ -32,15 +33,26 @@ function validateReason(value: string) {
   return reason;
 }
 
+function localDay(timestamp: number, timezone: string) {
+  return new Intl.DateTimeFormat("en-CA", { timeZone: timezone, year: "numeric", month: "2-digit", day: "2-digit" }).format(timestamp);
+}
+
 export const list = query({
-  args: { businessId: v.id("businesses") },
-  returns: v.array(v.object({
-    _id: v.id("voucherBatches"), name: v.string(), description: v.string(), faceValueUgx: v.number(), issuedQuantity: v.number(), redeemedQuantity: v.number(), voidedQuantity: v.number(), expiresOn: v.union(v.string(), v.null()), createdAt: v.number(),
+  args: { businessId: v.id("businesses"), paginationOpts: paginationOptsValidator, currentTime: v.number() },
+  returns: paginationResultValidator(v.object({
+    _id: v.id("voucherBatches"), name: v.string(), description: v.string(), faceValueUgx: v.number(), issuedQuantity: v.number(), redeemedQuantity: v.number(), voidedQuantity: v.number(), expiresOn: v.union(v.string(), v.null()), createdAt: v.number(), expired: v.boolean(), unredeemedQuantity: v.number(), remainingQuantity: v.number(), expiredQuantity: v.number(), availableValueUgx: v.number(),
   })),
   handler: async (ctx, args) => {
     const { business } = await authorize(ctx, args.businessId);
-    const batches = await ctx.db.query("voucherBatches").withIndex("by_business_and_created", q => q.eq("businessId", business._id)).order("desc").take(100);
-    return batches.map(({ _id, name, description, faceValueUgx, issuedQuantity, redeemedQuantity, voidedQuantity, expiresOn, createdAt }) => ({ _id, name, description, faceValueUgx, issuedQuantity, redeemedQuantity, voidedQuantity, expiresOn: expiresOn ?? null, createdAt }));
+    const page = await ctx.db.query("voucherBatches").withIndex("by_business_and_created", q => q.eq("businessId", business._id)).order("desc").paginate(args.paginationOpts);
+    const today = localDay(args.currentTime, business.timezone);
+    return { ...page, page: page.page.map(({ _id, name, description, faceValueUgx, issuedQuantity, redeemedQuantity, voidedQuantity, expiresOn, createdAt }) => {
+      const remainingQuantity = issuedQuantity - redeemedQuantity - voidedQuantity;
+      const expired = Boolean(expiresOn && expiresOn < today);
+      const expiredQuantity = expired ? remainingQuantity : 0;
+      const redeemableQuantity = expired ? 0 : remainingQuantity;
+      return { _id, name, description, faceValueUgx, issuedQuantity, redeemedQuantity, voidedQuantity, expiresOn: expiresOn ?? null, createdAt, expired, unredeemedQuantity: remainingQuantity, remainingQuantity: redeemableQuantity, expiredQuantity, availableValueUgx: redeemableQuantity * faceValueUgx };
+    }) };
   },
 });
 
@@ -80,7 +92,7 @@ export const recordEvent = mutation({
       return { duplicate: true };
     }
     if (args.eventType === "redemption") {
-      if (batch.expiresOn && batch.expiresOn < new Date().toISOString().slice(0, 10)) throw new ConvexError("This batch has expired and cannot be redeemed.");
+      if (batch.expiresOn && batch.expiresOn < localDay(Date.now(), business.timezone)) throw new ConvexError("This batch has expired and cannot be redeemed.");
       if (args.quantity > batch.issuedQuantity - batch.redeemedQuantity - batch.voidedQuantity) throw new ConvexError("The batch does not have enough unredeemed vouchers.");
     } else if (args.quantity > batch.issuedQuantity - batch.redeemedQuantity - batch.voidedQuantity) {
       throw new ConvexError("You cannot void more vouchers than remain available.");
