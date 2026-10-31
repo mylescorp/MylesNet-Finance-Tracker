@@ -136,7 +136,8 @@ export const overview = query({
       bills: v.array(v.object({ _id: v.id("bills"), name: v.string(), category: v.string(), amountUgx: v.number(), account: accountV, recurrence: v.union(v.literal("weekly"), v.literal("monthly"), v.literal("quarterly"), v.literal("yearly")), nextDueOn: v.string(), supplierName: v.union(v.string(), v.null()), reminderLeadDays: v.number(), scheduleAnchorDay: v.number(), scheduleEndOfMonth: v.boolean(), paused: v.boolean(), active: v.boolean() })),
       billsComplete: v.boolean(),
       billPayments: v.array(v.object({ _id: v.id("billPayments"), billName: v.string(), amountUgx: v.number(), account: v.optional(accountV), paidOn: v.string(), state: v.union(v.literal("posted"), v.literal("void")), voidReason: v.optional(v.string()), canReverse: v.boolean() })),
-      reconciliations: v.array(v.object({ _id: v.id("reconciliations"), account: accountV, asOfDate: v.string(), bookBalanceUgx: v.number(), countedBalanceUgx: v.number(), denominationCounts: v.optional(v.array(v.object({ denominationUgx: v.number(), quantity: v.number() }))), varianceUgx: v.number(), status: v.union(v.literal("matched"), v.literal("open"), v.literal("explained"), v.literal("closed"), v.literal("superseded")), reviewedByName: v.optional(v.string()), reviewedAt: v.optional(v.number()), reviewNote: v.optional(v.string()), note: v.string(), explanation: v.optional(v.string()), supersedesId: v.optional(v.id("reconciliations")) })),
+      reconciliations: v.array(v.object({ _id: v.id("reconciliations"), account: accountV, asOfDate: v.string(), bookBalanceUgx: v.number(), countedBalanceUgx: v.number(), denominationCounts: v.optional(v.array(v.object({ denominationUgx: v.number(), quantity: v.number() }))), varianceUgx: v.number(), status: v.union(v.literal("matched"), v.literal("open"), v.literal("explained"), v.literal("closed"), v.literal("superseded")), reviewedByName: v.optional(v.string()), reviewedAt: v.optional(v.number()), reviewNote: v.optional(v.string()), assignedReviewerId: v.optional(v.id("users")), assignedReviewerName: v.optional(v.string()), createdBy: v.id("users"), note: v.string(), explanation: v.optional(v.string()), supersedesId: v.optional(v.id("reconciliations")) })),
+      reconciliationReviewers: v.array(v.object({ userId: v.id("users"), name: v.string() })),
       partners: v.array(v.object({ _id: v.id("partners"), name: v.string(), ownershipBps: v.number(), active: v.boolean() })),
     }),
   ),
@@ -152,6 +153,7 @@ export const overview = query({
       hasPermission(ctx, current.membership, "reconcile.view"),
       hasPermission(ctx, current.membership, "partners.view"),
     ]);
+    const canResolveReconciliation = await hasPermission(ctx, current.membership, "reconcile.resolve");
     // A linked partner gets only the scoped statement, and the finance approver
     // role must enter its separate distribution-review screen.
     if (current.membership.partnerId || (canViewPartners && ![canViewMovements, canViewSavings, canViewLoans, canViewBills, canViewReconciliation].some(Boolean))) return { access: "restricted" as const };
@@ -202,7 +204,7 @@ export const overview = query({
       : accountFilter
       ? ctx.db.query("reconciliations").withIndex("by_business_and_account_and_date", q => q.eq("businessId", businessId).eq("account", accountFilter).gte("asOfDate", args.from).lt("asOfDate", args.toExclusive)).order("desc").take(100)
       : ctx.db.query("reconciliations").withIndex("by_business_and_date", q => q.eq("businessId", businessId).gte("asOfDate", args.from).lt("asOfDate", args.toExclusive)).order("desc").take(100);
-    const [movements, savings, savingsFlows, savingsSummaryFlows, loans, loanRepayments, bills, billPayments, reconciliations, partners] = await Promise.all([
+    const [movements, savings, savingsFlows, savingsSummaryFlows, loans, loanRepayments, bills, billPayments, reconciliations, partners, reconciliationMemberships] = await Promise.all([
       movementsRead,
       ctx.db.query("savingsHoldings").withIndex("by_business_and_active", q => q.eq("businessId", businessId).eq("active", true)).take(101),
       savingsFlowsRead,
@@ -213,7 +215,18 @@ export const overview = query({
       billPaymentsRead,
       reconciliationsRead,
       ctx.db.query("partners").withIndex("by_business_and_active", q => q.eq("businessId", businessId).eq("active", true)).take(101),
+      canResolveReconciliation ? ctx.db.query("memberships").withIndex("by_business_and_user", q => q.eq("businessId", businessId)).take(101) : Promise.resolve([]),
     ]);
+    const reconciliationReviewers = await Promise.all(reconciliationMemberships.filter(row => row.active).map(async membership => {
+      if (!(await hasPermission(ctx, membership, "reconcile.resolve"))) return null;
+      const user = await ctx.db.get("users", membership.userId);
+      return { userId: membership.userId, name: user?.name?.trim() || user?.email || "Workspace reviewer" };
+    }));
+    const assignedReviewerUsers = await Promise.all([...new Set(reconciliations.map(row => row.assignedReviewerId).filter((id): id is NonNullable<typeof id> => id !== undefined))].map(async userId => {
+      const user = await ctx.db.get("users", userId);
+      return [userId, user?.name?.trim() || "Workspace reviewer"] as const;
+    }));
+    const reconciliationReviewerNames = new Map(assignedReviewerUsers);
     const businessToday = dayInZone(Date.now(), current.business.timezone);
     const currentPartnerShares = await Promise.all(partners.map(async partner => {
       const history = await ctx.db.query("partnerOwnershipHistory")
@@ -266,7 +279,8 @@ export const overview = query({
       bills: canViewBills ? bills.filter(row => !args.account || row.account === args.account).map(row => { const scheduleStart = row.scheduleStartDueOn ?? row.nextDueOn; const startDate = new Date(`${scheduleStart}T00:00:00.000Z`); const anchorDay = row.scheduleAnchorDay ?? startDate.getUTCDate(); const anchorMonthEnd = anchorDay === new Date(Date.UTC(startDate.getUTCFullYear(), startDate.getUTCMonth() + 1, 0)).getUTCDate(); return { _id: row._id, name: row.name, category: row.category, amountUgx: row.amountUgx, account: row.account, recurrence: row.recurrence, nextDueOn: row.nextDueOn, supplierName: row.supplierName ?? null, reminderLeadDays: row.reminderLeadDays ?? 3, scheduleAnchorDay: anchorDay, scheduleEndOfMonth: row.scheduleEndOfMonth ?? anchorMonthEnd, paused: row.paused ?? false, active: row.active }; }) : [],
       billsComplete: !canViewBills || bills.length <= 100,
       billPayments: canViewBills ? billPayments.filter(row => !args.account || row.account === args.account).map(row => { const bill = billById.get(row.billId); return { _id: row._id, billName: bill?.name ?? "Inactive bill", amountUgx: row.amountUgx, account: row.account, paidOn: row.paidOn, state: row.state ?? "posted", voidReason: row.voidReason, canReverse: row.state !== "void" && !!row.priorNextDueOn && !!row.nextDueOnAfter && row.priorScheduleStartDueOn !== undefined && row.priorScheduleAnchorDay !== undefined && row.priorScheduleEndOfMonth !== undefined && row.nextScheduleStartDueOn !== undefined && row.nextScheduleAnchorDay !== undefined && row.nextScheduleEndOfMonth !== undefined && bill?.nextDueOn === row.nextDueOnAfter && bill.scheduleStartDueOn === row.nextScheduleStartDueOn && bill.scheduleAnchorDay === row.nextScheduleAnchorDay && bill.scheduleEndOfMonth === row.nextScheduleEndOfMonth }; }) : [],
-      reconciliations: canViewReconciliation ? reconciliations.filter(row => !args.account || row.account === args.account).map(row => ({ _id: row._id, account: row.account, asOfDate: row.asOfDate, bookBalanceUgx: row.bookBalanceUgx, countedBalanceUgx: row.countedBalanceUgx, denominationCounts: row.denominationCounts, varianceUgx: row.varianceUgx, status: row.status, reviewedByName: row.reviewedByName, reviewedAt: row.reviewedAt, reviewNote: row.reviewNote, note: row.note, explanation: row.explanation, supersedesId: row.supersedesId })) : [],
+      reconciliations: canViewReconciliation ? reconciliations.filter(row => !args.account || row.account === args.account).map(row => ({ _id: row._id, account: row.account, asOfDate: row.asOfDate, bookBalanceUgx: row.bookBalanceUgx, countedBalanceUgx: row.countedBalanceUgx, denominationCounts: row.denominationCounts, varianceUgx: row.varianceUgx, status: row.status, reviewedByName: row.reviewedByName, reviewedAt: row.reviewedAt, reviewNote: row.reviewNote, assignedReviewerId: row.assignedReviewerId, assignedReviewerName: row.assignedReviewerId ? reconciliationReviewerNames.get(row.assignedReviewerId) : undefined, createdBy: row.createdBy, note: row.note, explanation: row.explanation, supersedesId: row.supersedesId })) : [],
+      reconciliationReviewers: canResolveReconciliation ? reconciliationReviewers.filter((row): row is NonNullable<typeof row> => row !== null) : [],
       partners: canViewPartners ? currentPartnerShares.map(row => ({ _id: row._id, name: row.name, ownershipBps: row.ownershipBps, active: row.active })) : [],
     };
   },
@@ -1029,9 +1043,33 @@ export const explainReconciliation = mutation({
     if (explanation.length < 5 || explanation.length > 300) throw new Error("Explain the difference in 5 to 300 characters.");
     const row = await ctx.db.get("reconciliations", args.reconciliationId);
     if (!row || row.businessId !== current.business._id) throw new Error("Reconciliation not found.");
+    if (row.assignedReviewerId && row.assignedReviewerId !== current.userId) throw new Error("This reconciliation is assigned to another reviewer.");
     if (row.status !== "open") throw new Error("Only an open reconciliation difference can be explained.");
     await ctx.db.patch("reconciliations", row._id, { status: "explained", explanation, resolvedBy: current.userId, resolvedAt: Date.now() });
     await audit(ctx, current, "reconciliation.explained", "reconciliation", row._id, `Variance ${row.varianceUgx} explained: ${explanation}`);
+    return null;
+  },
+});
+
+export const assignReconciliationReviewer = mutation({
+  args: { businessId: v.id("businesses"), reconciliationId: v.id("reconciliations"), reviewerId: v.union(v.id("users"), v.null()) },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const current = await workspace(ctx, args.businessId);
+    if (!current || !(await hasPermission(ctx, current.membership, "reconcile.resolve"))) throw new Error("Your role cannot assign reconciliation reviewers.");
+    const row = await ctx.db.get("reconciliations", args.reconciliationId);
+    if (!row || row.businessId !== current.business._id) throw new Error("Reconciliation not found.");
+    if (row.status === "closed" || row.status === "superseded") throw new Error("Only an open reconciliation can change its reviewer.");
+    if (args.reviewerId) {
+      if (args.reviewerId === row.createdBy) throw new Error("Assign this count to a reviewer other than the member who recorded it.");
+      const membership = await ctx.db.query("memberships").withIndex("by_business_and_user", q => q.eq("businessId", current.business._id).eq("userId", args.reviewerId!)).unique();
+      if (!membership?.active || !(await hasPermission(ctx, membership, "reconcile.resolve"))) throw new Error("Choose an active workspace member with reconciliation review permission.");
+    }
+    if (row.assignedReviewerId === (args.reviewerId ?? undefined)) return null;
+    await ctx.db.patch(row._id, { assignedReviewerId: args.reviewerId ?? undefined });
+    const reviewer = args.reviewerId ? await ctx.db.get("users", args.reviewerId) : null;
+    const reviewerName = reviewer?.name?.trim() || reviewer?.email || "Workspace reviewer";
+    await audit(ctx, current, "reconciliation.reviewer_assigned", "reconciliation", row._id, args.reviewerId ? `Assigned reconciliation review to ${reviewerName}.` : "Removed the reconciliation reviewer assignment.", JSON.stringify({ previousReviewerId: row.assignedReviewerId ?? null, reviewerId: args.reviewerId }));
     return null;
   },
 });
@@ -1046,6 +1084,8 @@ export const signOffReconciliation = mutation({
     if (reviewNote.length < 3 || reviewNote.length > 300) throw new Error("Add a review note of 3 to 300 characters.");
     const row = await ctx.db.get("reconciliations", args.reconciliationId);
     if (!row || row.businessId !== current.business._id) throw new Error("Reconciliation not found.");
+    if (row.createdBy === current.userId) throw new Error("A different authorized reviewer must sign off the member who recorded this count.");
+    if (row.assignedReviewerId && row.assignedReviewerId !== current.userId) throw new Error("This reconciliation is assigned to another reviewer.");
     if (row.status !== "matched" && row.status !== "explained") throw new Error("Only a matched count or an explained difference can be signed off.");
     const user = await ctx.db.get("users", current.userId);
     const reviewedByName = user?.name?.trim() || "Workspace reviewer";
