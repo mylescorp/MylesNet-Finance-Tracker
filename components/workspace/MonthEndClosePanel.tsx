@@ -34,6 +34,10 @@ type Snapshot = {
   categoryBudgets: Array<{ category: string; limitUgx: number; warningAtPercent: number; actualUgx: number }>;
 };
 
+function isPrintableSnapshot(snapshot: Snapshot | null): snapshot is Snapshot {
+  return Boolean(snapshot && snapshot.complete && Number.isSafeInteger(snapshot.excludedVoidEntryCount) && Array.isArray(snapshot.movementsByAccount) && Array.isArray(snapshot.checklist));
+}
+
 export function MonthEndClosePanel({ businessId, today, currency, scale, locale }: { businessId: Id<"businesses">; today: string; currency: string; scale: number; locale: string }) {
   const [month, setMonth] = useState(() => monthFor(1, today));
   const [feedback, setFeedback] = useState("");
@@ -74,6 +78,7 @@ export function MonthEndClosePanel({ businessId, today, currency, scale, locale 
     catch { return null; }
   }, [data]);
   const displaySnapshot = data?.access === "ready" && data.closure && data.closure.status !== "reopened" ? savedSnapshot : data?.access === "ready" ? data.snapshot : null;
+  const printableSnapshot = isPrintableSnapshot(displaySnapshot);
   const maxMonth = monthFor(1, today);
   const canPrepare = data?.access === "ready" && data.canClose && data.snapshot.ready && data.closure?.status !== "closed";
   function printStatement() {
@@ -82,7 +87,7 @@ export function MonthEndClosePanel({ businessId, today, currency, scale, locale 
 
   return <>
   <div className="month-end-close-panel">
-    <div className="card-heading"><div><h2 className="card-title">Month-end close</h2><p className="card-subtitle">A reviewer-approved snapshot of posted cashbook totals and the matching category-budget actuals. This closes the report period; it does not lock new ledger entries.</p></div>{data?.access === "ready" && data.closure?.status === "closed" && displaySnapshot?.complete && <button className="button no-print" type="button" onClick={printStatement}>Print / Save PDF statement</button>}</div>
+    <div className="card-heading"><div><h2 className="card-title">Month-end close</h2><p className="card-subtitle">A reviewer-approved snapshot of posted cashbook totals and the matching category-budget actuals. This closes the report period; it does not lock new ledger entries.</p></div>{data?.access === "ready" && data.closure?.status === "closed" && printableSnapshot && <button className="button no-print" type="button" onClick={printStatement}>Print / Save PDF statement</button>}</div>
     <div className="form-actions"><label className="field"><span>Calendar month</span><input type="month" value={month} max={maxMonth} onChange={event => setMonth(event.target.value)} /></label><span className="muted-note">{period.periodFrom} to {period.periodToExclusive} (exclusive)</span></div>
     {!validMonth ? <p className="muted-note">Choose a calendar month to review its close checklist.</p>
       : data === undefined ? <p className="muted-note">Loading close checklist…</p>
@@ -97,6 +102,7 @@ export function MonthEndClosePanel({ businessId, today, currency, scale, locale 
           {displaySnapshot?.categoryBudgets.length ? <div className="table-scroll"><table className="data-table"><thead><tr><th>Budget category</th><th>Monthly limit</th><th>Posted actual</th><th>Remaining</th></tr></thead><tbody>{displaySnapshot.categoryBudgets.map(row => <tr key={row.category}><td>{row.category}</td><td>{money(row.limitUgx)}</td><td>{money(row.actualUgx)}</td><td>{money(row.limitUgx - row.actualUgx)}</td></tr>)}</tbody></table></div> : <p className="muted-note">No active category budgets are configured for this workspace.</p>}
           <div className="settings-facts">{data.snapshot.checklist.map(item => <div key={item.key}><span><span className={`status-chip ${item.ready ? "status-ok" : "status-warning"}`}>{item.ready ? "Ready" : "Action needed"}</span> {item.label}</span><small>{item.detail}</small></div>)}</div>
           {data.closure && <div className="notice-banner notice-info">{data.closure.status === "closed" ? `Closed by ${data.closure.reviewedByName ?? "reviewer"} on ${new Date(data.closure.reviewedAt ?? 0).toLocaleString(locale)}.` : data.closure.status === "awaiting_review" ? `Prepared by ${data.closure.preparedByName}; waiting for a different authorized reviewer.` : `Reopened. Reason: ${data.closure.reopenReason ?? "Not recorded"}`}</div>}
+          {data.closure?.status === "closed" && !printableSnapshot && <p className="notice-banner notice-warning" role="status">This saved close uses an older statement format and cannot be printed. Its approved snapshot remains available in the close history.</p>}
           {data.closure?.status === "closed" && <div className="form-layout"><label className="field field-full"><span>Reason to reopen this closed period</span><textarea rows={2} minLength={5} maxLength={300} value={reopenReason} onChange={event => setReopenReason(event.target.value)} placeholder="Explain what must be corrected before another close review." /></label><div className="form-actions"><button className="button" type="button" disabled={busy || !data.canClose || reopenReason.trim().length < 5} onClick={() => void perform(() => reopen({ businessId, closureId: data.closure!._id, reason: reopenReason }), "Month reopened with an audit reason.")}>Reopen period</button></div></div>}
           {data.closure?.status === "awaiting_review" && <div className="form-actions"><button className="button button-accent" type="button" disabled={busy || !data.canApprove} onClick={() => void perform(() => approve({ businessId, closureId: data.closure!._id, expectedSnapshotJson: data.closure!.snapshotJson }), "Month-end close approved and recorded.")}>Approve prepared close</button><span className="muted-note">The approver must be a different member from the preparer.</span></div>}
           {canPrepare && <div className="form-actions"><button className="button button-accent" type="button" disabled={busy} onClick={() => void perform(() => prepare({ businessId, ...period }), data.closure?.status === "awaiting_review" ? "Close snapshot refreshed. A different authorized reviewer must approve it." : "Close snapshot prepared. A different authorized reviewer must approve it.")}>{data.closure?.status === "awaiting_review" ? "Refresh close snapshot" : "Prepare for review"}</button></div>}
@@ -105,7 +111,7 @@ export function MonthEndClosePanel({ businessId, today, currency, scale, locale 
         </>}
     {feedback && <p className="muted-note" role="status">{feedback}</p>}
   </div>
-  {printing && data?.access === "ready" && data.closure?.status === "closed" && displaySnapshot?.complete && createPortal(<article className="month-end-print-statement" aria-label="Approved month-end cashbook statement">
+  {printing && data?.access === "ready" && data.closure?.status === "closed" && printableSnapshot && createPortal(<article className="month-end-print-statement" aria-label="Approved month-end cashbook statement">
     <h1>Month-end cashbook statement</h1><p><strong>Period:</strong> {data.periodFrom} through {new Date(Date.parse(`${data.periodToExclusive}T00:00:00.000Z`) - 86_400_000).toISOString().slice(0, 10)} · <strong>Status:</strong> Approved</p>
     <p><strong>Prepared by:</strong> {data.closure.preparedByName} · {new Date(data.closure.preparedAt).toLocaleString(locale)}<br /><strong>Approved by:</strong> {data.closure.reviewedByName ?? "Reviewer"} · {new Date(data.closure.reviewedAt ?? 0).toLocaleString(locale)}</p>
     <h2>Recorded cashbook totals</h2><table><thead><tr><th>Sales</th><th>Posted expenses</th><th>Cashbook net</th></tr></thead><tbody><tr><td>{money(displaySnapshot.totals.salesUgx)}</td><td>{money(displaySnapshot.totals.expensesUgx)}</td><td>{money(displaySnapshot.totals.cashbookNetUgx)}</td></tr></tbody></table>

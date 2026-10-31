@@ -1160,8 +1160,16 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .app-frame,.app-sidebar,.sidebar-link,.sidebar-collapse-button { transition:none; }
   .sidebar-backdrop { animation:none; }
 }
+.month-end-print-statement { display:none; }
 @media print{
   body,html { background:#fff !important; color:#1B1B1B !important; }
+  body.printing-month-end-statement > *:not(.month-end-print-statement) { display:none !important; }
+  body.printing-month-end-statement > .month-end-print-statement { display:block !important; position:static; width:100%; margin:0; padding:24px; color:#111; background:#fff; }
+  .month-end-print-statement h1 { margin:0 0 12px; font-size:24px; }
+  .month-end-print-statement h2 { margin:20px 0 8px; font-size:16px; }
+  .month-end-print-statement table { width:100%; border-collapse:collapse; margin:8px 0 12px; }
+  .month-end-print-statement th,.month-end-print-statement td { padding:6px 8px; border:1px solid #999; text-align:left; }
+  .month-end-print-statement footer { margin-top:24px; padding-top:8px; border-top:1px solid #999; font-size:11px; }
   .app-header,.primary-nav,.app-footer,.no-print,.mobile-menu-button,.settings-links { display:none !important; }
   .page-content { max-width:none; padding:0; }
   .card { break-inside:avoid; box-shadow:none; }
