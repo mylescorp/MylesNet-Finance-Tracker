@@ -91,7 +91,7 @@ const specs: Record<string, BoardSpec> = {
       { title: "Money map", detail: "Follow recorded sales, mobile money, cash, partner flows, withdrawals, and payouts." },
       { title: "Movement ledger", detail: "Transfers do not count as income or expense. Each movement must have a date, source, destination, type, and amount.", kind: "table" },
       { title: "Record and review movements", detail: "Transfers, withdrawals, deposits, and partner capital contributions can be recorded with auditable reversals.", kind: "workflow" },
-      { title: "Withdrawal fees and cash reconciliation", detail: "Record an actual withdrawal fee with the movement. Cash counts, optional denomination breakdowns, and variance explanations are available in Reconcile; period sign-off is not implemented." },
+      { title: "Withdrawal fees and cash reconciliation", detail: "Record an actual withdrawal fee with the movement. Cash counts, optional denomination breakdowns, and variance explanations are available in Reconcile; approved month-end closes add a separate period sign-off and posting lock." },
       { title: "Money flow and unexplained balance", detail: "Compare account balances with sales, expenses, and recorded movements." },
     ],
   },
@@ -136,7 +136,7 @@ const specs: Record<string, BoardSpec> = {
       { title: "Profit and loss statement", detail: "Monthly sales, total expenses, and cashbook net from recorded entries in the selected period.", kind: "table" },
       { title: "Operating margin and equipment", detail: "Compare recorded operating costs and equipment spend by period.", kind: "chart" },
       { title: "Budget versus actual", detail: "Monthly category budgets and posted expense actuals are available in Expenses. The month-end close snapshot compares budget limits with actuals for the same month; multi-month budget comparisons remain unavailable." },
-      { title: "Month-end close and statement export", detail: "Prepare a full calendar-month cashbook snapshot after the close checklist passes, then have a different authorized reviewer approve it. Reopening requires an audited reason. The close is a statement control and does not block new ledger entries." },
+      { title: "Month-end close and statement export", detail: "Prepare a full calendar-month cashbook snapshot after the close checklist passes, then have a different authorized reviewer approve it. Approval locks financial changes dated in that month; an authorized reviewer must reopen it with an audited reason before edits or reversals." },
     ],
   },
   partners: {
@@ -166,10 +166,10 @@ const specs: Record<string, BoardSpec> = {
     metrics: ["Accounts", "Open issues", "Balance difference", "Tolerance", "Locked through"],
     sections: [
       { title: "Account reconciliation", detail: "Enter a counted balance for each account and inspect the variance.", kind: "table" },
-      { title: "Reconciliation checklist", detail: "Count cash, confirm mobile money, and explain or reopen variances. Period sign-off and locking are not implemented yet." },
+      { title: "Reconciliation checklist", detail: "Count cash, confirm mobile money, and explain or reopen variances. Month-end close adds a separate reviewer approval and locks financial changes dated in the approved month." },
       { title: "Checks and variance explanations", detail: "Every difference links to its source and must be resolved or explained.", kind: "table" },
       { title: "Centipid CSV auto-match", detail: "CSV import matching becomes available after the source format is documented.", kind: "workflow" },
-      { title: "Closing certificate", detail: "A printable record will include counted accounts, open issues, signer, and date." },
+      { title: "Closing certificate", detail: "The approved printable statement includes the period, cashbook totals and exclusions, account movements, reconciliation evidence, matching-period budgets, close checklist, preparer, and approver." },
     ],
   },
   issues: {
@@ -196,7 +196,7 @@ const specs: Record<string, BoardSpec> = {
     metrics: ["Partners", "Payout day", "Approval limit", "Weak-day threshold", "Monthly target"],
     sections: [
       { title: "Partners and profit shares", detail: "Ownership must total 100% before payouts can be approved.", kind: "table" },
-      { title: "Approval rules and period close", detail: "Finance Rules includes review thresholds and reporting targets. General transaction approvals and period locking are not implemented; partner distributions have their own approval flow.", kind: "workflow" },
+      { title: "Approval rules and period close", detail: "Finance Rules includes review thresholds and reporting targets. Period locking is managed in Month-end close; general transaction approvals are not configured, while partner distributions have their own approval flow.", kind: "workflow" },
       { title: "Targets and equipment", detail: "Set monthly sales, expense warning, payback, and weak-day targets.", kind: "workflow" },
       { title: "Alerts and reminders", detail: "In-app insights use saved thresholds. Automated bill and daily-report delivery reminders require a configured provider and are not active." },
     ],
