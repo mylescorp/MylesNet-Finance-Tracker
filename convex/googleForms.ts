@@ -68,6 +68,24 @@ export const history = query({
   },
 });
 
+function receiptCsvCell(value: string | number) {
+  const text = String(value);
+  const safe = typeof value === "string" && /^[\s\u0000-\u001f]*[=+@-]/.test(text) ? `'${text}` : text;
+  return `"${safe.replace(/"/g, '""')}"`;
+}
+
+export const exportHistory = query({
+  args: { businessId: v.id("businesses") },
+  returns: v.string(),
+  handler: async (ctx, args) => {
+    const { business } = await owner(ctx, args.businessId);
+    const rows = await ctx.db.query("googleFormReceipts").withIndex("by_business_and_created", q => q.eq("businessId", business._id)).order("desc").take(5000);
+    const headers = ["submission_type", "date", "amount_ugx", "status", "attempt_count", "created_at_utc", "last_attempt_at_utc", "summary"];
+    const data = rows.map(row => [row.submissionKind, row.occurredOn ?? "", row.amountUgx ?? "", row.status, row.attemptCount ?? 1, new Date(row.createdAt).toISOString(), new Date(row.lastAttemptAt ?? row.createdAt).toISOString(), row.summary]);
+    return [headers, ...data].map(row => row.map(receiptCsvCell).join(",")).join("\r\n");
+  },
+});
+
 type FormInput = { sourceKey: string; kind: Kind; occurredOn?: string; submittedByEmail?: string; fields: Record<string, string> };
 
 function parseInput(payload: string): FormInput | null {

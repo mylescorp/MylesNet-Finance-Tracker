@@ -75,6 +75,24 @@ export const history = query({
   },
 });
 
+function receiptCsvCell(value: string | number) {
+  const text = String(value);
+  const safe = typeof value === "string" && /^[\s\u0000-\u001f]*[=+@-]/.test(text) ? `'${text}` : text;
+  return `"${safe.replace(/"/g, '""')}"`;
+}
+
+export const exportHistory = query({
+  args: { businessId: v.id("businesses") },
+  returns: v.string(),
+  handler: async (ctx, args) => {
+    const { business } = await owner(ctx, args.businessId);
+    const rows = await ctx.db.query("webhookReceipts").withIndex("by_business_and_created", q => q.eq("businessId", business._id)).order("desc").take(5000);
+    const headers = ["event", "status", "routed_to", "attempt_count", "created_at_utc", "last_attempt_at_utc", "outcome", "cashbook_entry_id"];
+    const data = rows.map(row => [row.event, row.status, row.routed ?? "", row.attemptCount ?? 1, new Date(row.createdAt).toISOString(), new Date(row.lastAttemptAt ?? row.createdAt).toISOString(), row.errorMessage ?? (row.status === "ignored" ? "Event type is not posted to the cashbook." : row.entryId ? "Linked cashbook entry" : "Duplicate event reference"), row.entryId ?? ""]);
+    return [headers, ...data].map(row => row.map(receiptCsvCell).join(",")).join("\r\n");
+  },
+});
+
 export const recordFailure = internalMutation({
   args: { tokenHash: v.string(), eventKey: v.string(), rawHash: v.string(), event: v.string() },
   returns: v.null(),
