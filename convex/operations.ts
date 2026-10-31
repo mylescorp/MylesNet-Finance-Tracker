@@ -6,6 +6,8 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { hasPermission, permissionsForMembership } from "./accessControl";
 import { getSelectedWorkspace } from "./workspaceContext";
 import { getAuthUserId } from "@convex-dev/auth/server";
+import { normalizeCashDenominations } from "./reconciliationUtils";
+import { billForecast as buildBillForecast } from "../lib/bill-forecast";
 
 type Ctx = MutationCtx | QueryCtx;
 type Account = "cash" | "mobile_money";
@@ -78,16 +80,16 @@ async function applyAccountDelta(ctx: MutationCtx, businessId: Id<"businesses">,
 async function postExpense(ctx: MutationCtx, args: {
   businessId: Id<"businesses">; userId: Id<"users">; amountUgx: number; occurredOn: string;
   account: Account; category: string; note: string; idempotencyKey: string; action: string;
-  operationSource: "movement_fee" | "loan_interest" | "bill_payment"; operationKey: string;
+  operationSource: "movement_fee" | "loan_interest" | "bill_payment"; operationKey: string; supplierId?: Id<"suppliers">; supplierName?: string;
 }) {
   const previous = await ctx.db.query("entries").withIndex("by_business_and_idempotency", q => q.eq("businessId", args.businessId).eq("idempotencyKey", args.idempotencyKey)).unique();
   if (previous) {
-    assertSameRequest(previous.kind === "expense" && previous.amountUgx === args.amountUgx && previous.occurredOn === args.occurredOn && previous.account === args.account && previous.category === args.category && previous.note === args.note && previous.state === "posted" && previous.operationSource === args.operationSource && previous.operationKey === args.operationKey);
+    assertSameRequest(previous.kind === "expense" && previous.amountUgx === args.amountUgx && previous.occurredOn === args.occurredOn && previous.account === args.account && previous.category === args.category && previous.note === args.note && previous.state === "posted" && previous.operationSource === args.operationSource && previous.operationKey === args.operationKey && previous.supplierId === args.supplierId && previous.supplierName === args.supplierName);
     return previous._id;
   }
   const entryId = await ctx.db.insert("entries", {
     businessId: args.businessId, kind: "expense", amountUgx: args.amountUgx, occurredOn: args.occurredOn,
-    account: args.account, category: args.category, note: args.note, source: "manual", idempotencyKey: args.idempotencyKey,
+    account: args.account, category: args.category, note: args.note, supplierId: args.supplierId, supplierName: args.supplierName, source: "manual", idempotencyKey: args.idempotencyKey,
     state: "posted", operationSource: args.operationSource, operationKey: args.operationKey, createdBy: args.userId, createdAt: Date.now(),
   });
   const day = await ctx.db.query("dailyTotals").withIndex("by_business_and_day", q => q.eq("businessId", args.businessId).eq("day", args.occurredOn)).unique();
@@ -131,9 +133,10 @@ export const overview = query({
       savingsFlows: v.array(v.object({ _id: v.id("savingsFlows"), holdingName: v.string(), kind: v.union(v.literal("contribution"), v.literal("withdrawal")), amountUgx: v.number(), account: accountV, occurredOn: v.string(), note: v.string(), state: v.union(v.literal("posted"), v.literal("void")), voidReason: v.optional(v.string()), canReverse: v.boolean() })),
       loans: v.array(v.object({ _id: v.id("loans"), lender: v.string(), principalUgx: v.number(), outstandingPrincipalUgx: v.number(), annualRateBps: v.number(), termMonths: v.number(), startedOn: v.string(), account: accountV, status: v.union(v.literal("active"), v.literal("paid_off")) })),
       loanRepayments: v.array(v.object({ _id: v.id("loanRepayments"), lender: v.string(), amountUgx: v.number(), principalUgx: v.number(), interestUgx: v.number(), account: accountV, paidOn: v.string(), state: v.union(v.literal("posted"), v.literal("void")), voidReason: v.optional(v.string()) })),
-      bills: v.array(v.object({ _id: v.id("bills"), name: v.string(), category: v.string(), amountUgx: v.number(), account: accountV, recurrence: v.union(v.literal("weekly"), v.literal("monthly"), v.literal("quarterly"), v.literal("yearly")), nextDueOn: v.string(), active: v.boolean() })),
+      bills: v.array(v.object({ _id: v.id("bills"), name: v.string(), category: v.string(), amountUgx: v.number(), account: accountV, recurrence: v.union(v.literal("weekly"), v.literal("monthly"), v.literal("quarterly"), v.literal("yearly")), nextDueOn: v.string(), supplierName: v.union(v.string(), v.null()), reminderLeadDays: v.number(), scheduleAnchorDay: v.number(), scheduleEndOfMonth: v.boolean(), paused: v.boolean(), active: v.boolean() })),
+      billsComplete: v.boolean(),
       billPayments: v.array(v.object({ _id: v.id("billPayments"), billName: v.string(), amountUgx: v.number(), account: v.optional(accountV), paidOn: v.string(), state: v.union(v.literal("posted"), v.literal("void")), voidReason: v.optional(v.string()), canReverse: v.boolean() })),
-      reconciliations: v.array(v.object({ _id: v.id("reconciliations"), account: accountV, asOfDate: v.string(), bookBalanceUgx: v.number(), countedBalanceUgx: v.number(), varianceUgx: v.number(), status: v.union(v.literal("matched"), v.literal("open"), v.literal("explained"), v.literal("superseded")), note: v.string(), explanation: v.optional(v.string()), supersedesId: v.optional(v.id("reconciliations")) })),
+      reconciliations: v.array(v.object({ _id: v.id("reconciliations"), account: accountV, asOfDate: v.string(), bookBalanceUgx: v.number(), countedBalanceUgx: v.number(), denominationCounts: v.optional(v.array(v.object({ denominationUgx: v.number(), quantity: v.number() }))), varianceUgx: v.number(), status: v.union(v.literal("matched"), v.literal("open"), v.literal("explained"), v.literal("closed"), v.literal("superseded")), reviewedByName: v.optional(v.string()), reviewedAt: v.optional(v.number()), reviewNote: v.optional(v.string()), note: v.string(), explanation: v.optional(v.string()), supersedesId: v.optional(v.id("reconciliations")) })),
       partners: v.array(v.object({ _id: v.id("partners"), name: v.string(), ownershipBps: v.number(), active: v.boolean() })),
     }),
   ),
@@ -241,7 +244,7 @@ export const overview = query({
     const gainLossUgx = safeAdd(valuationMarketValueUgx, -valuationCostBasisUgx, "Savings valuation gain or loss");
     const latestValuationOn = valuedHoldings.map(row => row.valuationOn).filter((date): date is string => date !== undefined).sort().at(-1) ?? null;
     let allocationPosition = 0;
-    const savingsWithMetrics = savings.map((row, index) => {
+    const savingsWithMetrics = savings.map(row => {
       const allocationPercent = allocationTotalUgx > 0 ? row.balanceUgx / allocationTotalUgx * 100 : 0;
       const allocationStartPercent = allocationPosition;
       allocationPosition += allocationPercent;
@@ -260,11 +263,35 @@ export const overview = query({
       savingsFlows: canViewSavings ? savingsFlows.filter(row => !args.account || row.account === args.account).map(row => { const holding = holdingById.get(row.holdingId); return { _id: row._id, holdingName: holding?.name ?? "Inactive holding", kind: row.kind, amountUgx: row.amountUgx, account: row.account, occurredOn: row.occurredOn, note: row.note, state: row.state ?? "posted", voidReason: row.voidReason, canReverse: holding?.active === true }; }) : [],
       loans: canViewLoans ? loans.filter(row => !args.account || row.account === args.account).map(row => ({ _id: row._id, lender: row.lender, principalUgx: row.principalUgx, outstandingPrincipalUgx: row.outstandingPrincipalUgx, annualRateBps: row.annualRateBps, termMonths: row.termMonths, startedOn: row.startedOn, account: row.account, status: row.status })) : [],
       loanRepayments: canViewLoans ? loanRepayments.filter(row => !args.account || row.account === args.account).map(row => ({ _id: row._id, lender: loanById.get(row.loanId) ?? "Loan", amountUgx: row.amountUgx, principalUgx: row.principalUgx, interestUgx: row.interestUgx, account: row.account, paidOn: row.paidOn, state: row.state ?? "posted", voidReason: row.voidReason })) : [],
-      bills: canViewBills ? bills.filter(row => !args.account || row.account === args.account).map(row => ({ _id: row._id, name: row.name, category: row.category, amountUgx: row.amountUgx, account: row.account, recurrence: row.recurrence, nextDueOn: row.nextDueOn, active: row.active })) : [],
+      bills: canViewBills ? bills.filter(row => !args.account || row.account === args.account).map(row => { const scheduleStart = row.scheduleStartDueOn ?? row.nextDueOn; const startDate = new Date(`${scheduleStart}T00:00:00.000Z`); const anchorDay = row.scheduleAnchorDay ?? startDate.getUTCDate(); const anchorMonthEnd = anchorDay === new Date(Date.UTC(startDate.getUTCFullYear(), startDate.getUTCMonth() + 1, 0)).getUTCDate(); return { _id: row._id, name: row.name, category: row.category, amountUgx: row.amountUgx, account: row.account, recurrence: row.recurrence, nextDueOn: row.nextDueOn, supplierName: row.supplierName ?? null, reminderLeadDays: row.reminderLeadDays ?? 3, scheduleAnchorDay: anchorDay, scheduleEndOfMonth: row.scheduleEndOfMonth ?? anchorMonthEnd, paused: row.paused ?? false, active: row.active }; }) : [],
+      billsComplete: !canViewBills || bills.length <= 100,
       billPayments: canViewBills ? billPayments.filter(row => !args.account || row.account === args.account).map(row => { const bill = billById.get(row.billId); return { _id: row._id, billName: bill?.name ?? "Inactive bill", amountUgx: row.amountUgx, account: row.account, paidOn: row.paidOn, state: row.state ?? "posted", voidReason: row.voidReason, canReverse: row.state !== "void" && !!row.priorNextDueOn && !!row.nextDueOnAfter && row.priorScheduleStartDueOn !== undefined && row.priorScheduleAnchorDay !== undefined && row.priorScheduleEndOfMonth !== undefined && row.nextScheduleStartDueOn !== undefined && row.nextScheduleAnchorDay !== undefined && row.nextScheduleEndOfMonth !== undefined && bill?.nextDueOn === row.nextDueOnAfter && bill.scheduleStartDueOn === row.nextScheduleStartDueOn && bill.scheduleAnchorDay === row.nextScheduleAnchorDay && bill.scheduleEndOfMonth === row.nextScheduleEndOfMonth }; }) : [],
-      reconciliations: canViewReconciliation ? reconciliations.filter(row => !args.account || row.account === args.account).map(row => ({ _id: row._id, account: row.account, asOfDate: row.asOfDate, bookBalanceUgx: row.bookBalanceUgx, countedBalanceUgx: row.countedBalanceUgx, varianceUgx: row.varianceUgx, status: row.status, note: row.note, explanation: row.explanation, supersedesId: row.supersedesId })) : [],
+      reconciliations: canViewReconciliation ? reconciliations.filter(row => !args.account || row.account === args.account).map(row => ({ _id: row._id, account: row.account, asOfDate: row.asOfDate, bookBalanceUgx: row.bookBalanceUgx, countedBalanceUgx: row.countedBalanceUgx, denominationCounts: row.denominationCounts, varianceUgx: row.varianceUgx, status: row.status, reviewedByName: row.reviewedByName, reviewedAt: row.reviewedAt, reviewNote: row.reviewNote, note: row.note, explanation: row.explanation, supersedesId: row.supersedesId })) : [],
       partners: canViewPartners ? currentPartnerShares.map(row => ({ _id: row._id, name: row.name, ownershipBps: row.ownershipBps, active: row.active })) : [],
     };
+  },
+});
+
+export const forecastBills = query({
+  args: { businessId: v.id("businesses"), today: v.string(), account: v.optional(v.union(v.literal("cash"), v.literal("mobile_money"))) },
+  returns: v.union(v.object({ access: v.literal("restricted") }), v.object({ access: v.literal("ready"), complete: v.boolean(), forecasts: v.array(v.object({ billId: v.id("bills"), name: v.string(), category: v.string(), amountUgx: v.number(), supplierName: v.union(v.string(), v.null()), dueOn: v.string(), paused: v.boolean() })) })),
+  handler: async (ctx, args) => {
+    const current = await workspace(ctx, args.businessId);
+    if (!current || !(await hasPermission(ctx, current.membership, "bills.view"))) return { access: "restricted" as const };
+    const bills = args.account
+      ? await ctx.db.query("bills").withIndex("by_business_and_account_and_active_due", q => q.eq("businessId", current.business._id).eq("account", args.account!).eq("active", true)).take(101)
+      : await ctx.db.query("bills").withIndex("by_business_and_active_due", q => q.eq("businessId", current.business._id).eq("active", true)).take(101);
+    const today = /^\d{4}-\d{2}-\d{2}$/.test(args.today) && !Number.isNaN(Date.parse(`${args.today}T00:00:00.000Z`)) && new Date(`${args.today}T00:00:00.000Z`).toISOString().slice(0, 10) === args.today
+      ? args.today
+      : dayInZone(Date.now(), current.business.timezone);
+    const forecastInputs = bills.slice(0, 100).map(row => {
+      const start = row.scheduleStartDueOn ?? row.nextDueOn;
+      const date = new Date(`${start}T00:00:00.000Z`);
+      const anchor = row.scheduleAnchorDay ?? date.getUTCDate();
+      const anchorIsMonthEnd = anchor === new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 0)).getUTCDate();
+      return { _id: row._id, name: row.name, category: row.category, amountUgx: row.amountUgx, recurrence: row.recurrence, nextDueOn: row.nextDueOn, supplierName: row.supplierName ?? null, reminderLeadDays: row.reminderLeadDays ?? 3, scheduleAnchorDay: anchor, scheduleEndOfMonth: row.scheduleEndOfMonth ?? anchorIsMonthEnd, paused: row.paused ?? false, active: row.active };
+    });
+    return { access: "ready" as const, complete: bills.length <= 100, forecasts: buildBillForecast(forecastInputs, today).map(row => ({ ...row, billId: row.billId as Id<"bills"> })) };
   },
 });
 
@@ -347,6 +374,9 @@ export const partnerStatement = query({
     return {
       access: "ready" as const,
       partner: partner.name,
+      statementFrom: args.from,
+      statementToExclusive: args.toExclusive,
+      ownershipEffectiveOn: currentOwnership?.effectiveOn ?? dayInZone(partner._creationTime, current.business.timezone),
       ownershipBps: currentOwnership?.ownershipBps ?? partner.ownershipBps,
       currency: current.business.currency,
       currencyMinorDigits,
@@ -785,17 +815,19 @@ function nextOccurrence(day: string, recurrence: "weekly" | "monthly" | "quarter
 }
 
 export const createBill = mutation({
-  args: { businessId: v.id("businesses"), name: v.string(), category: v.string(), amountUgx: v.number(), account: accountV, recurrence: v.union(v.literal("weekly"), v.literal("monthly"), v.literal("quarterly"), v.literal("yearly")), nextDueOn: v.string(), idempotencyKey: v.string() },
+  args: { businessId: v.id("businesses"), name: v.string(), category: v.string(), amountUgx: v.number(), account: accountV, recurrence: v.union(v.literal("weekly"), v.literal("monthly"), v.literal("quarterly"), v.literal("yearly")), nextDueOn: v.string(), supplierId: v.optional(v.id("suppliers")), reminderLeadDays: v.optional(v.number()), idempotencyKey: v.string() },
   returns: v.id("bills"),
   handler: async (ctx, args) => {
     const current = await workspace(ctx, args.businessId);
     if (!current || !(await hasPermission(ctx, current.membership, "bills.create"))) throw new Error("Your role cannot configure recurring bills.");
     const name = args.name.trim();
     const category = args.category.trim();
-    if (name.length < 2 || name.length > 100 || category.length < 1 || category.length > 80 || !Number.isSafeInteger(args.amountUgx) || args.amountUgx <= 0 || !validDay(args.nextDueOn) || args.idempotencyKey.length < 16 || args.idempotencyKey.length > 120) throw new Error("Bill details are invalid.");
+    const reminderLeadDays = args.reminderLeadDays ?? 3;
+    const supplier = args.supplierId ? await ctx.db.get(args.supplierId) : null;
+    if (name.length < 2 || name.length > 100 || category.length < 1 || category.length > 80 || !Number.isSafeInteger(args.amountUgx) || args.amountUgx <= 0 || !validDay(args.nextDueOn) || !Number.isInteger(reminderLeadDays) || reminderLeadDays < 0 || reminderLeadDays > 30 || args.idempotencyKey.length < 16 || args.idempotencyKey.length > 120 || (args.supplierId && (!supplier || supplier.businessId !== current.business._id || !supplier.active))) throw new Error("Bill details are invalid or its supplier is unavailable.");
     const duplicate = await ctx.db.query("bills").withIndex("by_business_and_idempotency", q => q.eq("businessId", current.business._id).eq("idempotencyKey", args.idempotencyKey)).unique();
     if (duplicate) {
-      assertSameRequest(duplicate.name === name && duplicate.category === category && duplicate.amountUgx === args.amountUgx && duplicate.account === args.account && duplicate.recurrence === args.recurrence && (duplicate.scheduleStartDueOn ?? duplicate.nextDueOn) === args.nextDueOn);
+      assertSameRequest(duplicate.name === name && duplicate.category === category && duplicate.amountUgx === args.amountUgx && duplicate.account === args.account && duplicate.recurrence === args.recurrence && (duplicate.scheduleStartDueOn ?? duplicate.nextDueOn) === args.nextDueOn && duplicate.supplierId === args.supplierId && (duplicate.reminderLeadDays ?? 3) === reminderLeadDays);
       return duplicate._id;
     }
     const activeBills = await ctx.db.query("bills").withIndex("by_business_and_active_due", q => q.eq("businessId", current.business._id).eq("active", true)).take(100);
@@ -803,22 +835,30 @@ export const createBill = mutation({
     const startDate = new Date(`${args.nextDueOn}T00:00:00.000Z`);
     const anchorDay = startDate.getUTCDate();
     const endOfMonth = anchorDay === new Date(Date.UTC(startDate.getUTCFullYear(), startDate.getUTCMonth() + 1, 0)).getUTCDate();
-    const billId = await ctx.db.insert("bills", { businessId: current.business._id, name, category, amountUgx: args.amountUgx, account: args.account, recurrence: args.recurrence, nextDueOn: args.nextDueOn, scheduleStartDueOn: args.nextDueOn, scheduleAnchorDay: anchorDay, scheduleEndOfMonth: endOfMonth, active: true, idempotencyKey: args.idempotencyKey, createdBy: current.userId, createdAt: Date.now() });
+    const billId = await ctx.db.insert("bills", { businessId: current.business._id, name, category, amountUgx: args.amountUgx, account: args.account, recurrence: args.recurrence, nextDueOn: args.nextDueOn, supplierId: args.supplierId, supplierName: supplier?.name, reminderLeadDays, paused: false, scheduleStartDueOn: args.nextDueOn, scheduleAnchorDay: anchorDay, scheduleEndOfMonth: endOfMonth, active: true, idempotencyKey: args.idempotencyKey, createdBy: current.userId, createdAt: Date.now() });
     await audit(ctx, current, "bill.created", "bill", billId, `Configured ${name}; future payments are not booked automatically.`);
     return billId;
   },
 });
 
 export const updateBillSchedule = mutation({
-  args: { businessId: v.id("businesses"), billId: v.id("bills"), action: v.union(v.literal("edit"), v.literal("archive"), v.literal("restore")), expectedActive: v.boolean(), expectedNextDueOn: v.string(), name: v.string(), category: v.string(), amountUgx: v.number(), account: accountV, recurrence: v.union(v.literal("weekly"), v.literal("monthly"), v.literal("quarterly"), v.literal("yearly")), nextDueOn: v.string() },
+  args: { businessId: v.id("businesses"), billId: v.id("bills"), action: v.union(v.literal("edit"), v.literal("archive"), v.literal("restore"), v.literal("pause"), v.literal("resume")), expectedActive: v.boolean(), expectedNextDueOn: v.string(), name: v.string(), category: v.string(), amountUgx: v.number(), account: accountV, recurrence: v.union(v.literal("weekly"), v.literal("monthly"), v.literal("quarterly"), v.literal("yearly")), nextDueOn: v.string(), supplierId: v.optional(v.id("suppliers")), reminderLeadDays: v.optional(v.number()) },
   returns: v.null(),
   handler: async (ctx, args) => {
     const current = await workspace(ctx, args.businessId);
-    const permission = args.action === "edit" || args.action === "restore" ? "bills.update" : "bills.void";
+    const permission = ["edit", "restore", "pause", "resume"].includes(args.action) ? "bills.update" : "bills.void";
     if (!current || !(await hasPermission(ctx, current.membership, permission))) throw new Error("Your role cannot update or archive bill schedules.");
     const bill = await ctx.db.get("bills", args.billId);
     if (!bill || bill.businessId !== current.business._id) throw new Error("Bill schedule not found.");
     if (args.expectedActive !== bill.active || args.expectedNextDueOn !== bill.nextDueOn) throw new Error("This bill was updated in another session. Refresh the schedule before continuing.");
+    if (args.action === "pause" || args.action === "resume") {
+      if (!bill.active) throw new Error("Restore the archived schedule before changing its pause state.");
+      const paused = args.action === "pause";
+      if ((bill.paused ?? false) === paused) throw new Error(`This bill schedule is already ${paused ? "paused" : "active"}.`);
+      await ctx.db.patch(bill._id, { paused });
+      await ctx.db.insert("auditEvents", { businessId: current.business._id, actorId: current.userId, action: paused ? "bill.schedule_paused" : "bill.schedule_resumed", entityType: "bill", entityId: bill._id, occurredAt: Date.now(), summary: `${paused ? "Paused" : "Resumed"} bill schedule: ${bill.name}.` });
+      return null;
+    }
     if (args.action !== "edit") {
       const active = args.action === "restore";
       if (active === bill.active) throw new Error("This bill schedule already has that status. Refresh the page.");
@@ -833,16 +873,18 @@ export const updateBillSchedule = mutation({
     if (!bill.active) throw new Error("Restore this bill schedule before editing it.");
     const name = args.name.trim();
     const category = args.category.trim();
-    if (name.length < 2 || name.length > 100 || category.length < 1 || category.length > 80 || !Number.isSafeInteger(args.amountUgx) || args.amountUgx <= 0 || !validDay(args.nextDueOn)) throw new Error("Bill schedule details are invalid.");
+    const reminderLeadDays = args.reminderLeadDays ?? bill.reminderLeadDays ?? 3;
+    const supplier = args.supplierId ? await ctx.db.get(args.supplierId) : null;
+    if (name.length < 2 || name.length > 100 || category.length < 1 || category.length > 80 || !Number.isSafeInteger(args.amountUgx) || args.amountUgx <= 0 || !validDay(args.nextDueOn) || !Number.isInteger(reminderLeadDays) || reminderLeadDays < 0 || reminderLeadDays > 30 || (args.supplierId && (!supplier || supplier.businessId !== current.business._id || !supplier.active))) throw new Error("Bill schedule details are invalid or its supplier is unavailable.");
     const dateChanged = args.nextDueOn !== bill.nextDueOn;
     const startDate = new Date(`${args.nextDueOn}T00:00:00.000Z`);
     const anchorDate = new Date(`${bill.scheduleStartDueOn ?? bill.nextDueOn}T00:00:00.000Z`);
     const anchorDay = dateChanged ? startDate.getUTCDate() : bill.scheduleAnchorDay ?? anchorDate.getUTCDate();
     const anchorMonthEnd = new Date(Date.UTC(anchorDate.getUTCFullYear(), anchorDate.getUTCMonth() + 1, 0)).getUTCDate();
     const endOfMonth = dateChanged ? anchorDay === new Date(Date.UTC(startDate.getUTCFullYear(), startDate.getUTCMonth() + 1, 0)).getUTCDate() : bill.scheduleEndOfMonth ?? anchorDay === anchorMonthEnd;
-    const before = { name: bill.name, category: bill.category, amountUgx: bill.amountUgx, account: bill.account, recurrence: bill.recurrence, nextDueOn: bill.nextDueOn, active: bill.active };
-    const after = { name, category, amountUgx: args.amountUgx, account: args.account, recurrence: args.recurrence, nextDueOn: args.nextDueOn, active: true };
-    await ctx.db.patch("bills", bill._id, { ...after, scheduleStartDueOn: dateChanged ? args.nextDueOn : bill.scheduleStartDueOn ?? bill.nextDueOn, scheduleAnchorDay: anchorDay, scheduleEndOfMonth: endOfMonth });
+    const before = { name: bill.name, category: bill.category, amountUgx: bill.amountUgx, account: bill.account, recurrence: bill.recurrence, nextDueOn: bill.nextDueOn, supplierName: bill.supplierName, reminderLeadDays: bill.reminderLeadDays ?? 3, active: bill.active };
+    const after = { name, category, amountUgx: args.amountUgx, account: args.account, recurrence: args.recurrence, nextDueOn: args.nextDueOn, supplierName: supplier?.name ?? bill.supplierName, reminderLeadDays, active: true };
+    await ctx.db.patch("bills", bill._id, { ...after, scheduleStartDueOn: dateChanged ? args.nextDueOn : bill.scheduleStartDueOn ?? bill.nextDueOn, scheduleAnchorDay: anchorDay, scheduleEndOfMonth: endOfMonth, supplierId: args.supplierId ?? bill.supplierId, supplierName: supplier?.name ?? bill.supplierName, reminderLeadDays });
     await ctx.db.insert("auditEvents", { businessId: current.business._id, actorId: current.userId, action: "bill.schedule_updated", entityType: "bill", entityId: bill._id, occurredAt: Date.now(), summary: `Updated bill schedule: ${name}.`, details: JSON.stringify({ before, after }) });
     return null;
   },
@@ -867,7 +909,7 @@ export const recordBillPayment = mutation({
     if (!bill.active) throw new Error("This bill schedule is archived. Restore it before recording another payment.");
     await checkOutflow(ctx, current.business._id, args.account, -amountUgx, args.confirmNegativeBalance ?? false);
     await applyAccountDelta(ctx, current.business._id, args.account, -amountUgx);
-    const entryId = await postExpense(ctx, { businessId: current.business._id, userId: current.userId, amountUgx, occurredOn: args.paidOn, account: args.account, category: bill.category, note: `Bill payment: ${bill.name}`, idempotencyKey: `bill-expense:${args.idempotencyKey}`, action: "bill.payment_expense_recorded", operationSource: "bill_payment", operationKey: args.idempotencyKey });
+    const entryId = await postExpense(ctx, { businessId: current.business._id, userId: current.userId, amountUgx, occurredOn: args.paidOn, account: args.account, category: bill.category, note: `Bill payment: ${bill.name}`, idempotencyKey: `bill-expense:${args.idempotencyKey}`, action: "bill.payment_expense_recorded", operationSource: "bill_payment", operationKey: args.idempotencyKey, supplierId: bill.supplierId, supplierName: bill.supplierName });
     const scheduleStartDueOn = bill.scheduleStartDueOn ?? bill.nextDueOn;
     const startDate = new Date(`${scheduleStartDueOn}T00:00:00.000Z`);
     const scheduleAnchorDay = bill.scheduleAnchorDay ?? startDate.getUTCDate();
@@ -918,15 +960,16 @@ export const reverseBillPayment = mutation({
 });
 
 export const createReconciliation = mutation({
-  args: { businessId: v.id("businesses"), account: accountV, asOfDate: v.string(), countedBalanceUgx: v.number(), note: v.string(), idempotencyKey: v.string() },
+  args: { businessId: v.id("businesses"), account: accountV, asOfDate: v.string(), countedBalanceUgx: v.number(), denominationCounts: v.optional(v.array(v.object({ denominationUgx: v.number(), quantity: v.number() }))), note: v.string(), idempotencyKey: v.string() },
   returns: v.id("reconciliations"),
   handler: async (ctx, args) => {
     const current = await workspace(ctx, args.businessId);
     if (!current || !(await hasPermission(ctx, current.membership, "reconcile.create"))) throw new Error("Your role cannot record a reconciliation count.");
     if (!validDay(args.asOfDate) || !Number.isSafeInteger(args.countedBalanceUgx) || args.countedBalanceUgx < 0 || args.note.length > 300 || args.idempotencyKey.length < 16 || args.idempotencyKey.length > 120) throw new Error("Reconciliation details are invalid.");
+    const denominationCounts = normalizeCashDenominations(args.denominationCounts, args.account, args.countedBalanceUgx);
     const duplicate = await ctx.db.query("reconciliations").withIndex("by_business_and_idempotency", q => q.eq("businessId", current.business._id).eq("idempotencyKey", args.idempotencyKey)).unique();
     if (duplicate) {
-      assertSameRequest(duplicate.account === args.account && duplicate.asOfDate === args.asOfDate && duplicate.countedBalanceUgx === args.countedBalanceUgx && duplicate.note === args.note.trim());
+      assertSameRequest(duplicate.account === args.account && duplicate.asOfDate === args.asOfDate && duplicate.countedBalanceUgx === args.countedBalanceUgx && duplicate.note === args.note.trim() && JSON.stringify(duplicate.denominationCounts ?? []) === JSON.stringify(denominationCounts ?? []));
       return duplicate._id;
     }
     const today = new Intl.DateTimeFormat("en-CA", { timeZone: current.business.timezone, year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
@@ -935,14 +978,14 @@ export const createReconciliation = mutation({
     const bookBalanceUgx = account?.balanceUgx ?? 0;
     const varianceUgx = safeAdd(args.countedBalanceUgx, -bookBalanceUgx, "Reconciliation variance");
     const status = varianceUgx === 0 ? "matched" as const : "open" as const;
-    const reconciliationId = await ctx.db.insert("reconciliations", { businessId: current.business._id, account: args.account, asOfDate: args.asOfDate, bookBalanceUgx, countedBalanceUgx: args.countedBalanceUgx, varianceUgx, status, note: args.note.trim(), idempotencyKey: args.idempotencyKey, createdBy: current.userId, createdAt: Date.now() });
-    await audit(ctx, current, "reconciliation.recorded", "reconciliation", reconciliationId, `${args.account} count · book ${bookBalanceUgx} · count ${args.countedBalanceUgx} · variance ${varianceUgx}`);
+    const reconciliationId = await ctx.db.insert("reconciliations", { businessId: current.business._id, account: args.account, asOfDate: args.asOfDate, bookBalanceUgx, countedBalanceUgx: args.countedBalanceUgx, ...(denominationCounts ? { denominationCounts } : {}), varianceUgx, status, note: args.note.trim(), idempotencyKey: args.idempotencyKey, createdBy: current.userId, createdAt: Date.now() });
+    await audit(ctx, current, "reconciliation.recorded", "reconciliation", reconciliationId, `${args.account} count · book ${bookBalanceUgx} · count ${args.countedBalanceUgx} · variance ${varianceUgx}`, denominationCounts ? JSON.stringify({ denominationCounts }) : undefined);
     return reconciliationId;
   },
 });
 
 export const supersedeReconciliation = mutation({
-  args: { businessId: v.id("businesses"), reconciliationId: v.id("reconciliations"), countedBalanceUgx: v.number(), note: v.string(), idempotencyKey: v.string() },
+  args: { businessId: v.id("businesses"), reconciliationId: v.id("reconciliations"), countedBalanceUgx: v.number(), denominationCounts: v.optional(v.array(v.object({ denominationUgx: v.number(), quantity: v.number() }))), note: v.string(), idempotencyKey: v.string() },
   returns: v.id("reconciliations"),
   handler: async (ctx, args) => {
     const current = await workspace(ctx, args.businessId);
@@ -951,11 +994,13 @@ export const supersedeReconciliation = mutation({
     if (!Number.isSafeInteger(args.countedBalanceUgx) || args.countedBalanceUgx < 0 || note.length < 5 || note.length > 300 || args.idempotencyKey.length < 16 || args.idempotencyKey.length > 120) throw new Error("Enter a valid count and a correction reason of 5 to 300 characters.");
     const duplicate = await ctx.db.query("reconciliations").withIndex("by_business_and_idempotency", q => q.eq("businessId", current.business._id).eq("idempotencyKey", args.idempotencyKey)).unique();
     if (duplicate) {
-      assertSameRequest(duplicate.supersedesId === args.reconciliationId && duplicate.countedBalanceUgx === args.countedBalanceUgx && duplicate.note === note);
+      const denominationCounts = normalizeCashDenominations(args.denominationCounts, duplicate.account, args.countedBalanceUgx);
+      assertSameRequest(duplicate.supersedesId === args.reconciliationId && duplicate.countedBalanceUgx === args.countedBalanceUgx && duplicate.note === note && JSON.stringify(duplicate.denominationCounts ?? []) === JSON.stringify(denominationCounts ?? []));
       return duplicate._id;
     }
     const previous = await ctx.db.get("reconciliations", args.reconciliationId);
     if (!previous || previous.businessId !== current.business._id || previous.status === "superseded") throw new Error("This reconciliation is unavailable or already superseded.");
+    const denominationCounts = normalizeCashDenominations(args.denominationCounts, previous.account, args.countedBalanceUgx);
     const today = dayInZone(Date.now(), current.business.timezone);
     if (previous.asOfDate !== today) throw new Error("Only today's count can be corrected because the ledger does not reconstruct historical account balances.");
     const priorCorrection = await ctx.db.query("reconciliations").withIndex("by_business_and_supersedes", q => q.eq("businessId", current.business._id).eq("supersedesId", previous._id)).first();
@@ -965,12 +1010,12 @@ export const supersedeReconciliation = mutation({
     const now = Date.now();
     const reconciliationId = await ctx.db.insert("reconciliations", {
       businessId: current.business._id, account: previous.account, asOfDate: today, bookBalanceUgx,
-      countedBalanceUgx: args.countedBalanceUgx, varianceUgx, status: varianceUgx === 0 ? "matched" : "open",
+      countedBalanceUgx: args.countedBalanceUgx, ...(denominationCounts ? { denominationCounts } : {}), varianceUgx, status: varianceUgx === 0 ? "matched" : "open",
       note, supersedesId: previous._id, idempotencyKey: args.idempotencyKey, createdBy: current.userId, createdAt: now,
     });
     await ctx.db.patch("reconciliations", previous._id, { status: "superseded" });
     await audit(ctx, current, "reconciliation.superseded", "reconciliation", previous._id, `Count corrected by a superseding record: ${note}`, JSON.stringify({ replacementId: reconciliationId, priorCountedBalanceUgx: previous.countedBalanceUgx, correctedCountedBalanceUgx: args.countedBalanceUgx, previousStatus: previous.status }));
-    await audit(ctx, current, "reconciliation.correction_recorded", "reconciliation", reconciliationId, `${previous.account} count corrected · book ${bookBalanceUgx} · count ${args.countedBalanceUgx} · variance ${varianceUgx}`);
+    await audit(ctx, current, "reconciliation.correction_recorded", "reconciliation", reconciliationId, `${previous.account} count corrected · book ${bookBalanceUgx} · count ${args.countedBalanceUgx} · variance ${varianceUgx}`, denominationCounts ? JSON.stringify({ denominationCounts }) : undefined);
     return reconciliationId;
   },
 });
@@ -991,6 +1036,26 @@ export const explainReconciliation = mutation({
   },
 });
 
+export const signOffReconciliation = mutation({
+  args: { businessId: v.id("businesses"), reconciliationId: v.id("reconciliations"), reviewNote: v.string() },
+  returns: v.null(),
+  handler: async (ctx, args) => {
+    const current = await workspace(ctx, args.businessId);
+    if (!current || !(await hasPermission(ctx, current.membership, "reconcile.resolve"))) throw new Error("Your role cannot sign off reconciliation records.");
+    const reviewNote = args.reviewNote.trim();
+    if (reviewNote.length < 3 || reviewNote.length > 300) throw new Error("Add a review note of 3 to 300 characters.");
+    const row = await ctx.db.get("reconciliations", args.reconciliationId);
+    if (!row || row.businessId !== current.business._id) throw new Error("Reconciliation not found.");
+    if (row.status !== "matched" && row.status !== "explained") throw new Error("Only a matched count or an explained difference can be signed off.");
+    const user = await ctx.db.get("users", current.userId);
+    const reviewedByName = user?.name?.trim() || "Workspace reviewer";
+    const reviewedAt = Date.now();
+    await ctx.db.patch(row._id, { status: "closed", reviewedBy: current.userId, reviewedByName, reviewedAt, reviewNote });
+    await audit(ctx, current, "reconciliation.signed_off", "reconciliation", row._id, `${row.account} count signed off by ${reviewedByName}.`, JSON.stringify({ reviewNote, varianceUgx: row.varianceUgx, priorStatus: row.status }));
+    return null;
+  },
+});
+
 export const reopenReconciliation = mutation({
   args: { businessId: v.id("businesses"), reconciliationId: v.id("reconciliations"), reason: v.string() },
   returns: v.null(),
@@ -1001,9 +1066,10 @@ export const reopenReconciliation = mutation({
     if (reason.length < 5 || reason.length > 300) throw new Error("Explain why this reconciliation must be reopened in 5 to 300 characters.");
     const row = await ctx.db.get("reconciliations", args.reconciliationId);
     if (!row || row.businessId !== current.business._id) throw new Error("Reconciliation not found.");
-    if (row.status !== "explained") throw new Error("Only an explained difference can be reopened.");
-    await ctx.db.patch("reconciliations", row._id, { status: "open", explanation: undefined, resolvedBy: undefined, resolvedAt: undefined });
-    await audit(ctx, current, "reconciliation.reopened", "reconciliation", row._id, `Explained difference reopened: ${reason}`, JSON.stringify({ priorExplanation: row.explanation, reason }));
+    if (row.status !== "explained" && row.status !== "closed") throw new Error("Only an explained or closed reconciliation can be reopened.");
+    const wasClosed = row.status === "closed";
+    await ctx.db.patch("reconciliations", row._id, { status: row.varianceUgx === 0 ? "matched" : "open", explanation: undefined, resolvedBy: undefined, resolvedAt: undefined, ...(wasClosed ? { reviewedBy: undefined, reviewedByName: undefined, reviewedAt: undefined, reviewNote: undefined } : {}) });
+    await audit(ctx, current, "reconciliation.reopened", "reconciliation", row._id, `Reconciliation reopened: ${reason}`, JSON.stringify({ priorExplanation: row.explanation, priorReview: wasClosed ? { reviewedByName: row.reviewedByName, reviewedAt: row.reviewedAt, reviewNote: row.reviewNote } : undefined, reason }));
     return null;
   },
 });

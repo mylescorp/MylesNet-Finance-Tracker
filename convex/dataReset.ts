@@ -2,7 +2,7 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import { internal } from "./_generated/api";
 import { internalMutation, mutation, query } from "./_generated/server";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
-import type { Id } from "./_generated/dataModel";
+import type { Doc, Id } from "./_generated/dataModel";
 import { ConvexError, v } from "convex/values";
 
 const PHASES = [
@@ -10,6 +10,8 @@ const PHASES = [
   "partnerOwnershipHistory", "entries", "operationalRecords", "accountBalances",
   "balanceAdjustments", "dailyTotals", "movements", "savingsFlows", "savingsHoldings",
   "loanRepayments", "loans", "billPayments", "bills", "reconciliations", "issueReviews", "webhookReceipts", "importBatches",
+  // Append new phases to preserve numeric progress for a reset already in flight.
+  "expenseReceipts", "categoryBudgets", "suppliers", "monthEndCloseEvents", "monthEndClosures", "dailyActivityReviews", "expenseTemplates", "weakDayReviews",
 ] as const;
 type Phase = typeof PHASES[number];
 
@@ -79,6 +81,14 @@ async function pageFor(ctx: MutationCtx, phase: Phase, businessId: Id<"businesse
     case "partnerDistributionItems": return ctx.db.query("partnerDistributionItems").withIndex("by_business_and_distribution", q => q.eq("businessId", businessId)).paginate(opts);
     case "partnerDistributions": return ctx.db.query("partnerDistributions").withIndex("by_business_and_idempotency", q => q.eq("businessId", businessId)).paginate(opts);
     case "partnerOwnershipHistory": return ctx.db.query("partnerOwnershipHistory").withIndex("by_business_and_effectiveOn", q => q.eq("businessId", businessId)).paginate(opts);
+    case "expenseReceipts": return ctx.db.query("expenseReceipts").withIndex("by_business_and_created_at", q => q.eq("businessId", businessId)).paginate(opts);
+    case "categoryBudgets": return ctx.db.query("categoryBudgets").withIndex("by_business", q => q.eq("businessId", businessId)).paginate(opts);
+    case "suppliers": return ctx.db.query("suppliers").withIndex("by_business", q => q.eq("businessId", businessId)).paginate(opts);
+    case "monthEndCloseEvents": return ctx.db.query("monthEndCloseEvents").withIndex("by_business_and_time", q => q.eq("businessId", businessId)).paginate(opts);
+    case "monthEndClosures": return ctx.db.query("monthEndClosures").withIndex("by_business_and_period", q => q.eq("businessId", businessId)).paginate(opts);
+    case "dailyActivityReviews": return ctx.db.query("dailyActivityReviews").withIndex("by_business_and_day", q => q.eq("businessId", businessId)).paginate(opts);
+    case "expenseTemplates": return ctx.db.query("expenseTemplates").withIndex("by_business_and_due", q => q.eq("businessId", businessId)).paginate(opts);
+    case "weakDayReviews": return ctx.db.query("weakDayReviews").withIndex("by_business_and_day", q => q.eq("businessId", businessId)).paginate(opts);
     case "entries": return ctx.db.query("entries").withIndex("by_business_and_date", q => q.eq("businessId", businessId)).paginate(opts);
     case "operationalRecords": return ctx.db.query("operationalRecords").withIndex("by_business_and_kind_and_date", q => q.eq("businessId", businessId)).paginate(opts);
     case "accountBalances": return ctx.db.query("accountBalances").withIndex("by_business_and_account", q => q.eq("businessId", businessId)).paginate(opts);
@@ -141,7 +151,10 @@ export const runBatch = internalMutation({
     }
     if (!phase) throw new Error("Workspace reset phase is invalid.");
     const page = await pageFor(ctx, phase, job.businessId, job.cursor ?? null);
-    for (const row of page.page) await ctx.db.delete(row._id);
+    for (const row of page.page) {
+      if (phase === "expenseReceipts") await ctx.storage.delete((row as Doc<"expenseReceipts">).storageId);
+      await ctx.db.delete(row._id);
+    }
     deletedNow = page.page.length;
     const deletedRecords = job.deletedRecords + deletedNow;
     if (!page.isDone) {

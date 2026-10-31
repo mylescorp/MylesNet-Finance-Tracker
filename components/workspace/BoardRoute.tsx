@@ -2,7 +2,7 @@
 
 import { useConvex, useMutation, usePaginatedQuery, useQuery } from "convex/react";
 import { ConvexError } from "convex/values";
-import { ArrowDownRight, ArrowUpRight, Download, Plus, Printer, Share2, X } from "lucide-react";
+import { ArrowDownRight, ArrowUpRight, Download, Plus, Share2, X } from "lucide-react";
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { api } from "@/convex/_generated/api";
@@ -17,8 +17,14 @@ import { OperationalRecordForm } from "@/components/workspace/OperationalRecordF
 import { formatBusinessDay } from "@/lib/format";
 import type { DateFormat } from "@/lib/format";
 import { AnalyticsInsights } from "@/components/workspace/AnalyticsInsights";
+import { CategoryBudgetsPanel } from "@/components/workspace/CategoryBudgetsPanel";
+import { ExpenseReceiptsPanel } from "@/components/workspace/ExpenseReceiptsPanel";
+import { SupplierManager } from "@/components/workspace/SupplierManager";
+import { AttachExpenseReceipt } from "@/components/workspace/AttachExpenseReceipt";
 import { FinancePeriodFilters } from "@/components/workspace/FinancePeriodFilters";
 import { InteractiveFinanceChart } from "@/components/workspace/InteractiveFinanceChart";
+import { MonthEndClosePanel } from "@/components/workspace/MonthEndClosePanel";
+import { ExpenseTemplateManager } from "@/components/workspace/ExpenseTemplateManager";
 import { financePeriodRange, previousFinanceRange, validateFinanceCustomRange, type FinanceAccount, type FinancePeriod } from "@/lib/finance-period";
 
 type BoardSpec = {
@@ -41,9 +47,9 @@ const specs: Record<string, BoardSpec> = {
       { title: "Daily sales · last 14 days", detail: "Recorded entries by date, account, and amount. Estimated split is shown only when an imported estimate exists.", kind: "table" },
       { title: "Sales by income type", detail: "Category breakdown uses saved entries; no mock amounts are loaded.", kind: "chart" },
       { title: "Best days and weekday pattern", detail: "Strongest sales days are calculated from the selected period.", kind: "chart" },
-      { title: "Imports and data checks", detail: "Import history will be available after a source mapping and staging import are approved.", kind: "table" },
-      { title: "Weak-day diary and split corrections", detail: "Record the reason for an unusual day and correct estimated account splits with an audit trail.", kind: "workflow" },
-      { title: "Voucher batches and mobile entry", detail: "Voucher stock and mobile entry layouts are not populated until those record types are configured." },
+      { title: "Imports and data checks", detail: "Review imported batches, row counts, and reversals in Settings → Data. Imported entries retain their source and audit history." },
+      { title: "Weak-day review and entry corrections", detail: "Analytics flags low-sales days and keeps explanations with the selected report period. Correct a saved entry from the ledger to retain the original and record the reason; diary notes never change sales values." },
+      { title: "Voucher batches and mobile entry", detail: "Voucher redemptions can arrive through the Centipid integration. Voucher stock and issued-batch tracking are not implemented; record manual sales through the cashbook form." },
     ],
   },
   expenses: {
@@ -54,9 +60,10 @@ const specs: Record<string, BoardSpec> = {
       { title: "Expenses by category · year to date", detail: "Fiscal-year totals from posted entries, using the same account filter.", kind: "table" },
       { title: "Operating vs equipment", detail: "Equipment is identified only when an expense uses the configured Equipment category.", kind: "chart" },
       { title: "Alerts", detail: "Highlights are calculated from the selected period and visible expense categories." },
-      { title: "Category budgets", detail: "Category-specific monthly limits are not currently stored. Review the workspace-wide expense warning in Rules." },
-      { title: "Recurring costs", detail: "Recurring schedules are managed in Bills. Reminders do not create expenses until a payment is recorded." },
-      { title: "Supplier tracking", detail: "Expense entries do not currently store a supplier field." },
+      { title: "Category budgets", detail: "Set a monthly limit and review threshold for each saved expense category. Actuals are calculated from posted entries in the selected month." },
+      { title: "Receipts and evidence", detail: "Attach private receipt files when recording an expense, then review or remove them here. Supplier links and spend history are available in Supplier tracking." },
+      { title: "Recurring costs", detail: "Create expense reminders with cadence, due date, supplier, category, and account defaults. Reminders never post expenses automatically." },
+      { title: "Supplier tracking", detail: "Maintain workspace-scoped suppliers, link an expense and invoice reference, and review posted spend history. Line-item unit prices are not captured." },
       { title: "Recurring expense detector", detail: "Repeated category and amount combinations in the selected period are suggestions only." },
       { title: "Audit trail", detail: "Audited changes are available in Settings → Access for members with audit permission." },
     ],
@@ -83,8 +90,8 @@ const specs: Record<string, BoardSpec> = {
     sections: [
       { title: "Money map", detail: "Follow recorded sales, mobile money, cash, partner flows, withdrawals, and payouts." },
       { title: "Movement ledger", detail: "Transfers do not count as income or expense. Each movement must have a date, source, destination, type, and amount.", kind: "table" },
-      { title: "Movement tracking status", detail: "Transfer and withdrawal records are not available yet.", kind: "workflow" },
-      { title: "Withdrawal planner and cash count", detail: "Estimate the fee and net cash received, then compare a denomination count with the book balance." },
+      { title: "Record and review movements", detail: "Transfers, withdrawals, deposits, and partner capital contributions can be recorded with auditable reversals.", kind: "workflow" },
+      { title: "Withdrawal fees and cash reconciliation", detail: "Record an actual withdrawal fee with the movement. Cash counts, optional denomination breakdowns, and variance explanations are available in Reconcile; period sign-off is not implemented." },
       { title: "Money flow and unexplained balance", detail: "Compare account balances with sales, expenses, and recorded movements." },
     ],
   },
@@ -93,7 +100,7 @@ const specs: Record<string, BoardSpec> = {
     metrics: ["Current value", "Contributions", "Gain or loss", "Cash buffer", "Could set aside"],
     sections: [
       { title: "Holdings", detail: "No holdings are recorded yet. Add a holding to track its value and contributions.", kind: "table" },
-      { title: "Holdings tracking status", detail: "Savings holdings and contributions are not available yet.", kind: "workflow" },
+      { title: "Record and review savings activity", detail: "Track holdings and record contributions or withdrawals. Current values reflect saved holding and flow records.", kind: "workflow" },
       { title: "Savings goals and reserve target", detail: "Set a reserve target from monthly operating costs and review progress toward selected goals." },
       { title: "Set-aside planner", detail: "Compare 10%, 20%, and 30% of recorded monthly operating profit." },
       { title: "Allocation and returns", detail: "View the allocation when holdings exist and compare expected returns with equipment payback.", kind: "chart" },
@@ -104,7 +111,7 @@ const specs: Record<string, BoardSpec> = {
     metrics: ["Active loans", "Monthly payments", "Outstanding", "Debt capacity", "Equipment financing"],
     sections: [
       { title: "Loans", detail: "No loans are recorded. Add a loan to start a repayment schedule.", kind: "table" },
-      { title: "Loan tracking status", detail: "Loan records and repayments are not available yet.", kind: "workflow" },
+      { title: "Record and review loans", detail: "Record loans, repayments, and reversals. Scheduled payment figures are estimates until actual payments are recorded.", kind: "workflow" },
       { title: "Loan planner and affordability", detail: "Calculate monthly payment, total repayment, interest, and compare with recorded operating profit." },
       { title: "Repayment schedule", detail: "Scheduled principal and interest are estimates until actual payments are recorded.", kind: "table" },
       { title: "Early repayment and equipment impact", detail: "Compare interest saved and revised equipment payback from entered assumptions." },
@@ -128,8 +135,8 @@ const specs: Record<string, BoardSpec> = {
       { title: "Profit and loss by month", detail: "Monthly totals use saved cashbook entries. Missing source history is not filled with sample values.", kind: "table" },
       { title: "Profit and loss statement", detail: "Monthly sales, total expenses, and cashbook net from recorded entries in the selected period.", kind: "table" },
       { title: "Operating margin and equipment", detail: "Compare recorded operating costs and equipment spend by period.", kind: "chart" },
-      { title: "Budget versus actual", detail: "Budgets are read from Finance settings when configured." },
-      { title: "Month-end close and shareable statement", detail: "Close controls and share links require permissions and configured export delivery." },
+      { title: "Budget versus actual", detail: "Monthly category budgets and posted expense actuals are available in Expenses. The month-end close snapshot compares budget limits with actuals for the same month; multi-month budget comparisons remain unavailable." },
+      { title: "Month-end close and statement export", detail: "Prepare a full calendar-month cashbook snapshot after the close checklist passes, then have a different authorized reviewer approve it. Reopening requires an audited reason. The close is a statement control and does not block new ledger entries." },
     ],
   },
   partners: {
@@ -148,10 +155,10 @@ const specs: Record<string, BoardSpec> = {
     metrics: ["Bills tracked", "Due soon", "Next bill", "Monthly equivalent", "Paid YTD"],
     sections: [
       { title: "Bills and next 90 days", detail: "No recurring bills are configured. Add the next due date and recurrence to see upcoming obligations.", kind: "table" },
-      { title: "Bill tracking status", detail: "Recurring bill records and payment reminders are not available yet.", kind: "workflow" },
+      { title: "Record and review bills", detail: "Create recurring schedules, review due dates, and confirm payments. A confirmed payment records its expense; automatic external reminders are not configured." , kind: "workflow"},
       { title: "Margin impact and reminders", detail: "Accruals affect profit only when recorded as expenses; reminders do not book entries automatically." },
-      { title: "Supplier price history", detail: "Payment history appears after supplier-linked expenses exist.", kind: "chart" },
-      { title: "Calendar sync and accrual automation", detail: "Calendar delivery requires a configured provider. Bill payments must be confirmed before creating an expense." },
+      { title: "Supplier price history", detail: "Supplier-linked posted expense spend history is available in Expenses. Item-level price trends are unavailable because quantity and line-item detail are not recorded." },
+      { title: "Calendar sync and accrual automation", detail: "Calendar delivery is not configured. Bill schedules do not post expenses automatically; confirm a payment on Bills to create an expense entry." },
     ],
   },
   reconcile: {
@@ -159,7 +166,7 @@ const specs: Record<string, BoardSpec> = {
     metrics: ["Accounts", "Open issues", "Balance difference", "Tolerance", "Locked through"],
     sections: [
       { title: "Account reconciliation", detail: "Enter a counted balance for each account and inspect the variance.", kind: "table" },
-      { title: "Close checklist", detail: "Count cash, confirm mobile money, resolve checks, then request sign-off." },
+      { title: "Reconciliation checklist", detail: "Count cash, confirm mobile money, and explain or reopen variances. Period sign-off and locking are not implemented yet." },
       { title: "Checks and variance explanations", detail: "Every difference links to its source and must be resolved or explained.", kind: "table" },
       { title: "Centipid CSV auto-match", detail: "CSV import matching becomes available after the source format is documented.", kind: "workflow" },
       { title: "Closing certificate", detail: "A printable record will include counted accounts, open issues, signer, and date." },
@@ -177,10 +184,10 @@ const specs: Record<string, BoardSpec> = {
     title: "Finance settings", eyebrow: "Settings", description: "Configure accounts, income types, categories, and cashbook behavior.", source: "14 · Settings · Finance", settings: true,
     metrics: ["Accounts", "Income types", "Expense categories", "Movement types", "Currency"],
     sections: [
-      { title: "Accounts and opening balances", detail: "Configure cash, mobile money, and any additional account. Opening balances must be reconciled." , kind: "workflow"},
-      { title: "Income types and default account", detail: "Mark estimated mobile-money and cash splits as estimated until corrected.", kind: "table" },
+      { title: "Accounts and opening balances", detail: "The cashbook currently supports cash and mobile money. Set their opening balances before posting activity, then reconcile them against real funds.", kind: "workflow" },
+      { title: "Income types and default account", detail: "Manage the saved income categories used on entries. Imported analytics totals can remain unallocated when an account split is unknown.", kind: "table" },
       { title: "Expense categories", detail: "Classify operating costs separately from equipment purchases.", kind: "table" },
-      { title: "Movement types and category budgets", detail: "Movement ordering is fixed for reports; budgets include warning thresholds.", kind: "workflow" },
+      { title: "Movement types and expense warnings", detail: "Movement types are fixed. Rules can set a workspace-wide monthly expense warning; monthly category budgets are managed from Expenses.", kind: "workflow" },
       { title: "Bills setup", detail: "Recurring bill configuration is managed on the Bills screen." },
     ],
   },
@@ -189,9 +196,9 @@ const specs: Record<string, BoardSpec> = {
     metrics: ["Partners", "Payout day", "Approval limit", "Weak-day threshold", "Monthly target"],
     sections: [
       { title: "Partners and profit shares", detail: "Ownership must total 100% before payouts can be approved.", kind: "table" },
-      { title: "Period locking and approvals", detail: "Configure approval limits, fee handling, and locked-period behavior.", kind: "workflow" },
+      { title: "Approval rules and period close", detail: "Finance Rules includes review thresholds and reporting targets. General transaction approvals and period locking are not implemented; partner distributions have their own approval flow.", kind: "workflow" },
       { title: "Targets and equipment", detail: "Set monthly sales, expense warning, payback, and weak-day targets.", kind: "workflow" },
-      { title: "Alerts and reminders", detail: "Low-cash, bill, missing-day, and daily-report reminders require validated settings." },
+      { title: "Alerts and reminders", detail: "In-app insights use saved thresholds. Automated bill and daily-report delivery reminders require a configured provider and are not active." },
     ],
   },
   "settings/data": {
@@ -246,7 +253,11 @@ export function BoardRoute({ route }: { route: string }) {
   const [entryLimit, setEntryLimit] = useState(100);
   const [openRecordRoute, setOpenRecordRoute] = useState<string | null>(null);
   const recordFormOpen = openRecordRoute === route;
-  useEffect(() => setOpenRecordRoute(null), [route]);
+  useEffect(() => {
+    // Reset only the transient record drawer; preserve period filters when users switch boards.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setOpenRecordRoute(null);
+  }, [route]);
   const [shareFeedback, setShareFeedback] = useState("");
   const settings = useQuery(api.workspace.businessSettings, {});
   const access = useQuery(api.workspace.currentAccess, {});
@@ -273,6 +284,8 @@ export function BoardRoute({ route }: { route: string }) {
   const needsSummary = screen?.entryKind !== undefined || ["Analytics", "Daily Report", "Monthly P&L", "Movements"].includes(screen?.title ?? "");
   const needsDailyHistory = screen?.title === "Daily Report";
   const summary = useQuery(api.workspace.dashboardSummary, needsSummary && screen?.title !== "Expenses" && !financeRangeError ? { ...range, ...accountFilter } : "skip");
+  const todayRange = useMemo(() => financePeriodRange("daily", today, weekStartsOn, fiscalStartMonth, financeCustomFrom, financeCustomTo), [today, weekStartsOn, fiscalStartMonth, financeCustomFrom, financeCustomTo]);
+  const todaySummary = useQuery(api.workspace.dashboardSummary, ["Sales", "Daily Report"].includes(screen?.title ?? "") ? { ...todayRange, ...accountFilter } : "skip");
   const expensesSummary = useQuery(api.workspace.expensesSummary, screen?.title === "Expenses" && !financeRangeError ? { ...range, ...accountFilter, today } : "skip");
   const previousRange = useMemo(() => previousFinanceRange(analyticsRange), [analyticsRange]);
   const previousSummary = useQuery(api.workspace.dashboardSummary, screen?.title === "Analytics" && !financeRangeError ? { ...previousRange, ...accountFilter } : "skip");
@@ -299,6 +312,7 @@ export function BoardRoute({ route }: { route: string }) {
 
   const summaryReady = summary?.access === "ready" ? summary : null;
   const stats = summaryReady?.accountFilterComplete ? summaryReady : null;
+  const todayStats = todaySummary?.access === "ready" && todaySummary.accountFilterComplete ? todaySummary : null;
   const expenseStats = expensesSummary?.access === "ready" && expensesSummary.accountFilterComplete ? expensesSummary : null;
   const expenseYearStats = expensesYearSummary?.access === "ready" && expensesYearSummary.accountFilterComplete ? expensesYearSummary : null;
   const pageAccess = screen.title === "Expenses" ? expensesSummary?.access : summary?.access;
@@ -306,26 +320,24 @@ export function BoardRoute({ route }: { route: string }) {
   const expenseBills = canViewBills && operationalOverview?.access === "ready" ? operationalOverview.bills : undefined;
   const expenseBillsAccess = access?.access === "ready" && !canViewBills ? "restricted" : operationalOverview?.access;
   const weekDays = trailingSevenSummary?.access === "ready" && trailingSevenSummary.accountFilterComplete ? trailingSevenSummary.days : undefined;
-  const metricValues: Record<string, string> = {
+  const metricValues: Partial<Record<string, string>> = {
     Sales: fmt(stats?.salesUgx),
     "Best day": stats ? fmt(Math.max(0, ...stats.days.map((day) => day.salesUgx))) : "—",
     "Days recorded": stats ? `${stats.days.filter((day) => day.salesUgx + day.expensesUgx > 0).length}` : "—",
-    "Expense ratio": screen.title === "Expenses" ? expenseStats?.expenseInsights.expenseRatioPercent === null || expenseStats?.expenseInsights.expenseRatioPercent === undefined ? "—" : `${expenseStats.expenseInsights.expenseRatioPercent}%` : stats ? `${stats.salesUgx ? Math.round(stats.expensesUgx / stats.salesUgx * 100) : 0}%` : "—",
+    "Expense ratio": screen.title === "Expenses" ? expenseStats?.expenseInsights.expenseRatioPercent === null || expenseStats?.expenseInsights.expenseRatioPercent === undefined ? "—" : `${expenseStats.expenseInsights.expenseRatioPercent}%` : stats?.salesUgx ? `${Math.round(stats.expensesUgx / stats.salesUgx * 100)}%` : "—",
     "Average daily expenses": stats ? fmt(Math.round(stats.expensesUgx / Math.max(1, stats.days.length))) : "—",
-    "Net margin": stats ? `${stats.salesUgx ? Math.round((stats.salesUgx - stats.expensesUgx) / stats.salesUgx * 100) : 0}%` : "—",
+    "Net margin": stats?.salesUgx ? `${Math.round((stats.salesUgx - stats.expensesUgx) / stats.salesUgx * 100)}%` : "—",
     "Cash on hand": fmt(stats?.cashBalanceUgx),
     "Mobile money": fmt(stats?.mobileMoneyBalanceUgx),
-    "Sales today": stats ? fmt(stats.days.find((day) => day.day === today)?.salesUgx ?? 0) : "—",
+    "Sales today": fmt(todayStats?.salesUgx),
     "This month": fmt(screen.title === "Expenses" ? expenseStats?.expensesUgx : stats?.expensesUgx),
     "Year to date": fmt(screen.title === "Expenses" ? expenseYearStats?.expensesUgx : yearSummary?.access === "ready" && yearSummary.accountFilterComplete ? yearSummary.expensesUgx : undefined),
     "Average per day": screen.title === "Expenses" ? fmt(expenseStats?.expenseInsights.averagePerDayUgx) : stats ? fmt(Math.round(stats.salesUgx / Math.max(1, (Date.parse(`${range.toExclusive}T00:00:00.000Z`) - Date.parse(`${range.from}T00:00:00.000Z`)) / 86_400_000))) : "—",
     "Entry basis": "Recorded",
-    "Approval queue": "Not tracked",
     "Sales YTD": fmt(yearSummary?.access === "ready" && yearSummary.accountFilterComplete ? yearSummary.salesUgx : undefined),
     "Total expenses": fmt(stats?.expensesUgx),
     "Cashbook net": stats ? fmt(stats.salesUgx - stats.expensesUgx) : "—",
     // A net profit figure is withheld until equipment and other adjustments are modeled.
-    "Balance difference": "—",
     Currency: currency,
   };
   const selectedEntries = entries;
@@ -412,9 +424,8 @@ export function BoardRoute({ route }: { route: string }) {
       <ConvexLiveStatus />
       <span className="toolbar-range">{fmtDate(range.from)} — {fmtDate(rangeLastDay.toISOString().slice(0, 10))}</span>
       {canOpenRecordForm && !financeRangeError && <button className={`button${recordFormOpen ? "" : " button-accent"}`} type="button" aria-controls="record-entry-card" aria-expanded={recordFormOpen} onClick={() => setOpenRecordRoute(open => open === route ? null : route)}>{recordFormOpen ? <X size={14} /> : <Plus size={14} />}{recordFormOpen ? "Close record" : "Record"}</button>}
-      <button className="button" type="button" onClick={() => window.print()}><Printer size={14} />Print</button>
       <button className="button" type="button" onClick={() => window.print()}><Download size={14} />Print / Save PDF</button>
-      <button className="button button-dark" type="button" onClick={() => void shareReport()}><Share2 size={14} />Share report</button>
+      <button className="button button-dark" type="button" onClick={() => void shareReport()}><Share2 size={14} />Copy page link</button>
       {shareFeedback && <span className="form-feedback" role="status">{shareFeedback}</span>}
       </div>
     </div>
@@ -423,14 +434,16 @@ export function BoardRoute({ route }: { route: string }) {
     {pageAccess === "pending" && <div className="notice-banner notice-warning" role="status">Workspace access is pending. Ask an owner to invite this Google account.</div>}
     {account !== "all" && (screen.title === "Expenses" ? expensesSummary?.access === "ready" && !expensesSummary.accountFilterComplete : summaryReady && !summaryReady.accountFilterComplete) && <div className="notice-banner notice-warning" role="status">Some account-filtered totals reached the safe record limit. Affected figures are withheld; choose a shorter date range for complete results.</div>}
     {!operationalScreen && <div className={`metric-grid board-metric-grid${screen.title === "Expenses" ? " expenses-metric-grid" : ""}`}>
-      {screen.metrics.map((label, index) => {
+      {screen.metrics.filter(label => metricValues[label] !== undefined).map((label, index) => {
         const heading = screen.title === "Expenses" && label === "This month" && financePeriod !== "monthly" ? `Expenses · ${financePeriodLabel}` : label;
         const note = screen.title === "Expenses"
           ? label === "This month" ? `Posted expenses in the selected ${financePeriodLabel.toLowerCase()} period`
             : label === "Year to date" ? "Fiscal year to date · same account filter"
               : label === "Expense ratio" ? "Expenses ÷ sales in this period"
                 : label === "Average per day" ? "Period expenses ÷ calendar days"
-              : "Approval queue is not currently tracked"
+              : "Based on saved workspace records"
+          : label === "Sales today" && todaySummary?.access === "ready" && !todaySummary.accountFilterComplete ? "Unavailable · today's safe summary limit was reached"
+            : (label === "Expense ratio" || label === "Net margin") && stats?.salesUgx === 0 ? "Requires recorded sales in this period"
           : summaryReady && !summaryReady.accountFilterComplete ? "Unavailable · narrow the date range" : metricValues[label] === undefined ? "Available when this record type is configured" : "Based on saved workspace records";
         return <Card className="metric-card board-metric-card" key={label}>
           <div className="card-heading"><span className="eyebrow">{screen.title === "Monthly P&L" && label === "Sales YTD" ? "Sales in period" : heading}</span><span className="entry-icon">{index % 2 === 0 ? <ArrowUpRight size={15} /> : <ArrowDownRight size={15} />}</span></div>
@@ -451,17 +464,24 @@ export function BoardRoute({ route }: { route: string }) {
       </Card>}</div>}
       {screen.sections.map((section) => <Card className={`board-section-card${screen.title === "Expenses" ? ` expenses-panel expenses-panel-${expensePanelSlug(section.title)}` : ""}`} key={section.title}>
         <div className="card-heading"><div><h2 className="card-title">{section.title === "Daily sales · last 14 days" ? `Sales activity · ${financePeriodLabel}` : section.title === "Daily activity" ? `Daily entries · ${financePeriodLabel}` : section.title === "Profit and loss by month" ? `Profit and loss · ${financePeriodLabel}` : section.title}</h2><p className="card-subtitle">{section.title === "Profit and loss statement" ? `Statement · ${financePeriodLabel} · ${fmtDate(range.from)} — ${fmtDate(rangeLastDay.toISOString().slice(0, 10))}` : section.detail}</p></div>{section.kind === "table" && section.title === (entryKind === "sale" ? "Daily sales · last 14 days" : "Expenses by category") && entryKind && access?.access === "ready" && access.permissions.includes("data.export") && <EntryCsvExportControl businessId={access.businessId} kind={entryKind} from={range.from} toExclusive={range.toExclusive} account={account} currency={currency} scale={currencyScale} />}</div>
-        {section.title === "Expenses by category" ? <ExpenseCategoryTable categories={preferences?.access === "ready" ? preferences.expenseCategories : []} amounts={expenseStats?.categoryTotals} total={expenseStats?.expensesUgx} formatMoney={fmt} />
+        {section.title === "Imports and data checks" ? <div className="empty-state compact-empty"><strong>Import history is available in Data settings.</strong><span>{section.detail}</span><Link className="text-link" href="/settings/data">Open import history →</Link></div>
+        : section.title === "Weak-day review and entry corrections" ? <div className="empty-state compact-empty"><strong>Review weak-day flags in Analytics.</strong><span>{section.detail}</span><Link className="text-link" href="/analytics">Open Analytics →</Link></div>
+        : section.title === "Voucher batches and mobile entry" ? <div className="empty-state compact-empty"><strong>Voucher stock tracking is not implemented.</strong><span>{section.detail}</span></div>
+        : section.title === "Supplier price history" ? <div className="empty-state compact-empty"><strong>Review supplier-linked expense spend in Expenses.</strong><span>{section.detail}</span><Link className="text-link" href="/expenses">Open Expenses →</Link></div>
+        : section.title === "Budget versus actual" ? <div className="empty-state compact-empty"><strong>Review monthly category budgets in Expenses.</strong><span>{section.detail}</span><Link className="text-link" href="/expenses">Open Expenses →</Link></div>
+        : section.title === "Month-end close and statement export" ? access?.access === "ready" ? <MonthEndClosePanel businessId={access.businessId} today={today} currency={currency} scale={currencyScale} locale={locale} /> : <div className="empty-state compact-empty"><strong>Workspace access is required.</strong><span>{section.detail}</span></div>
+        : section.title === "Expenses by category" ? <ExpenseCategoryTable categories={preferences?.access === "ready" ? preferences.expenseCategories : []} amounts={expenseStats?.categoryTotals} total={expenseStats?.expensesUgx} formatMoney={fmt} />
         : section.title === "Expenses by category · year to date" ? <ExpenseCategoryTable categories={preferences?.access === "ready" ? preferences.expenseCategories : []} amounts={expenseYearStats?.categoryTotals} total={expenseYearStats?.expensesUgx} formatMoney={fmt} />
         : section.title === "Operating vs equipment" ? <ExpenseMix insights={expenseStats?.expenseInsights} total={expenseStats?.expensesUgx} formatMoney={fmt} />
         : section.title === "Alerts" ? <ExpenseSignals categories={expenseStats?.categoryTotals} largest={expenseStats?.expenseInsights.largest ?? null} bills={expenseBills} monthlyExpense={expenseStats?.monthlyExpense} complete={Boolean(expenseStats?.accountFilterComplete)} today={today} formatMoney={fmt} formatDay={fmtDate} />
-        : section.title === "Category budgets" ? <ExpenseBudgetTable categories={preferences?.access === "ready" ? preferences.expenseCategories : []} amounts={expenseStats?.categoryTotals} total={expenseStats?.expensesUgx} monthlyExpense={expenseStats?.monthlyExpense} formatMoney={fmt} />
-        : section.title === "Recurring costs" ? <RecurringCosts bills={expenseBills} access={expenseBillsAccess} today={today} formatMoney={fmt} formatDay={fmtDate} />
-        : section.title === "Supplier tracking" ? <SupplierCategoryTable categories={preferences?.access === "ready" ? preferences.expenseCategories : []} amounts={expenseYearStats?.categoryTotals} formatMoney={fmt} />
+        : section.title === "Category budgets" ? <CategoryBudgetsPanel from={range.from} toExclusive={range.toExclusive} account={account} currency={currency} scale={currencyScale} locale={locale} />
+        : section.title === "Receipts and evidence" ? <ExpenseReceiptsPanel currency={currency} scale={currencyScale} locale={locale} />
+        : section.title === "Recurring costs" ? <><ExpenseTemplateManager currency={currency} scale={currencyScale} locale={locale} /><RecurringCosts bills={expenseBills} access={expenseBillsAccess} today={today} formatMoney={fmt} formatDay={fmtDate} /></>
+        : section.title === "Supplier tracking" ? <SupplierManager currency={currency} scale={currencyScale} locale={locale} />
         : section.title === "Recurring expense detector" ? <RecurringExpenseSuggestions patterns={expenseStats?.expenseInsights.recurringPatterns} complete={Boolean(expenseStats?.accountFilterComplete)} formatMoney={fmt} />
         : section.title === "Audit trail" ? <ExpenseAuditPreview entries={selectedEntries} formatDay={fmtDate} />
         : section.kind === "table" && (screen.title === "Sales" || screen.title === "Expenses") ? (
-          hasRecordData ? <div className="table-scroll"><table className="data-table"><thead><tr><th>Date</th><th>Type</th><th>Category</th><th>Account</th><th>Amount</th><th>Status</th><th>Actions</th></tr></thead><tbody>{selectedEntries.map((entry) => <tr key={entry._id}><td>{fmtDate(entry.occurredOn)}</td><td>{entry.kind}</td><td>{entry.category}</td><td>{accountLabel(entry.account)}</td><td>{fmt(entry.amountUgx)}</td><td><span className={`status-chip ${entry.state === "posted" ? "status-ok" : "status-warning"}`}>{entry.state}</span></td><td>{canCorrectEntry(entry.kind) && entry.state === "posted" && entry.canCorrect && <button className="button" type="button" onClick={() => void requestEntryCorrection(entry)}>Correct…</button>} {canVoidEntry(entry.kind) && entry.state === "posted" && entry.canVoid && <button className="button" type="button" onClick={() => void requestEntryVoid(entry._id)}>Void…</button>}</td></tr>)}</tbody></table></div> : <EmptyPanel message="No entries yet." next="Add an entry to populate this view. The design preview figures are examples, not live business data." />
+          hasRecordData ? <div className="table-scroll"><table className="data-table"><thead><tr><th>Date</th><th>Type</th><th>Category</th>{screen.title === "Expenses" && <th>Supplier</th>}<th>Account</th><th>Amount</th><th>Status</th><th>Actions</th></tr></thead><tbody>{selectedEntries.map((entry) => <tr key={entry._id}><td>{fmtDate(entry.occurredOn)}</td><td>{entry.kind}</td><td>{entry.category}</td>{screen.title === "Expenses" && <td>{entry.supplierName ?? "—"}{entry.supplierReference && <small className="muted-note">{entry.supplierReference}</small>}</td>}<td>{accountLabel(entry.account)}</td><td>{fmt(entry.amountUgx)}</td><td><span className={`status-chip ${entry.state === "posted" ? "status-ok" : "status-warning"}`}>{entry.state}</span></td><td>{screen.title === "Expenses" && entry.canAttachReceipt && <AttachExpenseReceipt entryId={entry._id} />} {canCorrectEntry(entry.kind) && entry.state === "posted" && entry.canCorrect && <button className="button" type="button" onClick={() => void requestEntryCorrection(entry)}>Correct…</button>} {canVoidEntry(entry.kind) && entry.state === "posted" && entry.canVoid && <button className="button" type="button" onClick={() => void requestEntryVoid(entry._id)}>Void…</button>}</td></tr>)}</tbody></table></div> : <EmptyPanel message="No entries yet." next="Add an entry to populate this view. The design preview figures are examples, not live business data." />
         ) : section.kind === "table" && screen.title === "Daily Report" ? <DailyHistoryTable days={weekDays} totals={trailingSevenSummary?.access === "ready" && trailingSevenSummary.accountFilterComplete ? trailingSevenSummary.periodTotals : undefined} range={range} periodLabel={financePeriodLabel} loading={trailingSevenSummary === undefined} formatDay={fmtDate} formatMoney={fmt} />
           : section.kind === "table" && screen.title === "Monthly P&L" ? <MonthlyPnlTable months={yearSummary?.access === "ready" && yearSummary.accountFilterComplete ? yearSummary.monthTotals : undefined} totals={yearSummary?.access === "ready" && yearSummary.accountFilterComplete ? yearSummary.periodTotals : undefined} loading={yearSummary === undefined} locale={locale} periodLabel={financePeriodLabel} formatMoney={fmt} />
           : section.kind === "chart" && section.title === "Sales by income type" ? <CategoryBreakdown categories={summaryReady?.accountFilterComplete ? summaryReady.categoryTotals.sales : undefined} formatMoney={fmt} />
@@ -483,11 +503,11 @@ export function BoardRoute({ route }: { route: string }) {
         {entryActionFeedback && <p className="form-feedback" role="status">{entryActionFeedback}</p>}
         {hasRecordData ? <><div className="table-scroll board-entry-ledger-scroll"><table className="data-table board-entry-ledger"><thead><tr><th>Date</th><th>Description</th><th>Category</th><th>Account</th><th>Status</th><th className="board-entry-amount-heading">Amount</th><th><span className="sr-only">Actions</span></th></tr></thead><tbody>{selectedEntries.map((entry) => <tr key={entry._id}>
           <td className="board-entry-date">{fmtDate(entry.occurredOn)}</td>
-          <td className="board-entry-description"><strong>{entry.note || entry.category}</strong><small>{entry.kind === "sale" ? "Sale" : "Expense"} record</small></td>
+          <td className="board-entry-description"><strong>{entry.note || entry.category}</strong><small>{entry.kind === "sale" ? "Sale" : "Expense"} record{entry.supplierName ? ` · ${entry.supplierName}${entry.supplierReference ? ` · Ref ${entry.supplierReference}` : ""}` : ""}</small></td>
           <td>{entry.category}</td><td>{accountLabel(entry.account)}</td>
           <td><span className={`status-chip ${entry.state === "posted" ? "status-ok" : "status-warning"}`}>{entry.state === "posted" ? "Posted" : "Voided"}</span></td>
           <td className={`board-entry-amount ${entry.kind === "sale" ? "amount-positive" : "amount-negative"}`}>{entry.kind === "sale" ? "+" : "−"}{fmt(entry.amountUgx)}</td>
-          <td><div className="board-entry-actions">{canCorrectEntry(entry.kind) && entry.state === "posted" && entry.canCorrect && <button className="button" type="button" aria-label={`Correct ${entry.note || entry.category}`} onClick={() => void requestEntryCorrection(entry)}>Correct</button>}{canVoidEntry(entry.kind) && entry.state === "posted" && entry.canVoid && <button className="button board-entry-void" type="button" aria-label={`Void ${entry.note || entry.category}`} onClick={() => void requestEntryVoid(entry._id)}>Void</button>}</div></td>
+          <td><div className="board-entry-actions">{screen.title === "Expenses" && entry.canAttachReceipt && <AttachExpenseReceipt entryId={entry._id} />}{canCorrectEntry(entry.kind) && entry.state === "posted" && entry.canCorrect && <button className="button" type="button" aria-label={`Correct ${entry.note || entry.category}`} onClick={() => void requestEntryCorrection(entry)}>Correct</button>}{canVoidEntry(entry.kind) && entry.state === "posted" && entry.canVoid && <button className="button board-entry-void" type="button" aria-label={`Void ${entry.note || entry.category}`} onClick={() => void requestEntryVoid(entry._id)}>Void</button>}</div></td>
         </tr>)}</tbody></table></div>{entries?.length === entryLimit && entryLimit < 500 && <div className="board-entry-load-more"><button className="button" type="button" onClick={() => setEntryLimit(limit => Math.min(limit + 100, 500))}>Load more entries</button></div>}{entries?.length === 500 && <p className="muted-note">Showing the latest 500 matching records. Narrow the date range to review older entries.</p>}</> : <EmptyPanel message="No entries have been recorded." next="Use the form to save the first entry." />}
       </Card> : null}
     </div>}</div>
@@ -533,12 +553,6 @@ function ExpenseSignals({ categories, largest, bills, monthlyExpense, complete, 
   return <div className="expense-signal-list"><div><span>Next bill due</span><strong>{dueSoon ? `${dueSoon.name} · ${formatDay(dueSoon.nextDueOn)}` : bills ? "No bill due in the next 30 days" : "Bills unavailable for your role"}</strong></div><div><span>Highest-spend category</span><strong>{top ? `${top.category} · ${top.sharePercent}%` : "No expense activity"}</strong></div><div><span>Monthly expense warning</span><strong>{monthlyWarningText}</strong></div><div><span>Summary coverage</span><strong>{complete ? "Complete for selected range" : "Unavailable or still loading"}</strong></div>{largest && <small>Largest listed entry: {formatMoney(largest.amountUgx)} · {largest.category} · {formatDay(largest.occurredOn)}</small>}</div>;
 }
 
-function ExpenseBudgetTable({ categories, amounts, total, monthlyExpense, formatMoney }: { categories: string[]; amounts: ExpenseCategoryAmount[] | undefined; total: number | undefined; monthlyExpense: MonthlyExpenseLike | undefined; formatMoney: (amount: number | undefined) => string }) {
-  const byCategory = new Map((amounts ?? []).map(row => [row.category, row.amountUgx]));
-  const names = [...new Set([...categories, ...(amounts ?? []).map(row => row.category)])];
-  return <><div className="table-scroll"><table className="data-table expense-category-table"><thead><tr><th>Category</th><th>Monthly limit</th><th>Selected period</th></tr></thead><tbody>{names.map(category => { const amount = byCategory.get(category) ?? 0; return <tr key={category}><td>{category}</td><td><span className="expense-budget-unset">Not set</span></td><td>{total === undefined ? "—" : amount ? formatMoney(amount) : "—"}</td></tr>; })}</tbody></table></div><div className="expense-budget-footer"><span>{monthlyExpense?.warningUgx ? `Workspace-wide warning: ${formatMoney(monthlyExpense.warningUgx)} per month.` : monthlyExpense ? "No workspace-wide monthly expense warning is set." : "Monthly warning unavailable."}</span><Link className="text-link" href="/settings/rules">Set limits in Settings →</Link></div></>;
-}
-
 type RecurringBillLike = { _id: string; name: string; category: string; amountUgx: number; recurrence: "weekly" | "monthly" | "quarterly" | "yearly"; nextDueOn: string };
 function RecurringCosts({ bills, access, today, formatMoney, formatDay }: { bills: RecurringBillLike[] | undefined; access: "ready" | "restricted" | "pending" | undefined; today: string; formatMoney: (amount: number | undefined) => string; formatDay: (day: string) => string }) {
   const recurrenceLabel = { weekly: "every week", monthly: "every month", quarterly: "every 3 months", yearly: "every year" };
@@ -549,17 +563,11 @@ function RecurringCosts({ bills, access, today, formatMoney, formatDay }: { bill
   }) : <EmptyPanel message="No active recurring bills." next="Add a schedule on Bills. It updates its next due date after each recorded payment." />}{access === "ready" && <Link className="text-link" href="/bills">Open Bills →</Link>}</div>;
 }
 
-function SupplierCategoryTable({ categories, amounts, formatMoney }: { categories: string[]; amounts: ExpenseCategoryAmount[] | undefined; formatMoney: (amount: number | undefined) => string }) {
-  const byCategory = new Map((amounts ?? []).map(row => [row.category, row.amountUgx]));
-  const names = [...new Set([...categories, ...(amounts ?? []).map(row => row.category)])];
-  return <><div className="table-scroll"><table className="data-table expense-category-table"><thead><tr><th>Supplier</th><th>Category</th><th>Recorded YTD</th></tr></thead><tbody>{names.slice(0, 5).map(category => { const amount = byCategory.get(category) ?? 0; return <tr key={category}><td className="muted-note">Not captured</td><td>{category}</td><td>{amount ? formatMoney(amount) : "—"}</td></tr>; })}</tbody></table></div><p className="muted-note">Totals use saved expense categories. Supplier names are not collected yet.</p></>;
-}
-
 function ExpenseAuditPreview({ entries, formatDay }: { entries: ExpenseEntryLike[] | undefined; formatDay: (day: string) => string }) {
   const options = useQuery(api.audits.filterOptions, {});
-  const allExpenseIds = entries?.filter(entry => entry.kind === "expense" && entry._id).map(entry => entry._id!) ?? [];
+  const allExpenseIds = useMemo(() => entries?.filter(entry => entry.kind === "expense" && entry._id).map(entry => entry._id!) ?? [], [entries]);
   const expenseIds = allExpenseIds.slice(0, 100);
-  const auditArgs = useMemo(() => ({ entityIds: expenseIds }), [entries]);
+  const auditArgs = useMemo(() => ({ entityIds: expenseIds }), [expenseIds]);
   const audit = usePaginatedQuery(api.audits.list, options?.access === "ready" && entries ? auditArgs : "skip", { initialNumItems: 20 });
   if (options?.access === "restricted") return <div className="expense-info-panel"><span className="status-chip status-warning">Audit access required</span><p>Your role does not include audit history access.</p><Link className="text-link" href="/audits">Open audit log →</Link></div>;
   if (!entries) return <p className="muted-note">Loading expense entry links…</p>;
@@ -581,7 +589,7 @@ function EntryCsvExportControl({ businessId, kind, from, toExclusive, account, c
     setMessage("");
     try {
       let cursor: string | null = null;
-      const results: Array<{ entryId: Id<"entries">; kind: "sale" | "expense"; amountUgx: number; occurredOn: string; account: "cash" | "mobile_money" | "unallocated"; category: string; note: string; state: "posted" | "void"; source: "manual" | "import" | "webhook" | "google_form"; createdAt: number; createdBy: Id<"users"> }> = [];
+      const results: Array<{ entryId: Id<"entries">; kind: "sale" | "expense"; amountUgx: number; occurredOn: string; account: "cash" | "mobile_money" | "unallocated"; category: string; note: string; supplierName: string | null; supplierReference: string | null; state: "posted" | "void"; source: "manual" | "import" | "webhook" | "google_form"; createdAt: number; createdBy: Id<"users"> }> = [];
       let done = false;
       while (!done) {
         const page: { page: typeof results; isDone: boolean; continueCursor: string } = await convex.query(api.workspace.entriesForExport, { businessId, kind, from, toExclusive, ...(account === "all" ? {} : { account }), paginationOpts: { numItems: 100, cursor } });
@@ -593,12 +601,12 @@ function EntryCsvExportControl({ businessId, kind, from, toExclusive, account, c
         cursor = page.continueCursor;
         done = page.isDone;
       }
-    const headers = ["Date", "Type", "Category", "Account", `Amount (${currency})`, "Currency", "Status", "Source", "Entry ID", "Created at (UTC)", "Actor ID", "Description"];
+    const headers = ["Date", "Type", "Category", "Supplier", "Supplier reference", "Account", `Amount (${currency})`, "Currency", "Status", "Source", "Entry ID", "Created at (UTC)", "Actor ID", "Description"];
     const escape = (value: string) => {
       const spreadsheetSafe = /^[\s\uFEFF]*[=+\-@]/u.test(value) ? `'${value}` : value;
       return `"${spreadsheetSafe.replaceAll('"', '""')}"`;
     };
-    const rows = results.map(row => [row.occurredOn, row.kind, row.category, accountLabel(row.account), String(row.amountUgx / scale), currency, row.state, row.source, row.entryId, new Date(row.createdAt).toISOString(), row.createdBy, row.note]);
+    const rows = results.map(row => [row.occurredOn, row.kind, row.category, row.supplierName ?? "", row.supplierReference ?? "", accountLabel(row.account), String(row.amountUgx / scale), currency, row.state, row.source, row.entryId, new Date(row.createdAt).toISOString(), row.createdBy, row.note]);
     const csv = [headers, ...rows].map(row => row.map(escape).join(",")).join("\r\n");
     const url = URL.createObjectURL(new Blob([`\uFEFF${csv}`], { type: "text/csv;charset=utf-8" }));
     const anchor = document.createElement("a");
@@ -683,7 +691,7 @@ function ChartPanel({ summary, previous, range, previousRange, interactive, acco
 
 function WorkflowPanel({ screen, section, currency, scale, businessDay }: { screen: BoardSpec; section: string; currency: string; scale: number; businessDay: string }) {
   if (section === "Add an expense" || section === "Add a sale") return <div className="empty-state compact-empty"><strong>Entry capture is available above.</strong><span>Use the saved cashbook form so the balance and audit trail update together.</span></div>;
-  const recordKind = section === "Movement tracking status" ? "movement" : section === "Holdings tracking status" ? "holding" : section === "Loan tracking status" ? "loan" : section === "Bill tracking status" ? "bill" : null;
+  const recordKind = section === "Record and review movements" || section === "Movement tracking status" ? "movement" : section === "Record and review savings activity" || section === "Holdings tracking status" ? "holding" : section === "Record and review loans" || section === "Loan tracking status" ? "loan" : section === "Record and review bills" || section === "Bill tracking status" ? "bill" : null;
   if (recordKind) return <OperationalRecordForm kind={recordKind} currency={currency} scale={scale} businessDay={businessDay} />;
   const settingsWorkflow = screen.settings || screen.title === "Reconcile";
   return <div className="workflow-callout"><span className="workflow-indicator" /><div><strong>{settingsWorkflow ? `${section} is not configured yet` : `${section} is not available yet`}</strong><p className="muted-note">{settingsWorkflow ? "Review the related Finance or Rules settings. This card does not create financial records." : "This workflow is a product roadmap item; it does not yet save records or change account balances."}</p>{settingsWorkflow && <Link href={screen.title === "Reconcile" ? "/settings/rules" : "/settings/finance"} className="text-link">Review related settings →</Link>}</div></div>;

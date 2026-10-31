@@ -259,6 +259,7 @@ export const overview = query({
       currency: business.currency,
       currencyMinorDigits: new Intl.NumberFormat("en", { style: "currency", currency: business.currency }).resolvedOptions().maximumFractionDigits,
       locale: preferences?.locale ?? "en-UG",
+      weakDayThresholdUgx: weakThreshold,
       period: { from: args.from, toExclusive: args.toExclusive, salesUgx, expensesUgx, netUgx, days },
       target: { amountUgx: salesTarget, weeklyAmountUgx: Math.round(salesTarget * 7 / month.daysInMonth), monthPaceRequiredUgx: Math.ceil(salesTarget * month.elapsedDays / month.daysInMonth), monthComplete, monthSalesUgx: monthSales, monthExpensesUgx: monthExpenses, monthNetUgx: monthSales - monthExpenses, elapsedDays: month.elapsedDays, daysInMonth: month.daysInMonth, projectedSalesUgx: Math.round(monthSales / Math.max(1, month.elapsedDays) * month.daysInMonth), requiredSalesPerDayUgx: Math.ceil(Math.max(0, salesTarget - monthSales) / Math.max(1, month.daysInMonth - month.elapsedDays)) },
       balances: { cashUgx, mobileMoneyUgx: mobileUgx, totalUgx: liquidUgx, cashShareBps: liquidUgx > 0 ? Math.round(cashUgx / liquidUgx * 10000) : 0, mobileShareBps: liquidUgx > 0 ? Math.round(mobileUgx / liquidUgx * 10000) : 0, lowCashThresholdUgx: lowCashThreshold },
@@ -287,7 +288,7 @@ export const overview = query({
         loansComplete: canViewLoans && activeLoans.length < 101,
         salesCategories,
         expenseCategories,
-        upcomingBills: canViewBills ? upcomingBills.slice(0, 6).map(row => ({ name: row.name, amountUgx: row.amountUgx, nextDueOn: row.nextDueOn, category: row.category, overdue: row.nextDueOn < args.today })) : [],
+        upcomingBills: canViewBills ? upcomingBills.slice(0, 6).map(row => ({ name: row.name, amountUgx: row.amountUgx, nextDueOn: row.nextDueOn, category: row.category, overdue: row.nextDueOn < args.today, paused: row.paused ?? false, reminderLeadDays: row.reminderLeadDays ?? 3, reminderDue: !(row.paused ?? false) && row.nextDueOn >= args.today && row.nextDueOn <= shiftDay(args.today, row.reminderLeadDays ?? 3) })) : [],
         upcomingBillsComplete: canViewBills && upcomingBills.length < 101,
         recentAudit: await Promise.all(recentAudit.map(async row => {
           const [user, profile] = await Promise.all([ctx.db.get("users", row.actorId), ctx.db.query("userProfiles").withIndex("by_user", q => q.eq("userId", row.actorId)).unique()]);

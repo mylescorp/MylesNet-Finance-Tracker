@@ -23,13 +23,17 @@ The user-provided production Convex deployment is recorded in [`DEPLOYMENTS.md`]
 
 - Google sign-in and protected application routes.
 - Business membership checks in Convex and a one-time first-owner claim.
-- Auditable cashbook entries for sales and expenses, whole-shilling UGX amounts, idempotency keys, daily totals, and owner-only voiding.
+- Auditable cashbook entries for sales and expenses, currency-precision-aware safe integer amounts, idempotency keys, daily totals, and permission-checked corrections and voiding.
 - Dashboard totals and recent entries from Convex records. Empty or pending states do not use sample financial figures.
-- Account balances change with recorded cash/mobile-money sales and expenses. They currently start from zero and need opening balances/imports before they represent the real business balances.
-- Partner users are denied business-wide totals and transaction details until partner-specific reporting is implemented.
+- Account balances change with recorded cash/mobile-money sales, expenses, movements, savings flows, loan activity, bill payments, and partner flows. Owners can set opening balances before ledger activity and use auditable balance adjustments later. The dashboard setup checklist tracks business details, balance verification, team access, import history, and first reconciliation. New balances begin at zero, so they must be set or reconciled against real funds before being relied on.
+- Operational screens support transfers, withdrawals, deposits, savings holdings and flows, loans and repayments, recurring bills with a 90-day forecast, supplier defaults, in-app lead reminders, pause/resume, and confirmed payments, partner ownership/distributions/payouts, and cash/mobile-money reconciliation. Reviewers can sign off matched or explained counts with an audited note and reopen them with a reason. Cash counts can include an optional denomination breakdown validated against the counted total and retained with the reconciliation audit trail. These workflows preserve reversals and audit history where applicable.
+- Expenses support workspace-scoped suppliers, optional supplier and invoice references on entries, and private PDF/image receipt attachments with restricted retrieval and audit history. Supplier history totals linked posted spend; item-level prices and quantities are not tracked.
+- Expense budgets support monthly amounts and warning thresholds per saved category. The Expenses screen compares posted actuals over one calendar month and optional account filter with the full monthly limit; partial-month values are not prorated and multi-month ranges do not report a comparison.
+- Partner access includes partner-scoped statements; partners do not receive workspace-wide totals or other partners' statements.
+- CSV imports have preview, resumable batches, deduplication, history, and reversal workflows. Centipid and Google Form ingestion use separate parallel adapters with independent tokens.
 - Responsive shared navigation, preserved brand images and design tokens.
-- Remaining board routes are scaffolded and mapped to the original 18 board specifications; their workflows are not yet live.
+- Remaining gaps include recurring expense templates, reviewer assignment/sign-off and period certificates, multi-period budget reporting, automated report delivery and external bill/calendar reminders, item-level supplier pricing, and statement-based CSV auto-matching. See [IMPLEMENTATION_PLAN.md](./IMPLEMENTATION_PLAN.md) for detail.
 
 ## Webhook compatibility
 
-See [`WEBHOOK_COMPATIBILITY.md`](./WEBHOOK_COMPATIBILITY.md). Existing webhook code was not included in the supplied project files and has not been changed or cut over. Capture its real contract before adding an adapter.
+See [`WEBHOOK_COMPATIBILITY.md`](./WEBHOOK_COMPATIBILITY.md). The app's Centipid route is a parallel compatibility adapter; the existing Apps Script deployment and URL have not been changed. Production cutover requires staging parity and an explicit caller update. The Google Form companion script is also separate and must be validated in a staging copy before activation.

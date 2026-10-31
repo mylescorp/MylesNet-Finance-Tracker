@@ -1,10 +1,13 @@
 "use client";
 
 import { useMutation, useQuery } from "convex/react";
+import { useAuthToken } from "@convex-dev/auth/react";
 import { ConvexError } from "convex/values";
 import { useRef, useState, type FormEvent } from "react";
 import { api } from "@/convex/_generated/api";
+import type { Id } from "@/convex/_generated/dataModel";
 import { useRecordEntryBusy, useRecordEntrySaved } from "@/components/workspace/RecordEntryDrawer";
+import { uploadExpenseReceipt } from "@/lib/upload-expense-receipt";
 
 type EntryKind = "sale" | "expense";
 function businessDate(timezone: string) {
@@ -15,8 +18,11 @@ export function EntryForm({ kind, onSaved }: { kind: EntryKind; onSaved?: () => 
   const recordSaved = useRecordEntrySaved();
   const setDrawerBusy = useRecordEntryBusy();
   const createEntry = useMutation(api.workspace.createEntry);
+  const authToken = useAuthToken();
   const access = useQuery(api.workspace.currentAccess, {});
   const context = useQuery(api.settings.runtimeContext, {});
+  const supplierOptions = useQuery(api.suppliers.activeOptions, kind === "expense" ? {} : "skip");
+  const expenseTemplates = useQuery(api.expenseTemplates.list, kind === "expense" ? {} : "skip");
   const timezone = context?.access === "ready" ? context.timezone : "Africa/Kampala";
   const currency = context?.access === "ready" ? context.currency : "UGX";
   const currencyScale = 10 ** (context?.access === "ready" ? context.currencyMinorDigits : 0);
@@ -25,6 +31,7 @@ export function EntryForm({ kind, onSaved }: { kind: EntryKind; onSaved?: () => 
   const [occurredOn, setOccurredOn] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [feedback, setFeedback] = useState<{ message: string; error: boolean } | null>(null);
+  const [receiptRetry, setReceiptRetry] = useState<{ entryId: Id<"entries">; file: File; idempotencyKey: string } | null>(null);
   const [ruleConfirmation, setRuleConfirmation] = useState<{ kind: "duplicate" | "negative"; message: string } | null>(null);
   const idempotencyKey = useRef<string | null>(null);
   const formRef = useRef<HTMLFormElement>(null);
@@ -43,10 +50,12 @@ export function EntryForm({ kind, onSaved }: { kind: EntryKind; onSaved?: () => 
     }
     setBusy(true); setFeedback(null);
     setDrawerBusy(true);
+    let savedEntryId: Id<"entries"> | null = null;
+    let failedReceipt: { file: File; idempotencyKey: string } | null = null;
     try {
       const requestKey = idempotencyKey.current ?? crypto.randomUUID();
       idempotencyKey.current = requestKey;
-      await createEntry({
+      const entryId = await createEntry({
         businessId: access?.access === "ready" ? access.businessId : (() => { throw new Error("Workspace is still loading."); })(),
         kind,
         amountUgx: amountMinor,
@@ -54,19 +63,39 @@ export function EntryForm({ kind, onSaved }: { kind: EntryKind; onSaved?: () => 
         account,
         category: String(values.get("category")).trim(),
         note: String(values.get("note") ?? "").trim(),
+        ...(kind === "expense" && values.get("supplierId") ? { supplierId: String(values.get("supplierId")) as Id<"suppliers"> } : {}),
+        ...(kind === "expense" && values.get("supplierReference") ? { supplierReference: String(values.get("supplierReference")).trim() } : {}),
         idempotencyKey: requestKey,
         confirmPossibleDuplicate: confirmDuplicate.current,
         confirmNegativeBalance: confirmNegative.current,
       });
+      savedEntryId = entryId;
+      let receiptStatus = "";
+      const receipt = kind === "expense" ? values.get("receipt") : null;
+      if (receipt instanceof File && receipt.size > 0) {
+        const receiptIdempotencyKey = crypto.randomUUID();
+        try {
+          await uploadExpenseReceipt({ entryId, file: receipt, token: authToken, idempotencyKey: receiptIdempotencyKey });
+        } catch (error) {
+          failedReceipt = { file: receipt, idempotencyKey: receiptIdempotencyKey };
+          receiptStatus = ` Expense saved, but its receipt was not attached: ${error instanceof Error ? error.message : "upload failed"}`;
+        }
+      }
       idempotencyKey.current = null;
       confirmDuplicate.current = false;
       confirmNegative.current = false;
       setRuleConfirmation(null);
       form.reset();
       setOccurredOn(null);
-      setFeedback({ message: `${title.replace("Record a ", "")} saved to the cashbook.`, error: false });
-      recordSaved(`${kind === "sale" ? "Sale" : "Expense"} saved to the cashbook.`);
-      onSaved?.();
+      if (failedReceipt && savedEntryId) {
+        setReceiptRetry({ entryId: savedEntryId, ...failedReceipt });
+        setFeedback({ message: `Expense saved to the cashbook, but the receipt could not be attached. Retry below.${receiptStatus.replace(" Expense saved, but its receipt was not attached:", "")}`, error: true });
+      } else {
+        setReceiptRetry(null);
+        setFeedback({ message: `${title.replace("Record a ", "")} saved to the cashbook.`, error: false });
+        recordSaved(`${kind === "sale" ? "Sale" : "Expense"} saved to the cashbook.`);
+        onSaved?.();
+      }
     } catch (error) {
       if (error instanceof ConvexError) {
         const warning = error.data as { code?: string; message?: string };
@@ -78,17 +107,54 @@ export function EntryForm({ kind, onSaved }: { kind: EntryKind; onSaved?: () => 
       setFeedback({ message: error instanceof Error ? error.message : "Could not save this entry. Try again.", error: true });
     } finally { setBusy(false); setDrawerBusy(false); }
   }
+  async function retryReceiptAttachment() {
+    if (!receiptRetry) return;
+    setBusy(true); setFeedback(null); setDrawerBusy(true);
+    try {
+      await uploadExpenseReceipt({ ...receiptRetry, token: authToken });
+      setReceiptRetry(null);
+      setFeedback({ message: "Receipt attached to the saved expense.", error: false });
+      recordSaved("Expense and receipt saved to the cashbook.");
+      onSaved?.();
+    } catch (error) {
+      setFeedback({ message: `Receipt is still not attached: ${error instanceof Error ? error.message : "upload failed"}`, error: true });
+    } finally { setBusy(false); setDrawerBusy(false); }
+  }
+  function applyExpenseTemplate(templateId: string) {
+    if (!formRef.current || expenseTemplates?.access !== "ready") return;
+    const row = expenseTemplates.templates.find(item => item._id === templateId);
+    if (!row) return;
+    const form = formRef.current;
+    const amount = form.elements.namedItem("amount");
+    const category = form.elements.namedItem("category");
+    const supplier = form.elements.namedItem("supplierId");
+    const unavailable: string[] = [];
+    if (amount instanceof HTMLInputElement) amount.value = row.amountUgx === null ? "" : String(row.amountUgx / currencyScale);
+    if (category instanceof HTMLSelectElement && [...category.options].some(option => option.value === row.category)) category.value = row.category;
+    else { if (category instanceof HTMLSelectElement && category.options.length) category.selectedIndex = 0; unavailable.push(`category “${row.category}” is not in your current list`); }
+    if (supplier instanceof HTMLSelectElement) {
+      if (!row.supplierId) supplier.value = "";
+      else if ([...supplier.options].some(option => option.value === row.supplierId)) supplier.value = row.supplierId;
+      else { supplier.value = ""; unavailable.push(`supplier “${row.supplierName ?? "saved supplier"}” is no longer active`); }
+    }
+    setAccount(row.account);
+    setOccurredOn(row.nextDueOn);
+    setFeedback({ message: `Applied ${row.name} defaults. ${row.amountUgx === null ? "Enter the variable amount. " : ""}${unavailable.length ? `Check ${unavailable.join(" and ")}. ` : ""}Review the amount, date and account before saving; this does not create a scheduled or automatic payment.`, error: unavailable.length > 0 });
+  }
   const createPermission = kind === "sale" ? "sales.create" : "expenses.create";
   if (access?.access === "ready" && !access.permissions.includes(createPermission)) {
     return <div className="empty-state" role="status"><strong>Your role cannot create {kind === "sale" ? "sales" : "expenses"}.</strong><span>Ask a workspace administrator to update your role permissions.</span></div>;
   }
   return <form ref={formRef} className="form-layout" onSubmit={submit}>
+    {kind === "expense" && expenseTemplates?.access === "ready" && expenseTemplates.templates.some(row => row.active && !row.paused) && <div className="field field-full"><label htmlFor="expense-template">Use recurring expense defaults <span className="muted-note">(review before saving)</span></label><select id="expense-template" defaultValue="" onChange={event => applyExpenseTemplate(event.target.value)}><option value="">Choose a reminder</option>{expenseTemplates.templates.filter(row => row.active && !row.paused).map(row => <option value={row._id} key={row._id}>{row.name} · {row.category} · due {row.nextDueOn}</option>)}</select></div>}
     <div className="field"><label htmlFor="entry-amount">Amount ({currency})</label><input id="entry-amount" name="amount" inputMode="decimal" type="number" min={1 / currencyScale} step={1 / currencyScale} placeholder={currencyScale === 1 ? "e.g. 25,000" : "e.g. 25.00"} required /></div>
     <div className="field"><label htmlFor="entry-date">Date</label><input id="entry-date" name="occurredOn" type="date" value={occurredOn ?? businessDate(timezone)} onChange={(event) => setOccurredOn(event.target.value)} required /></div>
     <div className="field"><label htmlFor="entry-category">Category</label><select id="entry-category" name="category" required>{categories.map(category => <option key={category} value={category}>{category}</option>)}</select></div>
     <div className="field"><label>Account</label><div className="segment-control" role="group" aria-label="Account"><button type="button" aria-pressed={account === "cash"} onClick={() => setAccount("cash")}>Cash</button><button type="button" aria-pressed={account === "mobile_money"} onClick={() => setAccount("mobile_money")}>Mobile money</button></div></div>
+    {kind === "expense" && <><div className="field"><label htmlFor="entry-supplier">Supplier <span className="muted-note">(optional)</span></label><select id="entry-supplier" name="supplierId" defaultValue=""><option value="">No supplier recorded</option>{supplierOptions?.access === "ready" && supplierOptions.suppliers.map(supplier => <option value={supplier._id} key={supplier._id}>{supplier.name}</option>)}</select>{supplierOptions?.access === "ready" && !supplierOptions.complete && <small className="muted-note">Only the first 250 active suppliers are listed. Narrow the directory before relying on a missing name.</small>}</div><div className="field"><label htmlFor="entry-supplier-reference">Supplier reference <span className="muted-note">(optional)</span></label><input id="entry-supplier-reference" name="supplierReference" maxLength={120} placeholder="Invoice or receipt number" /></div></>}
     <div className="field field-full"><label htmlFor="entry-note">Description <span className="muted-note">(optional)</span></label><textarea id="entry-note" name="note" rows={3} maxLength={300} placeholder="Add context for this transaction" /></div>
+    {kind === "expense" && <div className="field field-full"><label htmlFor="entry-receipt">Receipt <span className="muted-note">(optional · PDF, JPEG, PNG, or WebP · up to 5 MB)</span></label><input id="entry-receipt" name="receipt" type="file" accept="application/pdf,image/jpeg,image/png,image/webp" onChange={event => { const file = event.currentTarget.files?.[0]; if (file && (file.size > 5 * 1024 * 1024 || !["application/pdf", "image/jpeg", "image/png", "image/webp"].includes(file.type))) { event.currentTarget.value = ""; setFeedback({ message: "Choose a PDF, JPEG, PNG, or WebP receipt under 5 MB.", error: true }); } else setFeedback(null); }} /></div>}
     {ruleConfirmation && <div className="field field-full"><div className="notice-banner notice-warning" role="alert"><strong>Review this cashbook warning</strong><p>{ruleConfirmation.message}</p><div className="form-actions"><button className="button button-accent" type="button" disabled={busy} onClick={() => { if (ruleConfirmation.kind === "duplicate") confirmDuplicate.current = true; else confirmNegative.current = true; setRuleConfirmation(null); formRef.current?.requestSubmit(); }}>Review and continue</button><button className="button" type="button" disabled={busy} onClick={() => { setRuleConfirmation(null); idempotencyKey.current = null; confirmDuplicate.current = false; confirmNegative.current = false; }}>Cancel</button></div></div></div>}
-    <div className="form-actions"><button className="button button-accent" type="submit" disabled={busy}>{busy ? "Saving…" : title}</button>{feedback && <span className={`form-feedback ${feedback.error ? "form-error" : "form-success"}`} role="status">{feedback.message}</span>}</div>
+    <div className="form-actions"><button className="button button-accent" type="submit" disabled={busy || Boolean(receiptRetry)}>{busy ? "Saving…" : title}</button>{receiptRetry && <button className="button" type="button" disabled={busy} onClick={() => void retryReceiptAttachment()}>{busy ? "Attaching…" : "Retry receipt attachment"}</button>}{feedback && <span className={`form-feedback ${feedback.error ? "form-error" : "form-success"}`} role="status">{feedback.message}</span>}</div>
   </form>;
 }

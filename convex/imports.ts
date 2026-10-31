@@ -30,6 +30,38 @@ function safeAdd(a: number, b: number, label: string) {
   return total;
 }
 
+export const previewImpact = query({
+  args: { businessId: v.id("businesses"), rowsJsonChunks: v.array(v.string()) },
+  returns: v.object({ error: v.string(), totals: v.object({ cash: v.number(), mobile_money: v.number(), unallocated: v.number() }), potentialDuplicateRows: v.number() }),
+  handler: async (ctx, args) => {
+    await ownerContext(ctx, args.businessId);
+    const totals = { cash: 0, mobile_money: 0, unallocated: 0 };
+    let potentialDuplicateRows = 0;
+    if (!args.rowsJsonChunks.length || args.rowsJsonChunks.length > 20 || args.rowsJsonChunks.some(chunk => chunk.length > 900_000)) return { error: "Import preview is too large to safely calculate.", totals, potentialDuplicateRows };
+    const seen = new Set<string>();
+    let totalRows = 0;
+    for (const rowsJson of args.rowsJsonChunks) {
+      let parsed: unknown;
+      try { parsed = JSON.parse(rowsJson); } catch { return { error: "Import preview data is invalid.", totals, potentialDuplicateRows }; }
+      if (!Array.isArray(parsed) || parsed.length > 500) return { error: "Import preview chunk is invalid.", totals, potentialDuplicateRows };
+      totalRows += parsed.length;
+      if (totalRows > 10_000) return { error: "Use a preview with no more than 10,000 rows.", totals, potentialDuplicateRows };
+      for (const value of parsed) {
+        if (!value || typeof value !== "object") return { error: "Import preview data is invalid.", totals, potentialDuplicateRows };
+        const row = value as Record<string, unknown>;
+        if ((row.kind !== "sale" && row.kind !== "expense") || !Number.isSafeInteger(row.amountUgx) || Number(row.amountUgx) <= 0 || typeof row.occurredOn !== "string" || !validDay(row.occurredOn) || (row.account !== "cash" && row.account !== "mobile_money" && row.account !== "unallocated") || typeof row.category !== "string" || typeof row.note !== "string") return { error: "An import row is invalid. Review the mapping and values before continuing.", totals, potentialDuplicateRows };
+        const signature = [row.occurredOn, row.kind, row.account, row.category, row.amountUgx, row.note].join("\u0000");
+        if (seen.has(signature)) potentialDuplicateRows++;
+        seen.add(signature);
+        const signed = row.kind === "sale" ? Number(row.amountUgx) : -Number(row.amountUgx);
+        try { totals[row.account] = safeAdd(totals[row.account], signed, "Account impact"); }
+        catch { return { error: "The account impact exceeds the supported safe amount range.", totals, potentialDuplicateRows }; }
+      }
+    }
+    return { error: "", totals, potentialDuplicateRows };
+  },
+});
+
 export const importRows = mutation({
   args: {
     businessId: v.id("businesses"),
