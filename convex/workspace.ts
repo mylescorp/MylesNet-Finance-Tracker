@@ -7,6 +7,7 @@ import type { MutationCtx, QueryCtx } from "./_generated/server";
 import type { Id } from "./_generated/dataModel";
 import { getSelectedWorkspace, listUserWorkspaces } from "./workspaceContext";
 import { hasPermission, permissionsForMembership } from "./accessControl";
+import { assertPeriodUnlocked } from "./periodLocks";
 
 function addSafeInteger(left: number, right: number, label: string) {
   const result = left + right;
@@ -298,6 +299,7 @@ export const createBalanceAdjustment = mutation({
     if (!current || !(await hasPermission(ctx, current.membership, "balanceAdjustments.manage"))) throw new Error("Your role cannot adjust account balances.");
     if (!Number.isSafeInteger(args.countedBalanceUgx) || args.countedBalanceUgx < 0) throw new Error("Enter a valid non-negative counted balance.");
     if (!isIsoDay(args.occurredOn)) throw new Error("Choose a valid adjustment date.");
+    await assertPeriodUnlocked(ctx, current.business._id, args.occurredOn);
     const note = args.note.trim();
     if (note.length < 3 || note.length > 300) throw new Error("Explain the balance adjustment in 3 to 300 characters.");
     const balance = await ctx.db.query("accountBalances").withIndex("by_business_and_account", q => q.eq("businessId", current.business._id).eq("account", args.account)).unique();
@@ -320,9 +322,11 @@ export const updateBalanceAdjustment = mutation({
     const adjustment = await ctx.db.get("balanceAdjustments", args.adjustmentId);
     if (!adjustment || adjustment.businessId !== current.business._id) throw new Error("Balance adjustment not found.");
     if (adjustment.state !== "posted") throw new Error("Voided adjustments cannot be edited.");
+    await assertPeriodUnlocked(ctx, current.business._id, adjustment.occurredOn);
     if (adjustment.account !== args.account) throw new Error("The account for a saved count cannot be changed. Record a new count for another account, then remove this one with a reason.");
     if (!Number.isSafeInteger(args.countedBalanceUgx) || args.countedBalanceUgx < 0) throw new Error("Enter a valid non-negative counted balance.");
     if (!isIsoDay(args.occurredOn)) throw new Error("Choose a valid adjustment date.");
+    await assertPeriodUnlocked(ctx, current.business._id, args.occurredOn);
     const note = args.note.trim();
     if (note.length < 3 || note.length > 300) throw new Error("Explain the balance adjustment in 3 to 300 characters.");
     const nextDelta = addSafeInteger(adjustment.deltaUgx, args.countedBalanceUgx - adjustment.countedBalanceUgx, "Balance adjustment");
@@ -343,6 +347,7 @@ export const voidBalanceAdjustment = mutation({
     const adjustment = await ctx.db.get("balanceAdjustments", args.adjustmentId);
     if (!adjustment || adjustment.businessId !== current.business._id) throw new Error("Balance adjustment not found.");
     if (adjustment.state === "void") return null;
+    await assertPeriodUnlocked(ctx, current.business._id, adjustment.occurredOn);
     const reason = args.reason.trim();
     if (reason.length < 3 || reason.length > 300) throw new Error("Explain why this adjustment is being removed.");
     await applyAccountEffect(ctx, current.business._id, adjustment.account, -adjustment.deltaUgx);
@@ -973,6 +978,7 @@ export const createEntry = mutation({
       if (!sameRequest || !sameLines) throw new Error("This request key was already used for another entry.");
       return duplicate._id;
     }
+    await assertPeriodUnlocked(ctx, current.business._id, args.occurredOn);
 
     const duplicateWindowDays = preferences?.duplicateWindowDays ?? 1;
     if (duplicateWindowDays > 0 && !args.confirmPossibleDuplicate) {
@@ -1085,6 +1091,7 @@ export const voidEntry = mutation({
       throw new Error("This expense was posted by a bill payment, loan repayment, or movement fee. It cannot be voided alone because its related account and schedule history would become inconsistent. A linked operational reversal workflow is required.");
     }
     if (entry.state === "void") return null;
+    await assertPeriodUnlocked(ctx, current.business._id, entry.occurredOn);
     const reason = args.reason.trim();
     if (reason.length < 3 || reason.length > 300) {
       throw new Error("Give a reason between 3 and 300 characters.");
@@ -1170,6 +1177,8 @@ export const correctEntry = mutation({
     }
     const original = await ctx.db.get("entries", args.entryId);
     if (!original || original.businessId !== current.business._id || original.state !== "posted" || (original.source !== "manual" && original.source !== "import") || original.operationSource || original.correctedBy || (original.source === "import" && original.correctionOf)) throw new Error("Choose an uncorrected, manually posted or imported entry in this workspace.");
+    await assertPeriodUnlocked(ctx, current.business._id, original.occurredOn);
+    await assertPeriodUnlocked(ctx, current.business._id, args.occurredOn);
     if (original.source === "import") {
       const match = /^csv:([a-f0-9]{64}):\d+$/.exec(original.idempotencyKey);
       if (!match) throw new Error("This imported row has no recoverable source batch and cannot be corrected here.");

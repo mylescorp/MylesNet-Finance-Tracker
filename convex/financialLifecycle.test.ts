@@ -93,6 +93,34 @@ describe("financial lifecycle invariants", () => {
     expect(stored.day).toMatchObject({ expensesUgx: 500, expenseCount: 1 });
   });
 
+  it("reverses a corrected import when its original period is closed but the replacement period is open", async () => {
+    const { t, owner, userId, businessId, today } = await setup();
+    const currentMonth = `${today.slice(0, 7)}-01`;
+    const previous = new Date(`${currentMonth}T00:00:00.000Z`);
+    previous.setUTCMonth(previous.getUTCMonth() - 1);
+    const previousMonthStart = previous.toISOString().slice(0, 10);
+    const originalDay = `${previousMonthStart.slice(0, 8)}10`;
+    const sourceHash = "b".repeat(64);
+    const now = Date.now();
+    const { batchId, originalId, replacementId } = await t.run(async ctx => {
+      const batchId = await ctx.db.insert("importBatches", { businessId, fileName: "corrected.csv", importType: "cashbook", sourceHash, currency: "UGX", totalRows: 1, importedCount: 1, skippedCount: 0, progressRows: 1, status: "completed", createdBy: userId, createdAt: now });
+      const originalId = await ctx.db.insert("entries", { businessId, kind: "expense", amountUgx: 100, occurredOn: originalDay, account: "cash", category: "Supplies", note: "Old date", source: "import", idempotencyKey: `csv:${sourceHash}:1`, state: "void", createdBy: userId, createdAt: now, voidedAt: now, voidedBy: userId, voidReason: "Corrected date" });
+      const replacementId = await ctx.db.insert("entries", { businessId, kind: "expense", amountUgx: 100, occurredOn: today, account: "cash", category: "Supplies", note: "Corrected date", source: "import", idempotencyKey: "corrected-import-replacement-001", state: "posted", correctionOf: originalId, createdBy: userId, createdAt: now });
+      await ctx.db.patch("entries", originalId, { correctedBy: replacementId });
+      await ctx.db.insert("monthEndClosures", { businessId, periodFrom: previousMonthStart, periodToExclusive: currentMonth, status: "closed", snapshotJson: "{}", preparedBy: userId, preparedAt: now, reviewedBy: userId, reviewedAt: now, updatedAt: now });
+      await ctx.db.insert("dailyTotals", { businessId, day: today, salesUgx: 0, expensesUgx: 100, saleCount: 0, expenseCount: 1 });
+      await ctx.db.patch("accountBalances", (await ctx.db.query("accountBalances").withIndex("by_business_and_account", q => q.eq("businessId", businessId).eq("account", "cash")).unique())!._id, { balanceUgx: 99_900 });
+      return { batchId, originalId, replacementId };
+    });
+    await owner.mutation(api.imports.startBatchReversal, { businessId, batchId, reason: "Reverse corrected source" });
+    const result = await owner.mutation(api.imports.reverseBatchChunk, { businessId, batchId, cursor: null });
+    const stored = await t.run(async ctx => ({ replacement: await ctx.db.get("entries", replacementId), batch: await ctx.db.get("importBatches", batchId), original: await ctx.db.get("entries", originalId) }));
+    expect(result).toMatchObject({ status: "reversed", rollbackProgressRows: 1, processedRows: 1 });
+    expect(stored.original).toMatchObject({ state: "void", correctedBy: replacementId });
+    expect(stored.replacement).toMatchObject({ state: "void", correctionOf: originalId });
+    expect(stored.batch?.status).toBe("reversed");
+  });
+
   it("rejects a correction without a reason before changing the ledger", async () => {
     const { t, owner, businessId, today } = await setup();
     const entryId = await owner.mutation(api.workspace.createEntry, { businessId, kind: "expense", amountUgx: 4_000, occurredOn: today, account: "cash", category: "Supplies", note: "Paper", idempotencyKey: "lifecycle-rejected-entry-001" });

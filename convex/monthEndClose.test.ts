@@ -1,7 +1,7 @@
 /// <reference types="vite/client" />
 import { convexTest } from "convex-test";
 import { describe, expect, it } from "vitest";
-import { api } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 import schema from "./schema";
 
 const modules = import.meta.glob("./**/*.ts");
@@ -21,7 +21,7 @@ async function setup({ complete = true }: { complete?: boolean } = {}) {
   const t = convexTest(schema, modules);
   const period = previousMonth();
   const users = await t.run(async ctx => {
-    const preparerId = await ctx.db.insert("users", { name: "Close preparer" });
+    const preparerId = await ctx.db.insert("users", { name: "Close preparer", email: "preparer@example.test" });
     const reviewerId = await ctx.db.insert("users", { name: "Close reviewer" });
     const memberId = await ctx.db.insert("users", { name: "Read-only member" });
     const createdAt = Date.now();
@@ -142,5 +142,38 @@ describe("month-end close controls", () => {
     const after = await preparer.query(api.monthEndClose.overview, { businessId, periodFrom: period.periodFrom, periodToExclusive: period.periodToExclusive });
     expect(after.access === "ready" ? after.closure?.status : null).toBe("awaiting_review");
     expect(after.access === "ready" && after.snapshot.unreviewedSourceDays.some(row => row.day === `${period.periodFrom.slice(0, 8)}15`)).toBe(true);
+  });
+
+  it("locks ledger writes after approval and permits them after audited reopening", async () => {
+    const { t, preparer, reviewer, businessId, preparerId, period } = await setup();
+    const closureId = await preparer.mutation(api.monthEndClose.prepare, { businessId, periodFrom: period.periodFrom, periodToExclusive: period.periodToExclusive });
+    const prepared = await preparer.query(api.monthEndClose.overview, { businessId, periodFrom: period.periodFrom, periodToExclusive: period.periodToExclusive });
+    if (prepared.access !== "ready" || !prepared.closure) throw new Error("Expected prepared close.");
+    await reviewer.mutation(api.monthEndClose.approve, { businessId, closureId, expectedSnapshotJson: prepared.closure.snapshotJson });
+    const occurredOn = `${period.periodFrom.slice(0, 8)}22`;
+    await t.run(async ctx => {
+      await ctx.db.insert("googleFormIntegrations", { businessId, tokenHash: "test-form-token-hash", active: true, createdBy: preparerId, createdAt: Date.now() });
+      await ctx.db.insert("workspacePreferences", { businessId, incomeCategories: ["Sales"], updatedBy: preparerId, updatedAt: Date.now() });
+    });
+    const formResult = await t.mutation(internal.googleForms.receive, {
+      tokenHash: "test-form-token-hash",
+      payload: JSON.stringify({ sourceKey: "late-form-submission-01", kind: "sale", occurredOn, submittedByEmail: "preparer@example.test", fields: { "Sales: Direct cash / voucher sales": "1000" } }),
+    });
+    expect(formResult).toMatchObject({ status: "needs_review", message: expect.stringContaining("closed") });
+    const receipt = await t.run(ctx => ctx.db.query("googleFormReceipts").withIndex("by_business_and_source", q => q.eq("businessId", businessId).eq("sourceKey", "late-form-submission-01")).unique());
+    expect(receipt).toMatchObject({ status: "needs_review", occurredOn, attemptCount: 1 });
+    await expect(preparer.mutation(api.workspace.createEntry, {
+      businessId, kind: "expense", amountUgx: 10_000, occurredOn, account: "cash", category: "Repairs", note: "Late invoice",
+      idempotencyKey: "closed-period-entry-key-0001",
+    })).rejects.toThrow("This period is closed");
+    await expect(preparer.mutation(api.operations.createMovement, {
+      businessId, kind: "transfer", amountUgx: 1_000, fromAccount: "cash", toAccount: "mobile_money", occurredOn,
+      note: "Late transfer", idempotencyKey: "closed-period-movement-01",
+    })).rejects.toThrow("This period is closed");
+    await reviewer.mutation(api.monthEndClose.reopen, { businessId, closureId, reason: "Record an invoice received late." });
+    await preparer.mutation(api.workspace.createEntry, {
+      businessId, kind: "expense", amountUgx: 10_000, occurredOn, account: "cash", category: "Repairs", note: "Late invoice",
+      idempotencyKey: "closed-period-entry-key-0001",
+    });
   });
 });
