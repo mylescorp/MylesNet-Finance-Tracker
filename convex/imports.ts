@@ -3,7 +3,7 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import { ConvexError, v } from "convex/values";
 import { mutation, query } from "./_generated/server";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
-import type { Id } from "./_generated/dataModel";
+import type { Doc, Id } from "./_generated/dataModel";
 import { hasPermission } from "./accessControl";
 import { assertPeriodUnlocked } from "./periodLocks";
 
@@ -223,20 +223,41 @@ export const reverseBatchChunk = mutation({
     const result = await ctx.db.query("entries")
       .withIndex("by_business_and_idempotency", q => q.eq("businessId", business._id).gte("idempotencyKey", prefix).lt("idempotencyKey", `${prefix}\uffff`))
       .order("asc")
-      .paginate({ numItems: 25, cursor: args.cursor });
+      .paginate({ numItems: 5, cursor: args.cursor });
     const reason = batch.rollbackReason ?? "Import batch reversal";
     const now = Date.now();
     let reversedNow = 0;
     for (const entry of result.page) {
       if (!entry.idempotencyKey.startsWith(prefix) || entry.source !== "import") throw new ConvexError("The batch contains a row that is not a matching imported cashbook entry.");
-      let effectiveEntry = entry;
+      let effectiveEntries = [entry];
+      const splitCorrection: Doc<"entrySplitCorrections"> | null = entry.splitCorrectionId ? await ctx.db.get("entrySplitCorrections", entry.splitCorrectionId) : null;
+      if (splitCorrection && (splitCorrection.businessId !== business._id || splitCorrection.sourceEntryId !== entry._id)) throw new ConvexError("The split correction is inconsistent with its imported source row.");
       if (entry.state === "void") {
-        if (!entry.correctedBy) continue;
-        const replacement = await ctx.db.get("entries", entry.correctedBy);
-        if (!replacement || replacement.businessId !== business._id || replacement.source !== "import" || replacement.correctionOf !== entry._id) throw new ConvexError("The corrected import row has inconsistent replacement history; reconcile it before reversing this batch.");
-        if (replacement.state === "void") continue;
-        effectiveEntry = replacement;
+        if (entry.splitCorrectionId) {
+          if (!splitCorrection || splitCorrection.businessId !== business._id || splitCorrection.sourceEntryId !== entry._id || splitCorrection.provenance !== "confirmed" || !splitCorrection.replacementEntryIds?.length) throw new ConvexError("The split import correction has inconsistent replacement history; reconcile it before reversing this batch.");
+          effectiveEntries = [];
+          for (const replacementId of splitCorrection.replacementEntryIds) {
+            const replacement = await ctx.db.get("entries", replacementId);
+            if (!replacement || replacement.businessId !== business._id || replacement.source !== "import" || replacement.correctionOf !== entry._id || replacement.splitCorrectionId !== splitCorrection._id) throw new ConvexError("A split import replacement is inconsistent; reconcile it before reversing this batch.");
+            if (replacement.state === "posted") effectiveEntries.push(replacement);
+          }
+          if (!effectiveEntries.length) {
+            if (splitCorrection.provenance === "confirmed") await ctx.db.patch("entrySplitCorrections", splitCorrection._id, { provenance: "reversed" });
+            reversedNow++;
+            continue;
+          }
+        } else {
+          if (!entry.correctedBy) continue;
+          const replacement = await ctx.db.get("entries", entry.correctedBy);
+          if (!replacement || replacement.businessId !== business._id || replacement.source !== "import" || replacement.correctionOf !== entry._id) throw new ConvexError("The corrected import row has inconsistent replacement history; reconcile it before reversing this batch.");
+          if (replacement.state === "void") continue;
+          effectiveEntries = [replacement];
+        }
       }
+      let splitRowsReversed = 0;
+      for (const effectiveEntry of effectiveEntries) {
+      if (entry.splitCorrectionId && effectiveEntry.state === "void") { splitRowsReversed++; continue; }
+      if (effectiveEntry.splitCorrectionId && !splitCorrection) throw new ConvexError("A split replacement has no correction record; reconcile it before reversing this batch.");
       await assertPeriodUnlocked(ctx, business._id, effectiveEntry.occurredOn);
       if (effectiveEntry.operationSource) throw new ConvexError("An imported row is linked to an operation and cannot be safely reversed with this batch.");
       const day = await ctx.db.query("dailyTotals").withIndex("by_business_and_day", q => q.eq("businessId", business._id).eq("day", effectiveEntry.occurredOn)).unique();
@@ -259,6 +280,10 @@ export const reverseBatchChunk = mutation({
       }
       await ctx.db.patch("entries", effectiveEntry._id, { state: "void", voidedAt: now, voidedBy: userId, voidReason: reason });
       await ctx.db.insert("auditEvents", { businessId: business._id, actorId: userId, action: "entry.import_reversed", entityType: "entry", entityId: effectiveEntry._id, occurredAt: now, summary: `Reversed imported ${effectiveEntry.kind} · ${effectiveEntry.occurredOn} · ${effectiveEntry.category}.`, details: JSON.stringify({ batchId: batch._id, importEntryId: entry._id, correctionReplacementId: effectiveEntry._id === entry._id ? undefined : effectiveEntry._id, reason, amountUgx: effectiveEntry.amountUgx, account: effectiveEntry.account }) });
+      splitRowsReversed++;
+      }
+      if (splitCorrection && splitRowsReversed === effectiveEntries.length) await ctx.db.patch("entrySplitCorrections", splitCorrection._id, { provenance: "reversed" });
+      if (entry.splitCorrectionId && entry.state === "posted") await ctx.db.patch("entries", entry._id, { splitCorrectionId: undefined });
       reversedNow++;
     }
     const status = result.isDone ? "reversed" as const : "reversing" as const;
@@ -307,12 +332,15 @@ export const cashbookReport = query({
     const rows = await ctx.db.query("entries").withIndex("by_business_and_idempotency", q => q.eq("businessId", business._id).gte("idempotencyKey", prefix).lt("idempotencyKey", `${prefix}\uffff`)).take(10_001);
     if (rows.length > 10_000) throw new ConvexError("This import contains too many rows to export safely.");
     if (rows.some(row => row.source !== "import" || !row.idempotencyKey.startsWith(prefix))) throw new ConvexError("This import contains inconsistent source rows; reconcile it before exporting.");
-    const headers = ["source_row", "entry_id", "date", "kind", "amount_ugx", "account", "category", "note", "state", "void_reason", "corrected_by_entry_id", "correction_of_entry_id", "created_at_utc"];
-    const data = rows.map(row => {
+    const headers = ["source_row", "entry_id", "date", "kind", "amount_ugx", "account", "category", "note", "state", "void_reason", "corrected_by_entry_id", "correction_of_entry_id", "split_correction_id", "split_provenance", "split_allocations_json", "created_at_utc"];
+    const data = await Promise.all(rows.map(async row => {
       const sourceRow = row.idempotencyKey.slice(prefix.length);
       if (!/^\d+$/.test(sourceRow) || Number(sourceRow) > batch.totalRows) throw new ConvexError("This import contains an invalid source row reference.");
-      return [sourceRow, row._id, row.occurredOn, row.kind, row.amountUgx, row.account, row.category, row.note, row.state, row.voidReason ?? "", row.correctedBy ?? "", row.correctionOf ?? "", new Date(row.createdAt).toISOString()];
-    });
+      const split = row.splitCorrectionId ? await ctx.db.get("entrySplitCorrections", row.splitCorrectionId) : await ctx.db.query("entrySplitCorrections").withIndex("by_business_and_entry", q => q.eq("businessId", business._id).eq("sourceEntryId", row._id)).order("desc").first();
+      if (split && (split.businessId !== business._id || split.sourceEntryId !== row._id)) throw new ConvexError("This import has inconsistent split-correction details; reconcile it before exporting.");
+      const splitAllocations = split ? JSON.stringify(split.allocations) : "";
+      return [sourceRow, row._id, row.occurredOn, row.kind, row.amountUgx, row.account, row.category, row.note, row.state, row.voidReason ?? "", row.correctedBy ?? "", row.correctionOf ?? "", split?._id ?? "", split?.provenance ?? "", splitAllocations, new Date(row.createdAt).toISOString()];
+    }));
     return [headers, ...data].map(row => row.map(csvCell).join(",")).join("\r\n");
   },
 });

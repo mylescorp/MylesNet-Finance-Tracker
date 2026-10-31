@@ -31,6 +31,7 @@ import type * as operations from "../operations.js";
 import type * as periodLocks from "../periodLocks.js";
 import type * as reconciliationUtils from "../reconciliationUtils.js";
 import type * as settings from "../settings.js";
+import type * as splitCorrections from "../splitCorrections.js";
 import type * as suppliers from "../suppliers.js";
 import type * as users from "../users.js";
 import type * as vouchers from "../vouchers.js";
@@ -68,6 +69,7 @@ declare const fullApi: ApiFromModules<{
   periodLocks: typeof periodLocks;
   reconciliationUtils: typeof reconciliationUtils;
   settings: typeof settings;
+  splitCorrections: typeof splitCorrections;
   suppliers: typeof suppliers;
   users: typeof users;
   vouchers: typeof vouchers;
