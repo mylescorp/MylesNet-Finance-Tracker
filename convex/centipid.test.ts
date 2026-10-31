@@ -47,15 +47,18 @@ async function deliver(t: ReturnType<typeof convexTest>, event: string, data: Re
 describe("Centipid webhook event idempotency", () => {
   it("exports bounded receipt summaries only to authorized integration managers", async () => {
     const t = await setupWorkspace();
-    const { userId, deniedUserId, businessId } = await t.run(async ctx => {
+    const { userId, deniedUserId, foreignUserId, businessId } = await t.run(async ctx => {
       const user = await ctx.db.query("users").first();
       const business = await ctx.db.query("businesses").first();
       if (!user || !business) throw new Error("Test workspace was not seeded.");
       await ctx.db.insert("memberships", { businessId: business._id, userId: user._id, role: "owner", active: true, createdAt: Date.now() });
       const deniedUserId = await ctx.db.insert("users", { name: "Cashier without integration access" });
       await ctx.db.insert("memberships", { businessId: business._id, userId: deniedUserId, role: "member", active: true, createdAt: Date.now() });
+      const foreignUserId = await ctx.db.insert("users", { name: "Owner of another workspace" });
+      const foreignBusinessId = await ctx.db.insert("businesses", { name: "Other workspace", currency: "UGX", timezone: "Africa/Kampala", createdBy: foreignUserId, createdAt: Date.now() });
+      await ctx.db.insert("memberships", { businessId: foreignBusinessId, userId: foreignUserId, role: "owner", active: true, createdAt: Date.now() });
       await ctx.db.insert("webhookReceipts", { businessId: business._id, eventKey: "private-reference-123", event: "=payment.received", status: "failed", errorMessage: "Processing failed.", rawHash: "private-payload-hash", createdAt: Date.now(), attemptCount: 3 });
-      return { userId: user._id, deniedUserId, businessId: business._id };
+      return { userId: user._id, deniedUserId, foreignUserId, businessId: business._id };
     });
     const csv = await t.withIdentity({ subject: userId }).query(api.centipid.exportHistory, { businessId });
     expect(csv).toContain('"event","status","routed_to"');
@@ -66,6 +69,7 @@ describe("Centipid webhook event idempotency", () => {
     expect(csv).not.toContain("private-payload-hash");
     await expect(t.query(api.centipid.exportHistory, { businessId })).rejects.toThrow();
     await expect(t.withIdentity({ subject: deniedUserId }).query(api.centipid.exportHistory, { businessId })).rejects.toThrow();
+    await expect(t.withIdentity({ subject: foreignUserId }).query(api.centipid.exportHistory, { businessId })).rejects.toThrow();
   });
 
   it("accepts a corrected voucher redemption with an explicit amount after the amount-less event was skipped", async () => {
