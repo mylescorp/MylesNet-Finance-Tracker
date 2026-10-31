@@ -72,8 +72,9 @@ export function VoucherBatchPanel({ businessId, timezone }: { businessId: Id<"bu
   }
 
   const selectedBatch = selected ? batches.find(batch => batch._id === selected.batchId) : undefined;
+  const selectedExpiryPending = Boolean(selectedBatch?.expiresOn && !businessDay);
   const selectedBatchExpired = Boolean(selectedBatch?.expiresOn && businessDay && selectedBatch.expiresOn < businessDay);
-  const selectedMaximum = selected && selectedBatch ? selected.eventType === "redemption" ? selectedBatchExpired ? 0 : selectedBatch.unredeemedQuantity : selectedBatch.unredeemedQuantity : 0;
+  const selectedMaximum = selected && selectedBatch ? selected.eventType === "redemption" ? selectedExpiryPending || selectedBatchExpired ? 0 : selectedBatch.unredeemedQuantity : selectedBatch.unredeemedQuantity : 0;
   return <section className="card settings-card">
     <div className="card-heading"><div><h2 className="card-title">Voucher batches</h2><p className="card-subtitle">Track issued vouchers, redemptions, stock removals, and expiry. This inventory does not create or change cashbook entries.</p></div></div>
     <form className="form-layout" onSubmit={e => void create(e)}>
@@ -92,11 +93,12 @@ export function VoucherBatchPanel({ businessId, timezone }: { businessId: Id<"bu
       <div className="form-actions"><button className="button button-accent" disabled={busy || selectedMaximum === 0 || Number(eventQuantity) > selectedMaximum}>Record activity</button><button className="button" type="button" disabled={busy} onClick={() => setSelected(null)}>Cancel</button></div>
     </form>}
     {status === "LoadingFirstPage" ? <p className="muted-note">Loading voucher batches…</p> : batches.length === 0 ? <p className="muted-note">No voucher batches have been recorded.</p> : <div className="table-scroll"><table className="data-table"><thead><tr><th>Batch</th><th>Unit value</th><th>Issued</th><th>Redeemed</th><th>Voided</th><th>Unredeemed value</th><th>Expires</th><th>Actions</th></tr></thead><tbody>{batches.map(batch => {
+      const expiryPending = Boolean(batch.expiresOn && !businessDay);
       const expired = Boolean(batch.expiresOn && businessDay && batch.expiresOn < businessDay);
       const remainingQuantity = expired ? 0 : batch.unredeemedQuantity;
       return <tr key={batch._id}>
-      <td>{batch.name}{batch.description && <small className="balance-adjustment-reason">{batch.description}</small>}</td><td>UGX {batch.faceValueUgx.toLocaleString()}</td><td>{batch.issuedQuantity}</td><td>{batch.redeemedQuantity}</td><td>{batch.voidedQuantity}</td><td>{expired ? `${batch.unredeemedQuantity} expired · UGX ${batch.unredeemedValueUgx.toLocaleString()}` : `${batch.unredeemedQuantity} · UGX ${batch.unredeemedValueUgx.toLocaleString()}`}</td><td>{batch.expiresOn ?? "—"}</td>
-      <td><div className="balance-adjustment-actions"><button type="button" className="button button-small" disabled={busy || expired || remainingQuantity === 0} onClick={() => { setFeedback(""); setSelected({ batchId: batch._id, eventType: "redemption" }); }}>Redeem</button><button type="button" className="button button-small button-danger-quiet" disabled={busy || batch.unredeemedQuantity === 0} onClick={() => { setFeedback(""); setSelected({ batchId: batch._id, eventType: "void_stock" }); }}>Void stock</button></div></td>
+      <td>{batch.name}{batch.description && <small className="balance-adjustment-reason">{batch.description}</small>}</td><td>UGX {batch.faceValueUgx.toLocaleString()}</td><td>{batch.issuedQuantity}</td><td>{batch.redeemedQuantity}</td><td>{batch.voidedQuantity}</td><td>{expiryPending ? "Checking expiry…" : expired ? `${batch.unredeemedQuantity} expired · UGX ${batch.unredeemedValueUgx.toLocaleString()}` : `${batch.unredeemedQuantity} · UGX ${batch.unredeemedValueUgx.toLocaleString()}`}</td><td>{batch.expiresOn ?? "—"}</td>
+      <td><div className="balance-adjustment-actions"><button type="button" className="button button-small" disabled={busy || expiryPending || expired || remainingQuantity === 0} onClick={() => { setFeedback(""); setSelected({ batchId: batch._id, eventType: "redemption" }); }}>Redeem</button><button type="button" className="button button-small button-danger-quiet" disabled={busy || batch.unredeemedQuantity === 0} onClick={() => { setFeedback(""); setSelected({ batchId: batch._id, eventType: "void_stock" }); }}>Void stock</button></div></td>
     </tr>; })}</tbody></table></div>}
     {status === "CanLoadMore" && <button type="button" className="button" disabled={busy} onClick={() => loadMore(30)}>Load older batches</button>}
     {status === "LoadingMore" && <p className="muted-note" role="status">Loading older batches…</p>}
