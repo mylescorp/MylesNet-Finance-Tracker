@@ -4,7 +4,7 @@ import { ConvexError, v } from "convex/values";
 import { internal } from "./_generated/api";
 import { internalMutation, mutation, query } from "./_generated/server";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
-import type { Id } from "./_generated/dataModel";
+import type { Doc, Id } from "./_generated/dataModel";
 import { hasPermission, permissionsForMembership } from "./accessControl";
 import { assertPeriodUnlocked, isPeriodClosed } from "./periodLocks";
 
@@ -85,6 +85,12 @@ export const reviewDetails = query({
   },
 });
 
+async function recordReprocessFailure(ctx: MutationCtx, receipt: Doc<"googleFormReceipts">, userId: Id<"users">, reason: string, summary: string) {
+  const now = Date.now();
+  await ctx.db.patch("googleFormReceipts", receipt._id, { status: "needs_review", summary, attemptCount: (receipt.attemptCount ?? 1) + 1, lastAttemptAt: now });
+  await ctx.db.insert("auditEvents", { businessId: receipt.businessId, actorId: userId, action: "google_form.receipt_reprocessed", entityType: "googleFormReceipt", entityId: receipt._id, occurredAt: now, summary: "Reviewed Google Form submission could not be reprocessed.", details: JSON.stringify({ outcome: "needs_review", reason, result: summary }) });
+}
+
 function receiptCsvCell(value: string | number) {
   const text = String(value);
   const safe = typeof value === "string" && /^[\s\u0000-\u001f]*[=+@-]/.test(text) ? `'${text}` : text;
@@ -162,8 +168,17 @@ export const reprocessNeedsReview = mutation({
       const value: unknown = JSON.parse(receipt.detailsJson);
       if (!value || typeof value !== "object" || Array.isArray(value) || Object.values(value).some(item => typeof item !== "string")) throw new Error("Invalid fields");
       fields = value as Record<string, string>;
-    } catch { throw new ConvexError("Saved submission details are invalid and cannot be reprocessed."); }
+    } catch {
+      const summary = "Saved submission details are invalid and cannot be reprocessed.";
+      await recordReprocessFailure(ctx, receipt, userId, reason, summary);
+      return { status: "needs_review" as const, summary };
+    }
     const payload = JSON.stringify({ sourceKey: receipt.sourceKey, kind: receipt.submissionKind, occurredOn: receipt.occurredOn, fields });
+    if (payload.length > 16_000) {
+      const summary = "Saved submission exceeds the safe retry size. Reduce the form fields before submitting it again.";
+      await recordReprocessFailure(ctx, receipt, userId, reason, summary);
+      return { status: "needs_review" as const, summary };
+    }
     const result: { status: "posted" | "needs_review" | "duplicate" | "unauthorized"; message?: string } = await ctx.runMutation(internal.googleForms.receive, { tokenHash: "", payload, businessId: business._id, reprocessBy: userId, reprocessReason: reason });
     if (result.status === "unauthorized") throw new ConvexError("Could not authorize the reviewed submission.");
     return { status: result.status === "duplicate" ? "posted" as const : result.status, summary: result.message ?? "Submission reprocessed." };
@@ -275,6 +290,11 @@ export const receive = internalMutation({
       status = "needs_review";
       summary = `This submission is dated in the closed ${date!.slice(0, 7)} period. Reopen the month and review the saved receipt before posting it.`;
     }
+    if (JSON.stringify(fields).length > 16_000) {
+      status = "needs_review";
+      totalUgx = 0;
+      summary = "Submission details exceed the safe storage size. Reduce the form fields before submitting it again.";
+    }
     if (status === "posted") {
       for (const [index, entry] of changes.entries()) {
         const idempotencyKey = `google-form:${input.sourceKey}:${index}`;
@@ -302,7 +322,7 @@ export const receive = internalMutation({
       }
     }
     const attemptCount = existing ? (existing.attemptCount ?? 1) + 1 : 1;
-    const receiptValues = { businessId: business._id, sourceKey: input.sourceKey, submissionKind: input.kind, status, occurredOn: validDay(date) ? date : undefined, amountUgx: totalUgx || undefined, summary, detailsJson: JSON.stringify(fields).slice(0, 16_000), attemptCount, lastAttemptAt: now };
+    const receiptValues = { businessId: business._id, sourceKey: input.sourceKey, submissionKind: input.kind, status, occurredOn: validDay(date) ? date : undefined, amountUgx: totalUgx || undefined, summary, detailsJson: JSON.stringify(fields), attemptCount, lastAttemptAt: now };
     if (existing) await ctx.db.patch("googleFormReceipts", existing._id, receiptValues);
     else await ctx.db.insert("googleFormReceipts", { ...receiptValues, createdAt: now });
     if (args.reprocessBy && args.reprocessReason && existing) await ctx.db.insert("auditEvents", { businessId: business._id, actorId: args.reprocessBy, action: "google_form.receipt_reprocessed", entityType: "googleFormReceipt", entityId: existing._id, occurredAt: now, summary: `Reviewed Google Form submission reprocessed as ${status}.`, details: JSON.stringify({ outcome: status, reason: args.reprocessReason }) });
