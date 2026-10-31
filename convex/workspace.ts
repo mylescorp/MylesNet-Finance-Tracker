@@ -690,6 +690,7 @@ export const recentEntries = query({
       state: v.union(v.literal("posted"), v.literal("void")),
       canVoid: v.boolean(),
       canCorrect: v.boolean(),
+      canSplit: v.boolean(),
       splitCorrectionStatus: v.union(v.literal("estimated"), v.literal("confirmed"), v.literal("cancelled"), v.literal("reversed"), v.null()),
       splitCorrectionId: v.union(v.id("entrySplitCorrections"), v.null()),
       isSplitReplacement: v.boolean(),
@@ -729,7 +730,7 @@ export const recentEntries = query({
     const visibleRows = rows.filter(row => (row.kind === "sale" ? canViewSales : canViewExpenses) && (!args.account || row.account === args.account)).slice(0, limit);
     const canCreateExpenses = await hasPermission(ctx, current.membership, "expenses.create");
     const canManageExpenses = await hasPermission(ctx, current.membership, "expenses.update");
-    return await Promise.all(visibleRows.map(async ({ _id, kind, amountUgx, occurredOn, account, category, note, supplierName, supplierReference, state, operationSource, source, correctionOf, correctedBy, splitCorrectionId, createdBy, idempotencyKey, businessId }) => {
+    return await Promise.all(visibleRows.map(async ({ _id, kind, amountUgx, occurredOn, account, category, note, supplierName, supplierReference, lineItems, state, operationSource, source, correctionOf, correctedBy, splitCorrectionId, createdBy, idempotencyKey, businessId }) => {
       let importedBatchReady = false;
       if (source === "import" && !correctionOf) {
         const match = /^csv:([a-f0-9]{64}):\d+$/.exec(idempotencyKey);
@@ -752,6 +753,7 @@ export const recentEntries = query({
         state,
         canVoid: !operationSource && !splitCorrectionId,
         canCorrect: (source === "manual" || importedBatchReady) && !operationSource && !correctedBy && !splitCorrectionId,
+        canSplit: (source === "manual" || importedBatchReady) && !operationSource && !correctedBy && !correctionOf && !splitCorrectionId && !(kind === "expense" && (lineItems?.length ?? 0) > 0),
         splitCorrectionStatus: split?.provenance ?? null,
         splitCorrectionId: split?._id ?? null,
         isSplitReplacement: Boolean(split && correctionOf === split.sourceEntryId),

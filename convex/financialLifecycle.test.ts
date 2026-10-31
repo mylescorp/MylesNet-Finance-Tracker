@@ -116,6 +116,15 @@ describe("financial lifecycle invariants", () => {
     expect(reopened.day).toMatchObject({ expensesUgx: 4_000, expenseCount: 1 });
   });
 
+  it("only offers split estimates for supported non-itemized source entries", async () => {
+    const { owner, businessId, today } = await setup();
+    await owner.mutation(api.workspace.createEntry, { businessId, kind: "expense", amountUgx: 1_000, occurredOn: today, account: "cash", category: "General", note: "Simple expense", idempotencyKey: "lifecycle-split-eligible-001" });
+    await owner.mutation(api.workspace.createEntry, { businessId, kind: "expense", amountUgx: 1_000, occurredOn: today, account: "cash", category: "Supplies", note: "Itemized expense", lineItems: [{ name: "Paper", quantity: 1, unit: "pack", unitPriceUgx: 1_000, lineTotalUgx: 1_000 }], idempotencyKey: "lifecycle-split-ineligible-001" });
+    const entries = await owner.query(api.workspace.recentEntries, { limit: 10, kind: "expense" });
+    expect(entries.find(entry => entry.note === "Simple expense")?.canSplit).toBe(true);
+    expect(entries.find(entry => entry.note === "Itemized expense")?.canSplit).toBe(false);
+  });
+
   it("requires split allocations to preserve the source amount and keeps cancelled estimates out of the ledger", async () => {
     const { t, owner, businessId, today } = await setup();
     const entryId = await owner.mutation(api.workspace.createEntry, { businessId, kind: "sale", amountUgx: 5_000, occurredOn: today, account: "cash", category: "Retail", note: "Mixed sale", idempotencyKey: "lifecycle-split-cancel-source" });
