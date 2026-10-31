@@ -76,6 +76,101 @@ describe("financial lifecycle invariants", () => {
     expect(stored.day).toMatchObject({ expensesUgx: 3_000, expenseCount: 1 });
   });
 
+  it("keeps a split as an estimate until confirmation, then preserves account totals and idempotent retries", async () => {
+    const { t, owner, businessId, today } = await setup();
+    await t.run(async ctx => {
+      const preferences = await ctx.db.query("workspacePreferences").withIndex("by_business", q => q.eq("businessId", businessId)).unique();
+      if (preferences) await ctx.db.patch("workspacePreferences", preferences._id, { negativeBalanceWarning: true });
+    });
+    const entryId = await owner.mutation(api.workspace.createEntry, { businessId, kind: "expense", amountUgx: 4_000, occurredOn: today, account: "cash", category: "General", note: "Mixed supplies", idempotencyKey: "lifecycle-split-source-001" });
+    const args = { businessId, entryId, allocations: [{ amountUgx: 1_500, category: "Stationery", account: "cash" as const }, { amountUgx: 2_500, category: "Cleaning", account: "mobile_money" as const }], reason: "Receipt lists two categories", idempotencyKey: "lifecycle-split-estimate-001" };
+    const splitId = await owner.mutation(api.splitCorrections.saveEstimate, args);
+    expect(await owner.mutation(api.splitCorrections.saveEstimate, args)).toBe(splitId);
+    const snapshot = await t.run(async ctx => ({ source: await ctx.db.get("entries", entryId), split: await ctx.db.get("entrySplitCorrections", splitId), cash: await ctx.db.query("accountBalances").withIndex("by_business_and_account", q => q.eq("businessId", businessId).eq("account", "cash")).unique(), mobile: await ctx.db.query("accountBalances").withIndex("by_business_and_account", q => q.eq("businessId", businessId).eq("account", "mobile_money")).unique(), day: await ctx.db.query("dailyTotals").withIndex("by_business_and_day", q => q.eq("businessId", businessId).eq("day", today)).unique() }));
+    expect(snapshot.source).toMatchObject({ state: "posted", amountUgx: 4_000 });
+    expect(snapshot.split?.provenance).toBe("estimated");
+    expect(snapshot.cash?.balanceUgx).toBe(96_000);
+    expect(snapshot.mobile).toBeNull();
+    expect(snapshot.day).toMatchObject({ expensesUgx: 4_000, expenseCount: 1 });
+    await expect(owner.mutation(api.splitCorrections.confirmEstimate, { businessId, splitCorrectionId: splitId })).rejects.toThrow("below zero");
+    const replacements = await owner.mutation(api.splitCorrections.confirmEstimate, { businessId, splitCorrectionId: splitId, confirmNegativeBalance: true });
+    expect(await owner.mutation(api.splitCorrections.confirmEstimate, { businessId, splitCorrectionId: splitId })).toEqual(replacements);
+    const confirmed = await t.run(async ctx => ({ source: await ctx.db.get("entries", entryId), split: await ctx.db.get("entrySplitCorrections", splitId), rows: await Promise.all(replacements.map(id => ctx.db.get("entries", id))), cash: await ctx.db.query("accountBalances").withIndex("by_business_and_account", q => q.eq("businessId", businessId).eq("account", "cash")).unique(), mobile: await ctx.db.query("accountBalances").withIndex("by_business_and_account", q => q.eq("businessId", businessId).eq("account", "mobile_money")).unique(), day: await ctx.db.query("dailyTotals").withIndex("by_business_and_day", q => q.eq("businessId", businessId).eq("day", today)).unique() }));
+    expect(confirmed.source).toMatchObject({ state: "void", correctedBy: replacements[0] });
+    expect(confirmed.split).toMatchObject({ provenance: "confirmed", replacementEntryIds: replacements, totalUgx: 4_000 });
+    expect(confirmed.rows).toMatchObject([{ amountUgx: 1_500, category: "Stationery", account: "cash", state: "posted" }, { amountUgx: 2_500, category: "Cleaning", account: "mobile_money", state: "posted" }]);
+    expect(confirmed.cash?.balanceUgx).toBe(98_500);
+    expect(confirmed.mobile?.balanceUgx).toBe(-2_500);
+    expect(confirmed.day).toMatchObject({ expensesUgx: 4_000, expenseCount: 2 });
+    expect((await t.run(ctx => ctx.db.query("auditEvents").collect())).filter(event => event.action === "entry.split_confirmed")).toHaveLength(1);
+    const reopenArgs = { businessId, splitCorrectionId: splitId, reason: "Found the original allocation detail", idempotencyKey: "lifecycle-split-reopen-001" };
+    await owner.mutation(api.splitCorrections.reopenConfirmed, reopenArgs);
+    await owner.mutation(api.splitCorrections.reopenConfirmed, reopenArgs);
+    const reopened = await t.run(async ctx => ({ source: await ctx.db.get("entries", entryId), split: await ctx.db.get("entrySplitCorrections", splitId), rows: await Promise.all(replacements.map(id => ctx.db.get("entries", id))), cash: await ctx.db.query("accountBalances").withIndex("by_business_and_account", q => q.eq("businessId", businessId).eq("account", "cash")).unique(), mobile: await ctx.db.query("accountBalances").withIndex("by_business_and_account", q => q.eq("businessId", businessId).eq("account", "mobile_money")).unique(), day: await ctx.db.query("dailyTotals").withIndex("by_business_and_day", q => q.eq("businessId", businessId).eq("day", today)).unique() }));
+    expect(reopened.source).toMatchObject({ state: "posted", amountUgx: 4_000 });
+    expect(reopened.source?.splitCorrectionId).toBeUndefined();
+    expect(reopened.split).toMatchObject({ provenance: "reversed", reopenIdempotencyKey: reopenArgs.idempotencyKey });
+    expect(reopened.rows.every(row => row?.state === "void")).toBe(true);
+    expect(reopened.cash?.balanceUgx).toBe(96_000);
+    expect(reopened.mobile?.balanceUgx).toBe(0);
+    expect(reopened.day).toMatchObject({ expensesUgx: 4_000, expenseCount: 1 });
+  });
+
+  it("requires split allocations to preserve the source amount and keeps cancelled estimates out of the ledger", async () => {
+    const { t, owner, businessId, today } = await setup();
+    const entryId = await owner.mutation(api.workspace.createEntry, { businessId, kind: "sale", amountUgx: 5_000, occurredOn: today, account: "cash", category: "Retail", note: "Mixed sale", idempotencyKey: "lifecycle-split-cancel-source" });
+    await expect(owner.mutation(api.splitCorrections.saveEstimate, { businessId, entryId, allocations: [{ amountUgx: 1_000, category: "Food", account: "cash" }, { amountUgx: 3_000, category: "Household", account: "cash" }], reason: "Breakdown from notes", idempotencyKey: "lifecycle-split-bad-sum" })).rejects.toThrow("add up exactly");
+    const splitCorrectionId = await owner.mutation(api.splitCorrections.saveEstimate, { businessId, entryId, allocations: [{ amountUgx: 2_000, category: "Food", account: "cash" }, { amountUgx: 3_000, category: "Household", account: "cash" }], reason: "Breakdown from notes", idempotencyKey: "lifecycle-split-cancel-estimate" });
+    await owner.mutation(api.splitCorrections.cancelEstimate, { businessId, splitCorrectionId, reason: "Found the correct receipt" });
+    const stored = await t.run(async ctx => ({ source: await ctx.db.get("entries", entryId), split: await ctx.db.get("entrySplitCorrections", splitCorrectionId), day: await ctx.db.query("dailyTotals").withIndex("by_business_and_day", q => q.eq("businessId", businessId).eq("day", today)).unique() }));
+    expect(stored.source).toMatchObject({ state: "posted", amountUgx: 5_000 });
+    expect(stored.source?.splitCorrectionId).toBeUndefined();
+    expect(stored.split?.provenance).toBe("cancelled");
+    expect(stored.day).toMatchObject({ salesUgx: 5_000, saleCount: 1 });
+  });
+
+  it("reverses a confirmed split import once as a group and restores original totals", async () => {
+    const { t, owner, businessId, today } = await setup();
+    const sourceHash = "c".repeat(64);
+    const batch = await owner.mutation(api.imports.beginBatch, { businessId, sourceHash, fileName: "split.csv", importType: "cashbook", currency: "UGX", totalRows: 1 });
+    await owner.mutation(api.imports.importRows, { businessId, batchId: batch.batchId, startRow: 0, rows: [{ rowNumber: 1, kind: "expense", amountUgx: 4_000, occurredOn: today, account: "cash", category: "General", note: "Mixed supplies" }] });
+    await owner.mutation(api.imports.completeBatch, { businessId, batchId: batch.batchId });
+    const original = await t.run(ctx => ctx.db.query("entries").withIndex("by_business_and_idempotency", q => q.eq("businessId", businessId).eq("idempotencyKey", `csv:${sourceHash}:1`)).unique());
+    expect(original).not.toBeNull();
+    const splitCorrectionId = await owner.mutation(api.splitCorrections.saveEstimate, { businessId, entryId: original!._id, allocations: [{ amountUgx: 1_500, category: "Stationery", account: "cash" }, { amountUgx: 2_500, category: "Cleaning", account: "cash" }], reason: "Receipt lists two categories", idempotencyKey: "lifecycle-import-split-estimate" });
+    await owner.mutation(api.splitCorrections.confirmEstimate, { businessId, splitCorrectionId });
+    await owner.mutation(api.imports.startBatchReversal, { businessId, batchId: batch.batchId, reason: "Wrong imported allocation" });
+    const first = await owner.mutation(api.imports.reverseBatchChunk, { businessId, batchId: batch.batchId, cursor: null });
+    const retry = await owner.mutation(api.imports.reverseBatchChunk, { businessId, batchId: batch.batchId, cursor: null });
+    const stored = await t.run(async ctx => ({ batch: await ctx.db.get("importBatches", batch.batchId), split: await ctx.db.get("entrySplitCorrections", splitCorrectionId), original: await ctx.db.get("entries", original!._id), replacements: await Promise.all((await ctx.db.get("entrySplitCorrections", splitCorrectionId))!.replacementEntryIds!.map(id => ctx.db.get("entries", id))), cash: await ctx.db.query("accountBalances").withIndex("by_business_and_account", q => q.eq("businessId", businessId).eq("account", "cash")).unique(), day: await ctx.db.query("dailyTotals").withIndex("by_business_and_day", q => q.eq("businessId", businessId).eq("day", today)).unique() }));
+    expect(first).toMatchObject({ status: "reversed", rollbackProgressRows: 1 });
+    expect(retry).toMatchObject({ status: "reversed", rollbackProgressRows: 1 });
+    expect(stored.batch?.status).toBe("reversed");
+    expect(stored.split?.provenance).toBe("reversed");
+    expect(stored.original).toMatchObject({ state: "void", splitCorrectionId });
+    expect(stored.replacements.every(row => row?.state === "void")).toBe(true);
+    expect(stored.cash?.balanceUgx).toBe(100_000);
+    expect(stored.day).toMatchObject({ expensesUgx: 0, expenseCount: 0 });
+    const report = await owner.query(api.imports.cashbookReport, { businessId, batchId: batch.batchId });
+    expect(report).toContain('"reversed"');
+  });
+
+  it("rejects unauthenticated and cross-workspace split estimates", async () => {
+    const { t, owner, businessId, today } = await setup();
+    const sourceEntryId = await owner.mutation(api.workspace.createEntry, { businessId, kind: "expense", amountUgx: 2_000, occurredOn: today, account: "cash", category: "General", note: "Shared receipt", idempotencyKey: "lifecycle-split-access-source" });
+    const other = await t.run(async ctx => {
+      const userId = await ctx.db.insert("users", { name: "Other owner" });
+      const businessId = await ctx.db.insert("businesses", { name: "Other workspace", currency: "UGX", timezone: "Africa/Kampala", createdBy: userId, createdAt: Date.now() });
+      await ctx.db.insert("memberships", { businessId, userId, role: "owner", active: true, createdAt: Date.now() });
+      return { userId, businessId };
+    });
+    const args = { businessId, entryId: sourceEntryId, allocations: [{ amountUgx: 1_000, category: "A", account: "cash" as const }, { amountUgx: 1_000, category: "B", account: "cash" as const }], reason: "Separate receipt lines", idempotencyKey: "lifecycle-split-access-key" };
+    await expect(t.mutation(api.splitCorrections.saveEstimate, args)).rejects.toThrow();
+    await expect(t.withIdentity({ subject: other.userId }).mutation(api.splitCorrections.saveEstimate, args)).rejects.toThrow();
+    await expect(owner.mutation(api.splitCorrections.saveEstimate, { ...args, businessId: other.businessId })).rejects.toThrow();
+    expect(await t.run(ctx => ctx.db.query("entrySplitCorrections").collect())).toHaveLength(0);
+  });
+
   it("reverses a completed import through its bounded chunk and restores balances and totals", async () => {
     const { t, owner, businessId, today } = await setup();
     await owner.mutation(api.workspace.createEntry, { businessId, kind: "expense", amountUgx: 500, occurredOn: today, account: "cash", category: "Unrelated", note: "Packaging", idempotencyKey: "lifecycle-import-unrelated-001" });

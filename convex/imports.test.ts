@@ -50,4 +50,26 @@ describe("import impact preview", () => {
     expect(csv).not.toContain("unrelated");
     await expect(t.query(api.imports.cashbookReport, { businessId, batchId })).rejects.toThrow();
   });
+
+  it("includes confirmed split provenance in the imported source-row report", async () => {
+    const t = convexTest(schema, modules);
+    const { userId, businessId, batchId, entryId } = await t.run(async ctx => {
+      const userId = await ctx.db.insert("users", { name: "Split export owner" });
+      const createdAt = Date.now();
+      const businessId = await ctx.db.insert("businesses", { name: "Split export workspace", currency: "UGX", timezone: "Africa/Kampala", createdBy: userId, createdAt });
+      await ctx.db.insert("memberships", { businessId, userId, role: "owner", active: true, createdAt });
+      const sourceHash = "d".repeat(64);
+      const batchId = await ctx.db.insert("importBatches", { businessId, fileName: "split.csv", importType: "cashbook", sourceHash, currency: "UGX", totalRows: 1, importedCount: 1, skippedCount: 0, progressRows: 1, status: "completed", createdBy: userId, createdAt });
+      const entryId = await ctx.db.insert("entries", { businessId, kind: "expense", amountUgx: 1_000, occurredOn: "2026-10-30", account: "cash", category: "General", note: "Mixed receipt", source: "import", idempotencyKey: `csv:${sourceHash}:1`, state: "void", createdBy: userId, createdAt, voidReason: "Split correction" });
+      const splitId = await ctx.db.insert("entrySplitCorrections", { businessId, sourceEntryId: entryId, totalUgx: 1_000, occurredOn: "2026-10-30", reason: "Receipt lines confirmed", allocations: [{ amountUgx: 400, account: "cash", category: "Paper" }, { amountUgx: 600, account: "mobile_money", category: "Ink" }], provenance: "confirmed", idempotencyKey: "split-export-idempotency-key", createdBy: userId, createdAt });
+      await ctx.db.patch("entries", entryId, { splitCorrectionId: splitId });
+      return { userId, businessId, batchId, entryId };
+    });
+    const csv = await t.withIdentity({ subject: userId }).query(api.imports.cashbookReport, { businessId, batchId });
+    expect(csv).toContain('"split_correction_id","split_provenance","split_allocations_json"');
+    expect(csv).toContain(`"${entryId}"`);
+    expect(csv).toContain('"confirmed"');
+    expect(csv).toContain('""amountUgx"":400');
+    expect(csv).toContain('""account"":""mobile_money""');
+  });
 });

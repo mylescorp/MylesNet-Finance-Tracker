@@ -4,7 +4,7 @@ import { useConvex, useMutation, usePaginatedQuery, useQuery } from "convex/reac
 import { ConvexError } from "convex/values";
 import { ArrowDownRight, ArrowUpRight, Download, Plus, Share2, X } from "lucide-react";
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { accountLabel } from "@/lib/finance";
@@ -19,6 +19,7 @@ import type { DateFormat } from "@/lib/format";
 import { AnalyticsInsights } from "@/components/workspace/AnalyticsInsights";
 import { CategoryBudgetsPanel } from "@/components/workspace/CategoryBudgetsPanel";
 import { ExpenseReceiptsPanel } from "@/components/workspace/ExpenseReceiptsPanel";
+import { SplitCorrectionDrawer, type SplitAllocationInput } from "@/components/workspace/SplitCorrectionDrawer";
 import { SupplierManager } from "@/components/workspace/SupplierManager";
 import { AttachExpenseReceipt } from "@/components/workspace/AttachExpenseReceipt";
 import { FinancePeriodFilters } from "@/components/workspace/FinancePeriodFilters";
@@ -305,7 +306,14 @@ export function BoardRoute({ route }: { route: string }) {
   const trailingSevenSummary = useQuery(api.workspace.dashboardSummary, needsDailyHistory && !financeRangeError ? { ...range, ...accountFilter } : "skip");
   const voidEntry = useMutation(api.workspace.voidEntry);
   const correctEntry = useMutation(api.workspace.correctEntry);
+  const saveSplitEstimate = useMutation(api.splitCorrections.saveEstimate);
+  const confirmSplitEstimate = useMutation(api.splitCorrections.confirmEstimate);
+  const cancelSplitEstimate = useMutation(api.splitCorrections.cancelEstimate);
+  const reopenSplitCorrection = useMutation(api.splitCorrections.reopenConfirmed);
   const [entryActionFeedback, setEntryActionFeedback] = useState("");
+  const [splitEntry, setSplitEntry] = useState<NonNullable<typeof entries>[number] | null>(null);
+  const [splitBusy, setSplitBusy] = useState(false);
+  const closeSplitDrawer = useCallback(() => setSplitEntry(null), []);
 
   if (!screen) return <WorkspaceTitle title="Page not found" description="Choose a section from the navigation." />;
   if (settings?.access === "ready" && settings.role === "finance_approver" && screen.title !== "Partners") return <><WorkspaceTitle title="Distribution review" description="Finance approver access is scoped to independent partner distribution review." /><div className="notice-banner notice-info" role="status">Open Partners to review pending distribution requests. Business records, reports, and workspace settings are not available to this role.</div></>;
@@ -389,6 +397,61 @@ export function BoardRoute({ route }: { route: string }) {
         if (details?.code === "CONFIRM_NEGATIVE" && !overrides.confirmNegativeBalance && window.confirm(`${details.message ?? "This correction may create a negative balance."} Continue and record this override?`)) { overrides.confirmNegativeBalance = true; continue; }
         if (details?.code === "CONFIRM_DUPLICATE" && !overrides.confirmPossibleDuplicate && window.confirm(`${details.message ?? "This correction resembles another entry."} Continue and record this override?`)) { overrides.confirmPossibleDuplicate = true; continue; }
         setEntryActionFeedback(details?.message ?? (error instanceof Error ? error.message : "Could not correct this entry."));
+        return;
+      }
+    }
+  }
+  async function saveSplitAllocationEstimate(allocations: SplitAllocationInput[], reason: string) {
+    if (settings?.access !== "ready" || !splitEntry) return;
+    setSplitBusy(true);
+    try {
+      await saveSplitEstimate({ businessId: settings.businessId, entryId: splitEntry._id, allocations, reason, idempotencyKey: crypto.randomUUID() });
+      setEntryActionFeedback("Split estimate saved for review. It does not affect balances or reports until confirmed.");
+      closeSplitDrawer();
+    } catch (error) {
+      setEntryActionFeedback(error instanceof Error ? error.message : "Could not save the split estimate.");
+    } finally { setSplitBusy(false); }
+  }
+  async function requestConfirmSplit(entry: NonNullable<typeof entries>[number]) {
+    if (settings?.access !== "ready" || !entry.splitCorrectionId || !window.confirm("Confirm this allocation? The original row will be replaced with the listed categories and accounts. The total amount stays the same, but each account balance will reflect the confirmed allocation.")) return;
+    setEntryActionFeedback("");
+    const overrides: { confirmNegativeBalance?: boolean } = {};
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const ids = await confirmSplitEstimate({ businessId: settings.businessId, splitCorrectionId: entry.splitCorrectionId, ...overrides });
+        setEntryActionFeedback(`Split confirmed as ${ids.length} audited entries. Amount is unchanged; category and account allocations are now posted.`);
+        return;
+      } catch (error) {
+        const details = error instanceof ConvexError ? error.data as { code?: string; message?: string } : null;
+        if (details?.code === "CONFIRM_NEGATIVE" && !overrides.confirmNegativeBalance && window.confirm(`${details.message ?? "This split may make an account negative."} Continue and record this override?`)) { overrides.confirmNegativeBalance = true; continue; }
+        setEntryActionFeedback(details?.message ?? (error instanceof Error ? error.message : "Could not confirm the split."));
+        return;
+      }
+    }
+  }
+  async function requestCancelSplit(entry: NonNullable<typeof entries>[number]) {
+    if (settings?.access !== "ready" || !entry.splitCorrectionId) return;
+    const reason = window.prompt("Reason for cancelling this estimated split (at least 5 characters):") ?? "";
+    if (reason.trim().length < 5) return;
+    try {
+      await cancelSplitEstimate({ businessId: settings.businessId, splitCorrectionId: entry.splitCorrectionId, reason });
+      setEntryActionFeedback("Split estimate cancelled. The original entry remains unchanged.");
+    } catch (error) { setEntryActionFeedback(error instanceof Error ? error.message : "Could not cancel the split estimate."); }
+  }
+  async function requestReopenSplit(entry: NonNullable<typeof entries>[number]) {
+    if (settings?.access !== "ready" || !entry.splitCorrectionId) return;
+    const reason = window.prompt("Reason for reopening this confirmed split (at least 5 characters):") ?? "";
+    if (reason.trim().length < 5) return;
+    const overrides: { confirmNegativeBalance?: boolean } = {};
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        await reopenSplitCorrection({ businessId: settings.businessId, splitCorrectionId: entry.splitCorrectionId, reason, idempotencyKey: crypto.randomUUID(), ...overrides });
+        setEntryActionFeedback("Confirmed split reopened with an audit reason. The original entry is restored and the estimate can be revised.");
+        return;
+      } catch (error) {
+        const details = error instanceof ConvexError ? error.data as { code?: string; message?: string } : null;
+        if (details?.code === "CONFIRM_NEGATIVE" && !overrides.confirmNegativeBalance && window.confirm(`${details.message ?? "This operation may make an account negative."} Continue and record this override?`)) { overrides.confirmNegativeBalance = true; continue; }
+        setEntryActionFeedback(details?.message ?? (error instanceof Error ? error.message : "Could not reopen the split."));
         return;
       }
     }
@@ -481,7 +544,7 @@ export function BoardRoute({ route }: { route: string }) {
         : section.title === "Recurring expense detector" ? <RecurringExpenseSuggestions patterns={expenseStats?.expenseInsights.recurringPatterns} complete={Boolean(expenseStats?.accountFilterComplete)} formatMoney={fmt} />
         : section.title === "Audit trail" ? <ExpenseAuditPreview entries={selectedEntries} formatDay={fmtDate} />
         : section.kind === "table" && (screen.title === "Sales" || screen.title === "Expenses") ? (
-          hasRecordData ? <div className="table-scroll"><table className="data-table"><thead><tr><th>Date</th><th>Type</th><th>Category</th>{screen.title === "Expenses" && <th>Supplier</th>}<th>Account</th><th>Amount</th><th>Status</th><th>Actions</th></tr></thead><tbody>{selectedEntries.map((entry) => <tr key={entry._id}><td>{fmtDate(entry.occurredOn)}</td><td>{entry.kind}</td><td>{entry.category}</td>{screen.title === "Expenses" && <td>{entry.supplierName ?? "—"}{entry.supplierReference && <small className="muted-note">{entry.supplierReference}</small>}</td>}<td>{accountLabel(entry.account)}</td><td>{fmt(entry.amountUgx)}</td><td><span className={`status-chip ${entry.state === "posted" ? "status-ok" : "status-warning"}`}>{entry.state}</span></td><td>{screen.title === "Expenses" && entry.canAttachReceipt && <AttachExpenseReceipt entryId={entry._id} />} {canCorrectEntry(entry.kind) && entry.state === "posted" && entry.canCorrect && <button className="button" type="button" onClick={() => void requestEntryCorrection(entry)}>Correct…</button>} {canVoidEntry(entry.kind) && entry.state === "posted" && entry.canVoid && <button className="button" type="button" onClick={() => void requestEntryVoid(entry._id)}>Void…</button>}</td></tr>)}</tbody></table></div> : <EmptyPanel message="No entries yet." next="Add an entry to populate this view. The design preview figures are examples, not live business data." />
+          hasRecordData ? <div className="table-scroll"><table className="data-table"><thead><tr><th>Date</th><th>Type</th><th>Category</th>{screen.title === "Expenses" && <th>Supplier</th>}<th>Account</th><th>Amount</th><th>Status</th><th>Actions</th></tr></thead><tbody>{selectedEntries.map((entry) => <tr key={entry._id}><td>{fmtDate(entry.occurredOn)}</td><td>{entry.kind}</td><td>{entry.category}</td>{screen.title === "Expenses" && <td>{entry.supplierName ?? "—"}{entry.supplierReference && <small className="muted-note">{entry.supplierReference}</small>}</td>}<td>{accountLabel(entry.account)}</td><td>{fmt(entry.amountUgx)}</td><td><span className={`status-chip ${entry.state === "posted" ? "status-ok" : "status-warning"}`}>{entry.state}</span>{entry.splitCorrectionStatus === "estimated" && <small className="muted-note">Estimated split · not posted</small>}{entry.splitCorrectionStatus === "confirmed" && (entry.isSplitReplacement ? <small className="muted-note">Split allocation · confirmed</small> : <small className="muted-note">Replaced by confirmed split</small>)}{entry.splitCorrectionStatus === "cancelled" && <small className="muted-note">Split estimate cancelled · original unchanged</small>}{entry.splitCorrectionStatus === "reversed" && <small className="muted-note">{entry.isSplitReplacement ? "Split allocation · reversed" : entry.state === "posted" ? "Split correction reopened" : "Split correction reversed"}</small>}</td><td>{screen.title === "Expenses" && entry.canAttachReceipt && <AttachExpenseReceipt entryId={entry._id} />} {canCorrectEntry(entry.kind) && entry.state === "posted" && entry.canCorrect && <><button className="button" type="button" onClick={() => void requestEntryCorrection(entry)}>Correct…</button><button className="button" type="button" onClick={() => setSplitEntry(entry)}>Split…</button></>} {entry.splitCorrectionStatus === "estimated" && entry.splitCorrectionId && <><button className="button" type="button" onClick={() => setSplitEntry(entry)}>Review split…</button><button className="button" type="button" onClick={() => void requestConfirmSplit(entry)}>Confirm split</button><button className="button" type="button" onClick={() => void requestCancelSplit(entry)}>Cancel estimate</button></>} {entry.splitCorrectionStatus === "confirmed" && !entry.isSplitReplacement && entry.splitCorrectionId && <button className="button" type="button" onClick={() => void requestReopenSplit(entry)}>Reopen split…</button>} {canVoidEntry(entry.kind) && entry.state === "posted" && entry.canVoid && <button className="button" type="button" onClick={() => void requestEntryVoid(entry._id)}>Void…</button>}</td></tr>)}</tbody></table></div> : <EmptyPanel message="No entries yet." next="Add an entry to populate this view. The design preview figures are examples, not live business data." />
         ) : section.kind === "table" && screen.title === "Daily Report" ? <DailyHistoryTable days={weekDays} totals={trailingSevenSummary?.access === "ready" && trailingSevenSummary.accountFilterComplete ? trailingSevenSummary.periodTotals : undefined} range={range} periodLabel={financePeriodLabel} loading={trailingSevenSummary === undefined} formatDay={fmtDate} formatMoney={fmt} />
           : section.kind === "table" && screen.title === "Monthly P&L" ? <MonthlyPnlTable months={yearSummary?.access === "ready" && yearSummary.accountFilterComplete ? yearSummary.monthTotals : undefined} totals={yearSummary?.access === "ready" && yearSummary.accountFilterComplete ? yearSummary.periodTotals : undefined} loading={yearSummary === undefined} locale={locale} periodLabel={financePeriodLabel} formatMoney={fmt} />
           : section.kind === "chart" && section.title === "Sales by income type" ? <CategoryBreakdown categories={summaryReady?.accountFilterComplete ? summaryReady.categoryTotals.sales : undefined} formatMoney={fmt} />
@@ -505,12 +568,13 @@ export function BoardRoute({ route }: { route: string }) {
           <td className="board-entry-date">{fmtDate(entry.occurredOn)}</td>
           <td className="board-entry-description"><strong>{entry.note || entry.category}</strong><small>{entry.kind === "sale" ? "Sale" : "Expense"} record{entry.supplierName ? ` · ${entry.supplierName}${entry.supplierReference ? ` · Ref ${entry.supplierReference}` : ""}` : ""}</small></td>
           <td>{entry.category}</td><td>{accountLabel(entry.account)}</td>
-          <td><span className={`status-chip ${entry.state === "posted" ? "status-ok" : "status-warning"}`}>{entry.state === "posted" ? "Posted" : "Voided"}</span></td>
+          <td><span className={`status-chip ${entry.state === "posted" ? "status-ok" : "status-warning"}`}>{entry.state === "posted" ? "Posted" : "Voided"}</span>{entry.splitCorrectionStatus === "estimated" && <small className="muted-note">Estimated split · not posted</small>}{entry.splitCorrectionStatus === "confirmed" && <small className="muted-note">{entry.isSplitReplacement ? "Split allocation · confirmed" : "Replaced by confirmed split"}</small>}{entry.splitCorrectionStatus === "cancelled" && <small className="muted-note">Split estimate cancelled · original unchanged</small>}{entry.splitCorrectionStatus === "reversed" && <small className="muted-note">{entry.isSplitReplacement ? "Split allocation · reversed" : entry.state === "posted" ? "Split correction reopened" : "Split correction reversed"}</small>}</td>
           <td className={`board-entry-amount ${entry.kind === "sale" ? "amount-positive" : "amount-negative"}`}>{entry.kind === "sale" ? "+" : "−"}{fmt(entry.amountUgx)}</td>
-          <td><div className="board-entry-actions">{screen.title === "Expenses" && entry.canAttachReceipt && <AttachExpenseReceipt entryId={entry._id} />}{canCorrectEntry(entry.kind) && entry.state === "posted" && entry.canCorrect && <button className="button" type="button" aria-label={`Correct ${entry.note || entry.category}`} onClick={() => void requestEntryCorrection(entry)}>Correct</button>}{canVoidEntry(entry.kind) && entry.state === "posted" && entry.canVoid && <button className="button board-entry-void" type="button" aria-label={`Void ${entry.note || entry.category}`} onClick={() => void requestEntryVoid(entry._id)}>Void</button>}</div></td>
+          <td><div className="board-entry-actions">{screen.title === "Expenses" && entry.canAttachReceipt && <AttachExpenseReceipt entryId={entry._id} />}{canCorrectEntry(entry.kind) && entry.state === "posted" && entry.canCorrect && <><button className="button" type="button" aria-label={`Correct ${entry.note || entry.category}`} onClick={() => void requestEntryCorrection(entry)}>Correct</button><button className="button" type="button" aria-label={`Split ${entry.note || entry.category} by category`} onClick={() => setSplitEntry(entry)}>Split</button></>}{entry.splitCorrectionStatus === "estimated" && entry.splitCorrectionId && <button className="button" type="button" onClick={() => void requestConfirmSplit(entry)}>Confirm split</button>}{entry.splitCorrectionStatus === "confirmed" && !entry.isSplitReplacement && entry.splitCorrectionId && <button className="button" type="button" onClick={() => void requestReopenSplit(entry)}>Reopen split</button>}{canVoidEntry(entry.kind) && entry.state === "posted" && entry.canVoid && <button className="button board-entry-void" type="button" aria-label={`Void ${entry.note || entry.category}`} onClick={() => void requestEntryVoid(entry._id)}>Void</button>}</div></td>
         </tr>)}</tbody></table></div>{entries?.length === entryLimit && entryLimit < 500 && <div className="board-entry-load-more"><button className="button" type="button" onClick={() => setEntryLimit(limit => Math.min(limit + 100, 500))}>Load more entries</button></div>}{entries?.length === 500 && <p className="muted-note">Showing the latest 500 matching records. Narrow the date range to review older entries.</p>}</> : <EmptyPanel message="No entries have been recorded." next="Use the form to save the first entry." />}
       </Card> : null}
     </div>}</div>
+    <SplitCorrectionDrawer key={splitEntry?._id ?? "closed"} entry={splitEntry} currency={currency} scale={currencyScale} busy={splitBusy} onClose={closeSplitDrawer} onSave={saveSplitAllocationEstimate} />
     <div className="board-source-note">{screen.source} · Values shown here come from authorized Convex records. Sample values from the design references are not loaded into the workspace.</div>
   </>;
 }

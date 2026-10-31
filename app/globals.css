@@ -567,6 +567,13 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .record-drawer-actions { display:flex; flex-wrap:wrap; gap:8px; }
 .record-drawer-actions .button { min-height:34px; font-size:11px; }
 .record-drawer-content { min-width:0; padding-bottom:8px; }
+.split-correction-form { display:grid; gap:var(--mn-space-3); }
+.split-correction-form > label { display:grid; gap:6px; font-size:12px; font-weight:650; }
+.split-correction-form input,.split-correction-form select,.split-correction-form textarea { width:100%; min-height:42px; padding:10px 12px; border:1px solid var(--mn-line); border-radius:var(--mn-radius-sm); background:var(--mn-card); color:var(--mn-ink); font:inherit; }
+.split-correction-form textarea { min-height:82px; resize:vertical; }
+.split-correction-row { display:grid; grid-template-columns:minmax(100px,.7fr) minmax(130px,1fr) minmax(110px,.8fr) auto; gap:10px; align-items:end; padding:12px; border:1px solid var(--mn-line); border-radius:var(--mn-radius-md); background:var(--mn-surface); }
+.split-correction-row label { display:grid; gap:6px; font-size:11px; font-weight:650; }
+@media (max-width:520px) { .split-correction-row { grid-template-columns:1fr 1fr; } .split-correction-row button { grid-column:1/-1; justify-self:start; } }
 .record-drawer-content .board-feature-card { padding:0; border:0; background:transparent; box-shadow:none; }
 .record-drawer-content .card-title,.record-drawer-content .card-subtitle { display:none; }
 .record-drawer-content .form-layout { grid-template-columns:1fr; }

@@ -9,7 +9,7 @@ const AUDIT_ACTIONS = [
   "access.roles.migrated",
   "balance.adjustment_created", "balance.adjustment_updated", "balance.adjustment_voided",
   "bill.payment_expense_recorded", "business.settings.updated",
-  "entry.created", "entry.google_form_posted", "entry.imported", "entry.rule_override", "entry.voided",
+  "entry.created", "entry.google_form_posted", "entry.imported", "entry.rule_override", "entry.voided", "entry.split_estimated", "entry.split_confirmed", "entry.split_estimate_cancelled",
   "google_form.receipt_reprocessed",
   "import.cancelled", "import.completed", "import.resumed", "import.started",
   "integration.centipid.revoked", "integration.centipid.rotated", "integration.google_form.revoked", "integration.google_form.rotated",

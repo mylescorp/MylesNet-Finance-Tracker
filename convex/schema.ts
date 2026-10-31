@@ -234,6 +234,7 @@ export default defineSchema({
     operationKey: v.optional(v.string()),
     correctionOf: v.optional(v.id("entries")),
     correctedBy: v.optional(v.id("entries")),
+    splitCorrectionId: v.optional(v.id("entrySplitCorrections")),
     createdBy: v.id("users"),
     createdAt: v.number(),
     voidedAt: v.optional(v.number()),
@@ -248,6 +249,24 @@ export default defineSchema({
     .index("by_business_and_idempotency", ["businessId", "idempotencyKey"])
     .searchIndex("search_note", { searchField: "note", filterFields: ["businessId"] })
     .searchIndex("search_category", { searchField: "category", filterFields: ["businessId"] }),
+  entrySplitCorrections: defineTable({
+    businessId: v.id("businesses"),
+    sourceEntryId: v.id("entries"),
+    totalUgx: v.number(),
+    occurredOn: v.string(),
+    reason: v.string(),
+    allocations: v.array(v.object({ amountUgx: v.number(), account: v.union(v.literal("cash"), v.literal("mobile_money"), v.literal("unallocated")), category: v.string() })),
+    provenance: v.union(v.literal("estimated"), v.literal("confirmed"), v.literal("cancelled"), v.literal("reversed")),
+    idempotencyKey: v.string(),
+    createdBy: v.id("users"),
+    createdAt: v.number(),
+    confirmedBy: v.optional(v.id("users")),
+    confirmedAt: v.optional(v.number()),
+    replacementEntryIds: v.optional(v.array(v.id("entries"))),
+    reopenIdempotencyKey: v.optional(v.string()),
+    reopenedBy: v.optional(v.id("users")),
+    reopenedAt: v.optional(v.number()),
+  }).index("by_business_and_entry", ["businessId", "sourceEntryId"]).index("by_business_and_idempotency", ["businessId", "idempotencyKey"]),
   expenseReceipts: defineTable({
     businessId: v.id("businesses"),
     entryId: v.id("entries"),

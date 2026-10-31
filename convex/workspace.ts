@@ -686,6 +686,10 @@ export const recentEntries = query({
       state: v.union(v.literal("posted"), v.literal("void")),
       canVoid: v.boolean(),
       canCorrect: v.boolean(),
+      splitCorrectionStatus: v.union(v.literal("estimated"), v.literal("confirmed"), v.literal("cancelled"), v.literal("reversed"), v.null()),
+      splitCorrectionId: v.union(v.id("entrySplitCorrections"), v.null()),
+      isSplitReplacement: v.boolean(),
+      splitAllocations: v.array(v.object({ amountUgx: v.number(), category: v.string(), account: v.union(v.literal("cash"), v.literal("mobile_money"), v.literal("unallocated")) })),
       canAttachReceipt: v.boolean(),
     }),
   ),
@@ -721,7 +725,7 @@ export const recentEntries = query({
     const visibleRows = rows.filter(row => (row.kind === "sale" ? canViewSales : canViewExpenses) && (!args.account || row.account === args.account)).slice(0, limit);
     const canCreateExpenses = await hasPermission(ctx, current.membership, "expenses.create");
     const canManageExpenses = await hasPermission(ctx, current.membership, "expenses.update");
-    return await Promise.all(visibleRows.map(async ({ _id, kind, amountUgx, occurredOn, account, category, note, supplierName, supplierReference, state, operationSource, source, correctionOf, correctedBy, createdBy, idempotencyKey, businessId }) => {
+    return await Promise.all(visibleRows.map(async ({ _id, kind, amountUgx, occurredOn, account, category, note, supplierName, supplierReference, state, operationSource, source, correctionOf, correctedBy, splitCorrectionId, createdBy, idempotencyKey, businessId }) => {
       let importedBatchReady = false;
       if (source === "import" && !correctionOf) {
         const match = /^csv:([a-f0-9]{64}):\d+$/.exec(idempotencyKey);
@@ -730,6 +734,7 @@ export const recentEntries = query({
           importedBatchReady = batch?.status === "completed" || batch?.status === "cancelled";
         }
       }
+      const split = splitCorrectionId ? await ctx.db.get("entrySplitCorrections", splitCorrectionId) : await ctx.db.query("entrySplitCorrections").withIndex("by_business_and_entry", q => q.eq("businessId", businessId).eq("sourceEntryId", _id)).order("desc").first();
       return {
         _id,
         kind,
@@ -741,8 +746,12 @@ export const recentEntries = query({
         supplierName: supplierName ?? null,
         supplierReference: supplierReference ?? null,
         state,
-        canVoid: !operationSource,
-        canCorrect: (source === "manual" || importedBatchReady) && !operationSource && !correctedBy,
+        canVoid: !operationSource && !splitCorrectionId,
+        canCorrect: (source === "manual" || importedBatchReady) && !operationSource && !correctedBy && !splitCorrectionId,
+        splitCorrectionStatus: split?.provenance ?? null,
+        splitCorrectionId: split?._id ?? null,
+        isSplitReplacement: Boolean(split && correctionOf === split.sourceEntryId),
+        splitAllocations: split?.allocations ?? [],
         canAttachReceipt: kind === "expense" && state === "posted" && (canManageExpenses || (canCreateExpenses && createdBy === current.userId)),
       };
     }));
@@ -1090,6 +1099,7 @@ export const voidEntry = mutation({
     if (entry.operationSource) {
       throw new Error("This expense was posted by a bill payment, loan repayment, or movement fee. It cannot be voided alone because its related account and schedule history would become inconsistent. A linked operational reversal workflow is required.");
     }
+    if (entry.splitCorrectionId) throw new Error("This entry is part of a split correction and cannot be voided separately.");
     if (entry.state === "void") return null;
     await assertPeriodUnlocked(ctx, current.business._id, entry.occurredOn);
     const reason = args.reason.trim();
@@ -1176,7 +1186,7 @@ export const correctEntry = mutation({
       return existing._id;
     }
     const original = await ctx.db.get("entries", args.entryId);
-    if (!original || original.businessId !== current.business._id || original.state !== "posted" || (original.source !== "manual" && original.source !== "import") || original.operationSource || original.correctedBy || (original.source === "import" && original.correctionOf)) throw new Error("Choose an uncorrected, manually posted or imported entry in this workspace.");
+    if (!original || original.businessId !== current.business._id || original.state !== "posted" || (original.source !== "manual" && original.source !== "import") || original.operationSource || original.correctedBy || original.splitCorrectionId || (original.source === "import" && original.correctionOf)) throw new Error("Choose an uncorrected, manually posted or imported entry in this workspace.");
     await assertPeriodUnlocked(ctx, current.business._id, original.occurredOn);
     await assertPeriodUnlocked(ctx, current.business._id, args.occurredOn);
     if (original.source === "import") {
